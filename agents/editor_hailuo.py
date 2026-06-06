@@ -1,0 +1,481 @@
+import os
+import time
+import subprocess
+import requests
+import re
+from datetime import datetime
+from dotenv import load_dotenv
+from config.paths import get_env_path, get_temp_dir, CLAUDE_MODEL
+import logging
+
+load_dotenv(get_env_path())
+log = logging.getLogger("pipeline")
+
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+FAL_API_KEY = os.getenv("FAL_API_KEY")
+
+VOICES = {
+    "energetic": "TX3LPaxmHKxFdv7VOQHJ",
+    "mysterious": "IKne3meq5aSn9XLyUdCD",
+    "storyteller": "JBFqnCBsd6RMkjVDRZzb",
+}
+
+
+# ------------------- WHISPER SINGLETON -------------------
+
+_whisper_model = None
+
+
+def _get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+# ------------------- HELPERS -------------------
+
+def get_duration(file_path: str) -> float:
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+           "-of", "default=noprint_wrappers=1:nokey=1", file_path]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    return float(r.stdout.strip()) if r.stdout.strip() else 0.0
+
+
+def get_dimensions(file_path: str) -> tuple:
+    """Returns (width, height)."""
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+           "-show_entries", "stream=width,height",
+           "-of", "csv=s=x:p=0", file_path]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    dims = r.stdout.strip()
+    if not dims:
+        return (0, 0)
+    w, h = map(int, dims.split("x"))
+    return (w, h)
+
+
+# ------------------- VOICE -------------------
+
+def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple:
+    """ElevenLabs voiceover with expressive settings."""
+    log.info(f"[1/5] Generating voiceover (ElevenLabs - {voice})...")
+
+    voice_id = VOICES.get(voice, VOICES["energetic"])
+
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY,
+    }
+    payload = {
+        "text": spoken_script,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.4,
+            "similarity_boost": 0.75,
+            "style": 0.6,
+            "use_speaker_boost": True
+        }
+    }
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    r = requests.post(url, json=payload, headers=headers, timeout=60)
+
+    if r.status_code != 200:
+        raise Exception(f"ElevenLabs failed: {r.status_code} {r.text[:300]}")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(get_temp_dir(), f"voiceover_{ts}.mp3")
+    with open(path, "wb") as f:
+        f.write(r.content)
+
+    duration = get_duration(path)
+    log.info(f"  Voiceover: {duration:.1f}s, {len(r.content)/1024:.0f} KB")
+    return path, duration
+
+
+# ------------------- VIDEO GENERATION (Hailuo 02) -------------------
+
+def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str:
+    """Generate one 6-second clip via Hailuo 02 Standard."""
+    import fal_client
+    os.environ["FAL_KEY"] = FAL_API_KEY
+
+    log.info(f"[{clip_number}/{total_clips}] Submitting to Hailuo 02...")
+
+    handler = fal_client.submit(
+        "fal-ai/minimax/hailuo-02/standard/text-to-video",
+        arguments={
+            "prompt": prompt,
+            "duration": "6",
+            "prompt_optimizer": True,
+            "resolution": "768P",
+        }
+    )
+
+    elapsed = 0
+    last_status = None
+    while elapsed < 360:
+        time.sleep(10)
+        elapsed += 10
+        status = fal_client.status(
+            "fal-ai/minimax/hailuo-02/standard/text-to-video",
+            handler.request_id
+        )
+        name = type(status).__name__
+        if name != last_status and elapsed % 30 == 0:
+            log.info(f"  Clip {clip_number}: {name} ({elapsed}s)")
+            last_status = name
+        if "Completed" in name:
+            break
+
+    if elapsed >= 360:
+        raise TimeoutError(f"Hailuo clip generation timed out after {elapsed}s (clip {clip_number})")
+
+    result = fal_client.result(
+        "fal-ai/minimax/hailuo-02/standard/text-to-video",
+        handler.request_id
+    )
+
+    video_url = result.get("video", {}).get("url") if isinstance(result.get("video"), dict) else None
+    if not video_url:
+        raise Exception(f"No video URL: {result}")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(get_temp_dir(), f"clip{clip_number}_{ts}.mp4")
+    dl = requests.get(video_url, timeout=120, stream=True)
+    with open(path, "wb") as f:
+        for chunk in dl.iter_content(8192):
+            f.write(chunk)
+
+    size_mb = os.path.getsize(path) / 1024 / 1024
+    log.info(f"  Clip {clip_number}: OK ({size_mb:.1f} MB)")
+    return path
+
+
+def generate_all_clips(script: dict, num_clips: int) -> list:
+    """Sequential clip generation. Hailuo costs ~$0.27/clip."""
+    if num_clips > 6:
+        log.warning(f"Script only defines 6 scenes; clips 7+ will repeat scene_6")
+
+    log.info(f"\n[2/5] Generating {num_clips} clips via Hailuo 02 (~${0.27*num_clips:.2f} total)...\n")
+    clips = []
+    for i in range(1, num_clips + 1):
+        scene_key = f"scene_{i}" if i <= 6 else "scene_6"
+        prompt = script[scene_key]
+        path = generate_single_clip(prompt, clip_number=i, total_clips=num_clips)
+        clips.append(path)
+    log.info(f"\nAll {num_clips} clips ready.\n")
+    return clips
+
+
+# ------------------- VERTICAL CONVERSION (Smart Hybrid) -------------------
+
+def landscape_to_vertical(input_path: str, output_path: str, duration: float) -> str:
+    """Convert landscape clip to 9:16 vertical filling the FULL frame.
+
+    Strategy: scale source to FILL 1080x1920 with center-crop.
+    This loses some side detail but produces a full-screen video like real TikTok content.
+    Subjects centered in frame (which is what Hailuo defaults to) translate well.
+    """
+    cmd = [
+        "ffmpeg", "-y", "-t", str(duration), "-i", input_path,
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+        "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-an", output_path
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise Exception(f"Vertical conversion failed: {r.stderr[-300:]}")
+    return output_path
+
+
+
+def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
+    """Convert each landscape clip to vertical, trim, and concatenate.
+    GUARANTEES total duration covers target by looping last clip if needed."""
+    log.info(f"\n[3/5] Converting to vertical 9:16 + stitching to {target_duration:.1f}s...")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    concat_file = os.path.join(get_temp_dir(), f"concat_{ts}.txt")
+    stitched_path = os.path.join(get_temp_dir(), f"stitched_{ts}.mp4")
+
+    per_clip = target_duration / len(clip_paths)
+    log.info(f"  Each clip: {per_clip:.1f}s")
+
+    # Validate each clip can supply per_clip seconds
+    normalized = []
+    total_supplied = 0.0
+
+    for i, clip in enumerate(clip_paths):
+        norm = os.path.join(get_temp_dir(), f"norm_{i}_{ts}.mp4")
+        actual_dur = get_duration(clip)
+
+        # If clip is too short, use what's there (will be padded by next step)
+        trim = min(per_clip + 0.2, actual_dur)
+        if trim < per_clip - 0.5:
+            log.warning(f"  WARN: Clip {i+1} only {actual_dur:.1f}s, need {per_clip:.1f}s")
+
+        log.info(f"  Clip {i+1}/{len(clip_paths)}: {actual_dur:.1f}s -> {trim:.1f}s")
+        landscape_to_vertical(clip, norm, trim)
+        actual_norm = get_duration(norm)
+        total_supplied += actual_norm
+        normalized.append(norm)
+
+    log.info(f"  Total supplied: {total_supplied:.1f}s (target {target_duration:.1f}s)")
+
+    # If total is less than target, loop last clip to fill the gap
+    if total_supplied < target_duration - 0.5:
+        gap = target_duration - total_supplied + 0.3
+        log.info(f"  Gap: {gap:.1f}s — looping last clip")
+        last_loop = os.path.join(get_temp_dir(), f"loop_{ts}.mp4")
+        cmd = [
+            "ffmpeg", "-y", "-stream_loop", "-1", "-i", normalized[-1],
+            "-t", str(gap),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-an", last_loop
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            normalized.append(last_loop)
+
+    with open(concat_file, "w") as f:
+        for p in normalized:
+            f.write(f"file '{p}'\n")
+
+    log.info(f"  Concatenating {len(normalized)} clips...")
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-t", str(target_duration),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+        "-r", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", stitched_path
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+    if r.returncode != 0:
+        raise Exception(f"Stitch failed: {r.stderr[-300:]}")
+
+    for p in normalized:
+        if os.path.exists(p):
+            os.remove(p)
+    os.remove(concat_file)
+
+    final_dur = get_duration(stitched_path)
+    log.info(f"  Stitched: {final_dur:.1f}s")
+    return stitched_path
+
+
+
+def merge_audio_video(video_path: str, audio_path: str) -> str:
+    log.info("\n[4/5] Merging audio onto video...")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    merged = os.path.join(get_temp_dir(), f"merged_{ts}.mp4")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path, "-i", audio_path,
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-movflags", "+faststart", merged
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise Exception(f"Audio merge failed: {r.stderr[-300:]}")
+
+    log.info(f"  Merged: {get_duration(merged):.1f}s")
+    return merged
+
+
+# ------------------- TRANSCRIPTION + SUBTITLES -------------------
+
+def transcribe_with_whisper(audio_path: str) -> list:
+    log.info("\n[5/5] Transcribing audio + generating word-level subtitles...")
+    model = _get_whisper_model()
+
+    segments, _ = model.transcribe(
+        audio_path,
+        word_timestamps=True,
+        language="en",
+        vad_filter=False
+    )
+
+    words = []
+    for segment in segments:
+        for word in segment.words:
+            words.append({
+                "text": word.word.strip(),
+                "start": word.start,
+                "end": word.end
+            })
+
+    log.info(f"  Transcribed: {len(words)} words")
+    return words
+
+
+def fmt_ts(s: float) -> str:
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    sec = int(s % 60)
+    ms = int((s % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
+
+def words_to_srt(words: list, srt_path: str):
+    """Single-word subtitles synced exactly to voice."""
+    lines = []
+    idx = 1
+
+    for i, word in enumerate(words):
+        text = word["text"].strip().upper().lstrip(".,!?;:").rstrip(",;:")
+        if not text:
+            continue
+
+        start = word["start"]
+        if i + 1 < len(words):
+            end = words[i + 1]["start"] - 0.02
+        else:
+            end = word["end"] + 0.1
+
+        if end - start < 0.08:
+            end = start + 0.08
+
+        lines.append(str(idx))
+        lines.append(f"{fmt_ts(start)} --> {fmt_ts(end)}")
+        lines.append(text)
+        lines.append("")
+        idx += 1
+
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+def srt_time_to_seconds(t: str) -> float:
+    t = t.strip().replace(",", ".")
+    h, m, s = t.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def burn_subtitles(video_path: str, srt_path: str) -> str:
+    """Burn yellow word-by-word subtitles via drawtext (no libass)."""
+    log.info("  Burning subtitles via drawtext...")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    final = os.path.join(get_temp_dir(), f"final_{ts}.mp4")
+
+    with open(srt_path) as f:
+        srt_content = f.read()
+
+    entries = []
+    blocks = srt_content.strip().split("\n\n")
+    for block in blocks:
+        lines = block.strip().split("\n")
+        if len(lines) < 3:
+            continue
+        if "-->" not in lines[1]:
+            continue
+        start_str, end_str = lines[1].split(" --> ")
+        start = srt_time_to_seconds(start_str)
+        end = srt_time_to_seconds(end_str)
+        text = " ".join(lines[2:]).strip()
+        text = text.replace("\\", "\\\\").replace("'", "\\'")
+        text = text.replace(":", "\\:").replace(",", "\\,")
+        entries.append((start, end, text))
+
+    if not entries:
+        raise Exception("No subtitle entries parsed")
+
+    log.info(f"  {len(entries)} subtitle entries")
+
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf",
+    ]
+    font_file = next((fp for fp in font_paths if os.path.exists(fp)), None)
+    if not font_file:
+        raise FileNotFoundError(
+            "No suitable bold font found for subtitle burn. "
+            "Install DejaVu or Arial Bold."
+        )
+
+    filters = []
+    for start, end, text in entries:
+        f = (
+            f"drawtext="
+            f"fontfile='{font_file}':"
+            f"text='{text}':"
+            f"fontsize=56:"
+            f"fontcolor=yellow:"
+            f"borderw=6:"
+            f"bordercolor=black:"
+            f"x=(w-text_w)/2:"
+            f"y=h*0.78:"
+            f"enable='between(t,{start},{end})'"
+        )
+        filters.append(f)
+
+    vf_arg = ",".join(filters)
+
+    # Write filter chain to file to avoid Windows 32K CLI limit
+    filter_script_path = os.path.join(get_temp_dir(), f"filters_{ts}.txt")
+    with open(filter_script_path, "w", encoding="utf-8") as f:
+        f.write(vf_arg)
+
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-filter_script", filter_script_path,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-c:a", "copy", "-movflags", "+faststart", final
+    ]
+
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        log.error(f"  drawtext burn failed:")
+        log.error(r.stderr[-1500:])
+        raise Exception("Subtitle burn failed")
+
+    mb = os.path.getsize(final) / 1024 / 1024
+    log.info(f"  Final: {final} ({mb:.1f} MB, {get_duration(final):.1f}s)")
+    return final
+
+
+# ------------------- MAIN PIPELINE -------------------
+
+def process_video(script: dict, voice: str = "energetic") -> str:
+    """Hailuo 02 video + ElevenLabs voice + word-by-word subtitles."""
+    audio_path = None
+    clips = []
+    stitched = None
+    merged = None
+    srt = None
+
+    try:
+        audio_path, audio_duration = generate_voiceover(script["spoken_script"], voice=voice)
+
+        num_clips = max(5, int((audio_duration + 5) // 6))  # Hailuo clips are 6s
+        if num_clips > 7:
+            num_clips = 7
+        log.info(f"\nVoice = {audio_duration:.1f}s. Generating {num_clips} Hailuo clips.\n")
+
+        clips = generate_all_clips(script, num_clips=num_clips)
+
+        target_duration = audio_duration + 0.5
+        stitched = stitch_clips_to_duration(clips, target_duration=target_duration)
+
+        merged = merge_audio_video(stitched, audio_path)
+
+        words = transcribe_with_whisper(audio_path)
+        srt = merged.replace(".mp4", ".srt")
+        words_to_srt(words, srt)
+        final = burn_subtitles(merged, srt)
+
+        return final
+    finally:
+        for p in clips + [stitched, audio_path, merged, srt]:
+            if p and os.path.exists(p):
+                os.remove(p)
+
+
+if __name__ == "__main__":
+    log.info("Editor module loaded successfully (Hailuo 02 + ElevenLabs + drawtext subs).")
