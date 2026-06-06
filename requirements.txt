@@ -1,0 +1,6 @@
+anthropic
+fal-client
+faster-whisper
+python-dotenv
+requests
+tavily-python

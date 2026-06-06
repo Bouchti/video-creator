@@ -94,7 +94,7 @@ def run_pipeline(topic: str = None, source: str = DEFAULT_SOURCE, tone: str = No
 
     ts = started.strftime("%Y%m%d_%H%M%S")
     safe_title = "".join(c if c.isalnum() else "_" for c in script["video_title"])[:60]
-    output_path = f"{OUTPUT_DIR}/{ts}_{source}_{safe_title}.mp4"
+    output_path = os.path.join(OUTPUT_DIR, f"{ts}_{source}_{safe_title}.mp4")
     shutil.move(final_path, output_path)
 
     elapsed_min = (datetime.now() - started).total_seconds() / 60

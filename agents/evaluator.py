@@ -54,7 +54,12 @@ Be lenient on cinematic style. Output only JSON."""
     raw = response.content[0].text.strip()
     m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
     raw = m.group(1).strip() if m else raw.strip()
-    return json.loads(raw)
+    result = json.loads(raw)
+    if not isinstance(result, dict) or result.get("verdict") not in {"PASS", "FAIL"}:
+        raise ValueError("Evaluator response must contain verdict PASS or FAIL")
+    if result["verdict"] == "FAIL" and not result.get("feedback"):
+        raise ValueError("Evaluator FAIL response must include feedback")
+    return result
 
 
 REQUIRED_KEYS = [
@@ -96,7 +101,13 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
         wc = len(script["spoken_script"].split())
         log.info(f"Script generated. Word count: {wc}")
 
-        result = evaluate_script(script)
+        try:
+            result = evaluate_script(script)
+        except Exception as e:
+            log.error(f"Script evaluation crashed: {e}")
+            if attempt == max_retries:
+                return None
+            continue
         log.info(f"Verdict: {result['verdict']}")
 
         if result["verdict"] == "PASS":

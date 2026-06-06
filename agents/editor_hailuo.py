@@ -36,10 +36,29 @@ def _get_whisper_model():
 
 # ------------------- HELPERS -------------------
 
+def _remove_files(paths) -> None:
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                log.warning(f"Could not remove temporary file {path}: {e}")
+
+
+def _run_process(cmd, timeout: int, cleanup_paths=()):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        _remove_files(cleanup_paths)
+        raise
+
+
 def get_duration(file_path: str) -> float:
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
            "-of", "default=noprint_wrappers=1:nokey=1", file_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffprobe duration failed for {file_path}: {r.stderr[-300:]}")
     return float(r.stdout.strip()) if r.stdout.strip() else 0.0
 
 
@@ -49,6 +68,8 @@ def get_dimensions(file_path: str) -> tuple:
            "-show_entries", "stream=width,height",
            "-of", "csv=s=x:p=0", file_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffprobe dimensions failed for {file_path}: {r.stderr[-300:]}")
     dims = r.stdout.strip()
     if not dims:
         return (0, 0)
@@ -61,6 +82,8 @@ def get_dimensions(file_path: str) -> tuple:
 def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple:
     """ElevenLabs voiceover with expressive settings."""
     log.info(f"[1/5] Generating voiceover (ElevenLabs - {voice})...")
+    if not ELEVENLABS_API_KEY:
+        raise RuntimeError("ELEVENLABS_API_KEY is not configured")
 
     voice_id = VOICES.get(voice, VOICES["energetic"])
 
@@ -100,6 +123,8 @@ def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple:
 def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str:
     """Generate one 6-second clip via Hailuo 02 Standard."""
     import fal_client
+    if not FAL_API_KEY:
+        raise RuntimeError("FAL_API_KEY is not configured")
     os.environ["FAL_KEY"] = FAL_API_KEY
 
     log.info(f"[{clip_number}/{total_clips}] Submitting to Hailuo 02...")
@@ -129,6 +154,8 @@ def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str
             last_status = name
         if "Completed" in name:
             break
+        if "Failed" in name or "Error" in name or "Cancelled" in name:
+            raise RuntimeError(f"Hailuo clip {clip_number} ended with status {name}")
 
     if elapsed >= 360:
         raise TimeoutError(f"Hailuo clip generation timed out after {elapsed}s (clip {clip_number})")
@@ -145,6 +172,10 @@ def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(get_temp_dir(), f"clip{clip_number}_{ts}.mp4")
     dl = requests.get(video_url, timeout=120, stream=True)
+    if dl.status_code != 200:
+        raise RuntimeError(
+            f"Hailuo clip download failed: HTTP {dl.status_code} {dl.text[:200]}"
+        )
     with open(path, "wb") as f:
         for chunk in dl.iter_content(8192):
             f.write(chunk)
@@ -157,12 +188,12 @@ def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str
 def generate_all_clips(script: dict, num_clips: int) -> list:
     """Sequential clip generation. Hailuo costs ~$0.27/clip."""
     if num_clips > 6:
-        log.warning(f"Script only defines 6 scenes; clips 7+ will repeat scene_6")
+        raise ValueError("Hailuo scripts define exactly 6 scenes; num_clips cannot exceed 6")
 
     log.info(f"\n[2/5] Generating {num_clips} clips via Hailuo 02 (~${0.27*num_clips:.2f} total)...\n")
     clips = []
     for i in range(1, num_clips + 1):
-        scene_key = f"scene_{i}" if i <= 6 else "scene_6"
+        scene_key = f"scene_{i}"
         prompt = script[scene_key]
         path = generate_single_clip(prompt, clip_number=i, total_clips=num_clips)
         clips.append(path)
@@ -200,6 +231,8 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     concat_file = os.path.join(get_temp_dir(), f"concat_{ts}.txt")
     stitched_path = os.path.join(get_temp_dir(), f"stitched_{ts}.mp4")
+    if not clip_paths:
+        raise ValueError("At least one clip is required for stitching")
 
     per_clip = target_duration / len(clip_paths)
     log.info(f"  Each clip: {per_clip:.1f}s")
@@ -208,20 +241,24 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
     normalized = []
     total_supplied = 0.0
 
-    for i, clip in enumerate(clip_paths):
-        norm = os.path.join(get_temp_dir(), f"norm_{i}_{ts}.mp4")
-        actual_dur = get_duration(clip)
+    try:
+        for i, clip in enumerate(clip_paths):
+            norm = os.path.join(get_temp_dir(), f"norm_{i}_{ts}.mp4")
+            normalized.append(norm)
+            actual_dur = get_duration(clip)
 
-        # If clip is too short, use what's there (will be padded by next step)
-        trim = min(per_clip + 0.2, actual_dur)
-        if trim < per_clip - 0.5:
-            log.warning(f"  WARN: Clip {i+1} only {actual_dur:.1f}s, need {per_clip:.1f}s")
+            # If clip is too short, use what's there (will be padded by next step)
+            trim = min(per_clip + 0.2, actual_dur)
+            if trim < per_clip - 0.5:
+                log.warning(f"  WARN: Clip {i+1} only {actual_dur:.1f}s, need {per_clip:.1f}s")
 
-        log.info(f"  Clip {i+1}/{len(clip_paths)}: {actual_dur:.1f}s -> {trim:.1f}s")
-        landscape_to_vertical(clip, norm, trim)
-        actual_norm = get_duration(norm)
-        total_supplied += actual_norm
-        normalized.append(norm)
+            log.info(f"  Clip {i+1}/{len(clip_paths)}: {actual_dur:.1f}s -> {trim:.1f}s")
+            landscape_to_vertical(clip, norm, trim)
+            actual_norm = get_duration(norm)
+            total_supplied += actual_norm
+    except Exception:
+        _remove_files(normalized + [concat_file, stitched_path])
+        raise
 
     log.info(f"  Total supplied: {total_supplied:.1f}s (target {target_duration:.1f}s)")
 
@@ -236,13 +273,24 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", last_loop
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if r.returncode == 0:
-            normalized.append(last_loop)
+        r = _run_process(
+            cmd,
+            timeout=60,
+            cleanup_paths=normalized + [last_loop, concat_file, stitched_path],
+        )
+        if r.returncode != 0:
+            _remove_files(normalized + [last_loop, concat_file, stitched_path])
+            raise RuntimeError(f"Clip loop failed: {r.stderr[-300:]}")
+        normalized.append(last_loop)
 
-    with open(concat_file, "w") as f:
-        for p in normalized:
-            f.write(f"file '{p}'\n")
+    try:
+        with open(concat_file, "w", encoding="utf-8") as f:
+            for p in normalized:
+                escaped_path = p.replace("'", "'\\''")
+                f.write(f"file '{escaped_path}'\n")
+    except Exception:
+        _remove_files(normalized + [concat_file, stitched_path])
+        raise
 
     log.info(f"  Concatenating {len(normalized)} clips...")
     cmd = [
@@ -251,16 +299,21 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
         "-c:v", "libx264", "-preset", "fast", "-crf", "21",
         "-r", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", stitched_path
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+    r = _run_process(
+        cmd,
+        timeout=240,
+        cleanup_paths=normalized + [concat_file, stitched_path],
+    )
     if r.returncode != 0:
-        raise Exception(f"Stitch failed: {r.stderr[-300:]}")
+        _remove_files(normalized + [concat_file, stitched_path])
+        raise RuntimeError(f"Stitch failed: {r.stderr[-300:]}")
 
-    for p in normalized:
-        if os.path.exists(p):
-            os.remove(p)
-    os.remove(concat_file)
-
-    final_dur = get_duration(stitched_path)
+    try:
+        final_dur = get_duration(stitched_path)
+    except Exception:
+        _remove_files(normalized + [concat_file, stitched_path])
+        raise
+    _remove_files(normalized + [concat_file])
     log.info(f"  Stitched: {final_dur:.1f}s")
     return stitched_path
 
@@ -362,7 +415,7 @@ def burn_subtitles(video_path: str, srt_path: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     final = os.path.join(get_temp_dir(), f"final_{ts}.mp4")
 
-    with open(srt_path) as f:
+    with open(srt_path, encoding="utf-8") as f:
         srt_content = f.read()
 
     entries = []
@@ -429,14 +482,22 @@ def burn_subtitles(video_path: str, srt_path: str) -> str:
         "-c:a", "copy", "-movflags", "+faststart", final
     ]
 
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if r.returncode != 0:
-        log.error(f"  drawtext burn failed:")
-        log.error(r.stderr[-1500:])
-        raise Exception("Subtitle burn failed")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            log.error("  drawtext burn failed:")
+            log.error(r.stderr[-1500:])
+            raise RuntimeError("Subtitle burn failed")
+    finally:
+        _remove_files([filter_script_path])
 
-    mb = os.path.getsize(final) / 1024 / 1024
-    log.info(f"  Final: {final} ({mb:.1f} MB, {get_duration(final):.1f}s)")
+    try:
+        mb = os.path.getsize(final) / 1024 / 1024
+        final_duration = get_duration(final)
+    except Exception:
+        _remove_files([final])
+        raise
+    log.info(f"  Final: {final} ({mb:.1f} MB, {final_duration:.1f}s)")
     return final
 
 
@@ -454,8 +515,8 @@ def process_video(script: dict, voice: str = "energetic") -> str:
         audio_path, audio_duration = generate_voiceover(script["spoken_script"], voice=voice)
 
         num_clips = max(5, int((audio_duration + 5) // 6))  # Hailuo clips are 6s
-        if num_clips > 7:
-            num_clips = 7
+        if num_clips > 6:
+            num_clips = 6
         log.info(f"\nVoice = {audio_duration:.1f}s. Generating {num_clips} Hailuo clips.\n")
 
         clips = generate_all_clips(script, num_clips=num_clips)
@@ -472,9 +533,7 @@ def process_video(script: dict, voice: str = "energetic") -> str:
 
         return final
     finally:
-        for p in clips + [stitched, audio_path, merged, srt]:
-            if p and os.path.exists(p):
-                os.remove(p)
+        _remove_files(clips + [stitched, audio_path, merged, srt])
 
 
 if __name__ == "__main__":

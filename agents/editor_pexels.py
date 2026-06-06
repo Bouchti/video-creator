@@ -19,6 +19,7 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 # Reuse all the helpers from editor_hailuo
 from agents.editor_hailuo import (
+    _remove_files,
     get_duration,
     generate_voiceover,
     stitch_clips_to_duration,
@@ -31,6 +32,8 @@ from agents.editor_hailuo import (
 
 def search_pexels_videos(query: str, min_duration: int = 6, count: int = 1) -> list:
     """Pexels portrait search; only returns clips >= min_duration seconds."""
+    if not PEXELS_API_KEY:
+        raise RuntimeError("PEXELS_API_KEY is not configured")
     headers = {"Authorization": PEXELS_API_KEY}
     params = {
         "query": query,
@@ -41,6 +44,7 @@ def search_pexels_videos(query: str, min_duration: int = 6, count: int = 1) -> l
     r = requests.get("https://api.pexels.com/videos/search",
                      headers=headers, params=params, timeout=15)
     if r.status_code != 200:
+        log.warning(f"Pexels search failed for '{query}': HTTP {r.status_code}")
         return []
 
     videos = r.json().get("videos", [])
@@ -84,7 +88,7 @@ def download_pexels_clip(url: str, clip_num: int) -> str:
     path = os.path.join(get_temp_dir(), f"pexel_{clip_num}_{ts}.mp4")
     r = requests.get(url, timeout=60, stream=True)
     if r.status_code != 200:
-        raise Exception(f"Download failed: {r.status_code}")
+        raise RuntimeError(f"Pexels download failed: HTTP {r.status_code}")
     with open(path, "wb") as f:
         for chunk in r.iter_content(8192):
             f.write(chunk)
@@ -173,9 +177,7 @@ def process_video(script: dict, voice: str = "energetic") -> str:
 
         return final
     finally:
-        for p in clips + [stitched, audio_path, merged, srt]:
-            if p and os.path.exists(p):
-                os.remove(p)
+        _remove_files(clips + [stitched, audio_path, merged, srt])
 
 
 if __name__ == "__main__":
