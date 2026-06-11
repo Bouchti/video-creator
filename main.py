@@ -1,14 +1,16 @@
 """
 Main orchestrator for the autonomous video pipeline.
 
-Two video source modes:
+Three video source modes:
   hailuo  - AI-generated cinematic clips via Hailuo 02 (~$1.50/video, premium)
   pexels  - Free stock footage from Pexels (~$0/video, fast)
+  comfy   - AI-generated clips from a LOCAL model via ComfyUI (~$0/video, slow, best quality)
 
 Usage:
   python3 main.py                                          # default: hailuo
   python3 main.py --source pexels                          # use Pexels stock
-  python3 main.py --source hailuo "Custom topic here"      # custom topic, AI video
+  python3 main.py --source comfy "Custom topic here"       # custom topic, local AI video
+  python3 main.py --source hailuo "Custom topic here"      # custom topic, cloud AI video
   python3 main.py --source pexels "Custom topic here"      # custom topic, stock
 """
 
@@ -41,7 +43,7 @@ DEFAULT_SOURCE = "hailuo"
 OUTPUT_DIR = get_output_dir()
 
 
-def run_pipeline(topic: str = None, source: str = DEFAULT_SOURCE, tone: str = None, voice: str = DEFAULT_VOICE) -> dict:
+def run_pipeline(topic: str = None, source: str = DEFAULT_SOURCE, tone: str = None, voice: str = DEFAULT_VOICE, duration: int = 75) -> dict:
     started = datetime.now()
     log.info("=" * 70)
     log.info(f"PIPELINE START | {started.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -64,11 +66,11 @@ def run_pipeline(topic: str = None, source: str = DEFAULT_SOURCE, tone: str = No
         log.info(f"Topic (manual): {topic}")
         tone = tone or DEFAULT_TONE
 
-    log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}")
+    log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
 
     log.info("\n[STAGE 1] Script generation + evaluation")
     from agents.evaluator import evaluate_with_retry
-    script = evaluate_with_retry(topic, tone=tone, max_retries=3)
+    script = evaluate_with_retry(topic, tone=tone, max_retries=3, target_seconds=duration)
     if not script:
         log.error("Script generation failed. Aborting.")
         return {"success": False, "stage_failed": "script", "topic": topic}
@@ -82,8 +84,10 @@ def run_pipeline(topic: str = None, source: str = DEFAULT_SOURCE, tone: str = No
         from agents.editor_pexels import process_video
     elif source == "hailuo":
         from agents.editor_hailuo import process_video
+    elif source == "comfy":
+        from agents.editor_comfy import process_video
     else:
-        log.error(f"Unknown source: {source}. Use 'hailuo' or 'pexels'.")
+        log.error(f"Unknown source: {source}. Use 'hailuo', 'pexels', or 'comfy'.")
         return {"success": False, "stage_failed": "source_invalid", "topic": topic}
 
     try:
@@ -122,10 +126,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["hailuo", "pexels"], default=DEFAULT_SOURCE,
-                        help="Video source: hailuo (paid AI) or pexels (free stock)")
+    parser.add_argument("--source", choices=["hailuo", "pexels", "comfy"], default=DEFAULT_SOURCE,
+                        help="Video source: hailuo (paid cloud AI), pexels (free stock), or comfy (free local AI)")
     parser.add_argument("--tone", default=None, help="Script tone")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help="Voice style")
+    parser.add_argument("--duration", type=int, default=75,
+                        help="Target video length in seconds (e.g. 60-90). Scales narration + scene count.")
     args = parser.parse_args()
 
     # Pass tone=None if user didn't override, so Leader Agent's choice wins
@@ -134,7 +140,8 @@ if __name__ == "__main__":
         topic=args.topic,
         source=args.source,
         tone=user_tone,
-        voice=args.voice
+        voice=args.voice,
+        duration=args.duration
     )
 
     if result["success"]:

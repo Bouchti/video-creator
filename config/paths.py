@@ -34,5 +34,10 @@ def get_temp_dir() -> str:
     return tempfile.gettempdir()
 
 
+def get_comfy_workflow_path() -> str:
+    """Default path to the exported ComfyUI API-format workflow JSON."""
+    return os.path.join(PROJECT_ROOT, "config", "comfy_workflow_wan.json")
+
+
 # Shared constants
 CLAUDE_MODEL = "claude-sonnet-4-6"

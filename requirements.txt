@@ -4,3 +4,4 @@ faster-whisper
 python-dotenv
 requests
 tavily-python
+websocket-client

@@ -1,4 +1,5 @@
 import os
+import glob
 import time
 import subprocess
 import requests
@@ -10,6 +11,28 @@ import logging
 
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
+
+
+def _find_ffmpeg_bin(name: str) -> str:
+    """Return full path to ffmpeg/ffprobe, falling back to the winget install location."""
+    import shutil
+    found = shutil.which(name)
+    if found:
+        return found
+    # winget installs FFmpeg here on Windows; glob handles version changes
+    pattern = os.path.join(
+        os.environ.get("LOCALAPPDATA", ""),
+        "Microsoft", "WinGet", "Packages",
+        "Gyan.FFmpeg_*", "ffmpeg-*-full_build", "bin", name + ".exe",
+    )
+    matches = glob.glob(pattern)
+    if matches:
+        return matches[0]
+    return name  # last resort: hope it's on PATH at call time
+
+
+FFMPEG = _find_ffmpeg_bin("ffmpeg")
+FFPROBE = _find_ffmpeg_bin("ffprobe")
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 FAL_API_KEY = os.getenv("FAL_API_KEY")
@@ -36,6 +59,27 @@ def _get_whisper_model():
 
 # ------------------- HELPERS -------------------
 
+def get_scenes(script: dict) -> list:
+    """Return the ordered list of scene prompts.
+
+    Supports the connected long-form schema (`scenes` list) and the legacy
+    fixed `scene_1..scene_6` schema.
+    """
+    scenes = script.get("scenes")
+    if isinstance(scenes, list) and scenes:
+        return scenes
+    legacy = [script[k] for k in sorted(script) if k.startswith("scene_") and script.get(k)]
+    return legacy
+
+
+def scene_prompt(script: dict, index: int) -> str:
+    """Scene text with the shared visual_style appended, for cohesive output."""
+    scenes = get_scenes(script)
+    text = scenes[index]
+    style = (script.get("visual_style") or "").strip()
+    return f"{text}, {style}" if style else text
+
+
 def _remove_files(paths) -> None:
     for path in paths:
         if path and os.path.exists(path):
@@ -54,7 +98,7 @@ def _run_process(cmd, timeout: int, cleanup_paths=()):
 
 
 def get_duration(file_path: str) -> float:
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+    cmd = [FFPROBE, "-v", "error", "-show_entries", "format=duration",
            "-of", "default=noprint_wrappers=1:nokey=1", file_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     if r.returncode != 0:
@@ -64,7 +108,7 @@ def get_duration(file_path: str) -> float:
 
 def get_dimensions(file_path: str) -> tuple:
     """Returns (width, height)."""
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+    cmd = [FFPROBE, "-v", "error", "-select_streams", "v:0",
            "-show_entries", "stream=width,height",
            "-of", "csv=s=x:p=0", file_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -187,15 +231,13 @@ def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str
 
 def generate_all_clips(script: dict, num_clips: int) -> list:
     """Sequential clip generation. Hailuo costs ~$0.27/clip."""
-    if num_clips > 6:
-        raise ValueError("Hailuo scripts define exactly 6 scenes; num_clips cannot exceed 6")
+    num_clips = min(num_clips, len(get_scenes(script)))
 
     log.info(f"\n[2/5] Generating {num_clips} clips via Hailuo 02 (~${0.27*num_clips:.2f} total)...\n")
     clips = []
-    for i in range(1, num_clips + 1):
-        scene_key = f"scene_{i}"
-        prompt = script[scene_key]
-        path = generate_single_clip(prompt, clip_number=i, total_clips=num_clips)
+    for i in range(num_clips):
+        prompt = scene_prompt(script, i)
+        path = generate_single_clip(prompt, clip_number=i + 1, total_clips=num_clips)
         clips.append(path)
     log.info(f"\nAll {num_clips} clips ready.\n")
     return clips
@@ -203,19 +245,31 @@ def generate_all_clips(script: dict, num_clips: int) -> list:
 
 # ------------------- VERTICAL CONVERSION (Smart Hybrid) -------------------
 
-def landscape_to_vertical(input_path: str, output_path: str, duration: float) -> str:
+def landscape_to_vertical(input_path: str, output_path: str, duration: float, loop: bool = False) -> str:
     """Convert landscape clip to 9:16 vertical filling the FULL frame.
 
     Strategy: scale source to FILL 1080x1920 with center-crop.
     This loses some side detail but produces a full-screen video like real TikTok content.
     Subjects centered in frame (which is what Hailuo defaults to) translate well.
+
+    If loop=True, the source is looped (-stream_loop) and the OUTPUT is capped to
+    exactly `duration` seconds — used for short local clips that must fill a longer
+    narration slot.
     """
-    cmd = [
-        "ffmpeg", "-y", "-t", str(duration), "-i", input_path,
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-        "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-pix_fmt", "yuv420p", "-an", output_path
-    ]
+    if loop:
+        cmd = [
+            FFMPEG, "-y", "-stream_loop", "-1", "-i", input_path, "-t", str(duration),
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-an", output_path
+        ]
+    else:
+        cmd = [
+            FFMPEG, "-y", "-t", str(duration), "-i", input_path,
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-an", output_path
+        ]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise Exception(f"Vertical conversion failed: {r.stderr[-300:]}")
@@ -223,9 +277,14 @@ def landscape_to_vertical(input_path: str, output_path: str, duration: float) ->
 
 
 
-def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
+def stitch_clips_to_duration(clip_paths: list, target_duration: float, loop_to_fill: bool = False) -> str:
     """Convert each landscape clip to vertical, trim, and concatenate.
-    GUARANTEES total duration covers target by looping last clip if needed."""
+    GUARANTEES total duration covers target by looping last clip if needed.
+
+    loop_to_fill=True makes EACH clip loop to exactly its per-clip slot. Use this
+    for short local clips (e.g. ~2s Wan clips) so every narration beat is covered by
+    its own footage instead of one clip being looped to fill a large tail gap.
+    """
     log.info(f"\n[3/5] Converting to vertical 9:16 + stitching to {target_duration:.1f}s...")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -235,7 +294,7 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
         raise ValueError("At least one clip is required for stitching")
 
     per_clip = target_duration / len(clip_paths)
-    log.info(f"  Each clip: {per_clip:.1f}s")
+    log.info(f"  Each clip: {per_clip:.1f}s{' (loop-filled)' if loop_to_fill else ''}")
 
     # Validate each clip can supply per_clip seconds
     normalized = []
@@ -247,13 +306,17 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
             normalized.append(norm)
             actual_dur = get_duration(clip)
 
-            # If clip is too short, use what's there (will be padded by next step)
-            trim = min(per_clip + 0.2, actual_dur)
-            if trim < per_clip - 0.5:
-                log.warning(f"  WARN: Clip {i+1} only {actual_dur:.1f}s, need {per_clip:.1f}s")
-
-            log.info(f"  Clip {i+1}/{len(clip_paths)}: {actual_dur:.1f}s -> {trim:.1f}s")
-            landscape_to_vertical(clip, norm, trim)
+            if loop_to_fill:
+                # Loop each clip to exactly fill its slot (short clips -> full coverage)
+                log.info(f"  Clip {i+1}/{len(clip_paths)}: {actual_dur:.1f}s -> {per_clip:.1f}s (looped)")
+                landscape_to_vertical(clip, norm, per_clip, loop=True)
+            else:
+                # If clip is too short, use what's there (will be padded by next step)
+                trim = min(per_clip + 0.2, actual_dur)
+                if trim < per_clip - 0.5:
+                    log.warning(f"  WARN: Clip {i+1} only {actual_dur:.1f}s, need {per_clip:.1f}s")
+                log.info(f"  Clip {i+1}/{len(clip_paths)}: {actual_dur:.1f}s -> {trim:.1f}s")
+                landscape_to_vertical(clip, norm, trim)
             actual_norm = get_duration(norm)
             total_supplied += actual_norm
     except Exception:
@@ -268,7 +331,7 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
         log.info(f"  Gap: {gap:.1f}s — looping last clip")
         last_loop = os.path.join(get_temp_dir(), f"loop_{ts}.mp4")
         cmd = [
-            "ffmpeg", "-y", "-stream_loop", "-1", "-i", normalized[-1],
+            FFMPEG, "-y", "-stream_loop", "-1", "-i", normalized[-1],
             "-t", str(gap),
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", last_loop
@@ -294,7 +357,7 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float) -> str:
 
     log.info(f"  Concatenating {len(normalized)} clips...")
     cmd = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+        FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
         "-t", str(target_duration),
         "-c:v", "libx264", "-preset", "fast", "-crf", "21",
         "-r", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", stitched_path
@@ -325,7 +388,7 @@ def merge_audio_video(video_path: str, audio_path: str) -> str:
     merged = os.path.join(get_temp_dir(), f"merged_{ts}.mp4")
 
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-i", video_path, "-i", audio_path,
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-map", "0:v:0", "-map", "1:a:0",
@@ -409,94 +472,59 @@ def srt_time_to_seconds(t: str) -> float:
 
 
 def burn_subtitles(video_path: str, srt_path: str) -> str:
-    """Burn yellow word-by-word subtitles via drawtext (no libass)."""
-    log.info("  Burning subtitles via drawtext...")
+    """Burn word-by-word yellow subtitles using the libass subtitles filter.
+
+    Uses cwd=temp_dir and a local filename so the filter string never contains
+    a Windows drive-letter colon — which breaks FFmpeg filter parsing.
+    """
+    log.info("  Burning subtitles...")
+    import shutil
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    final = os.path.join(get_temp_dir(), f"final_{ts}.mp4")
+    temp_dir = get_temp_dir()
+    final = os.path.join(temp_dir, f"final_{ts}.mp4")
 
-    with open(srt_path, encoding="utf-8") as f:
-        srt_content = f.read()
+    # Copy SRT next to the output so the filter can reference it by filename only.
+    local_srt = f"subs_{ts}.srt"
+    local_srt_path = os.path.join(temp_dir, local_srt)
+    shutil.copy(srt_path, local_srt_path)
 
-    entries = []
-    blocks = srt_content.strip().split("\n\n")
-    for block in blocks:
-        lines = block.strip().split("\n")
-        if len(lines) < 3:
-            continue
-        if "-->" not in lines[1]:
-            continue
-        start_str, end_str = lines[1].split(" --> ")
-        start = srt_time_to_seconds(start_str)
-        end = srt_time_to_seconds(end_str)
-        text = " ".join(lines[2:]).strip()
-        text = text.replace("\\", "\\\\").replace("'", "\\'")
-        text = text.replace(":", "\\:").replace(",", "\\,")
-        entries.append((start, end, text))
-
-    if not entries:
-        raise Exception("No subtitle entries parsed")
-
-    log.info(f"  {len(entries)} subtitle entries")
-
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/segoeuib.ttf",
-    ]
-    font_file = next((fp for fp in font_paths if os.path.exists(fp)), None)
-    if not font_file:
-        raise FileNotFoundError(
-            "No suitable bold font found for subtitle burn. "
-            "Install DejaVu or Arial Bold."
-        )
-
-    filters = []
-    for start, end, text in entries:
-        f = (
-            f"drawtext="
-            f"fontfile='{font_file}':"
-            f"text='{text}':"
-            f"fontsize=56:"
-            f"fontcolor=yellow:"
-            f"borderw=6:"
-            f"bordercolor=black:"
-            f"x=(w-text_w)/2:"
-            f"y=h*0.78:"
-            f"enable='between(t,{start},{end})'"
-        )
-        filters.append(f)
-
-    vf_arg = ",".join(filters)
-
-    # Write filter chain to file to avoid Windows 32K CLI limit
-    filter_script_path = os.path.join(get_temp_dir(), f"filters_{ts}.txt")
-    with open(filter_script_path, "w", encoding="utf-8") as f:
-        f.write(vf_arg)
+    # ASS colour format: &HAABBGGRR  — yellow = R=FF, G=FF, B=00 → &H0000FFFF
+    # libass scales FontSize against its 288px reference, then up to the video
+    # height (~6.7x at 1920) — so FontSize=14 renders ~93px (~5% of frame),
+    # large enough to read but small enough that long words never overflow.
+    style = (
+        "FontName=Arial Bold,"
+        "FontSize=14,"
+        "PrimaryColour=&H0000FFFF,"
+        "OutlineColour=&H00000000,"
+        "BorderStyle=1,"
+        "Outline=2,"
+        "Shadow=0,"
+        "Alignment=2,"
+        "MarginV=60"
+    )
+    vf = f"subtitles={local_srt}:force_style='{style}'"
 
     cmd = [
-        "ffmpeg", "-y", "-i", video_path,
-        "-filter_script", filter_script_path,
+        FFMPEG, "-y", "-i", video_path,
+        "-vf", vf,
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "copy", "-movflags", "+faststart", final
     ]
 
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                           cwd=temp_dir)
         if r.returncode != 0:
-            log.error("  drawtext burn failed:")
+            log.error("  subtitle burn failed:")
             log.error(r.stderr[-1500:])
             raise RuntimeError("Subtitle burn failed")
     finally:
-        _remove_files([filter_script_path])
+        _remove_files([local_srt_path])
 
-    try:
-        mb = os.path.getsize(final) / 1024 / 1024
-        final_duration = get_duration(final)
-    except Exception:
-        _remove_files([final])
-        raise
+    mb = os.path.getsize(final) / 1024 / 1024
+    final_duration = get_duration(final)
     log.info(f"  Final: {final} ({mb:.1f} MB, {final_duration:.1f}s)")
     return final
 
