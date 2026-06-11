@@ -5,12 +5,34 @@ TikTok, YouTube Shorts, and similar platforms. It discovers or accepts a topic,
 writes and evaluates a script, creates a voiceover, gathers video clips, and
 renders a final `1080x1920` MP4 with burned-in word-level subtitles.
 
-The project supports two video sources:
+The project supports three video sources:
 
 | Source | Description | Typical tradeoff |
 | --- | --- | --- |
-| `pexels` | Downloads portrait stock footage from Pexels | Faster and no footage-generation charge |
+| `pexels` | Downloads real footage from multiple free stock + archival sources | Faster and no footage-generation charge |
 | `hailuo` | Generates cinematic clips with Hailuo 02 through fal.ai | Slower and paid, but tailored to the script |
+| `comfy` | Generates clips with a **local** model (Wan 2.2) through ComfyUI | No per-clip charge and highest control, but slow and requires a one-time GPU setup |
+
+### Free stock sources (used by `--source pexels`)
+
+`--source pexels` queries several free sources in priority order and merges the
+results, so a clip is sourced from whichever has the most on-topic match. Sources
+needing a key are skipped automatically when the key is absent; the keyless ones
+always run.
+
+| Source | Key | Best for |
+| --- | --- | --- |
+| Pexels | `PEXELS_API_KEY` | General b-roll |
+| Pixabay | `PIXABAY_API_KEY` | General b-roll |
+| Coverr | `COVERR_API_KEY` | Cinematic b-roll |
+| NASA | none | Space / earth / science |
+| Internet Archive | none | Historical / public-domain footage |
+| Wikimedia Commons | none | Historical / educational footage |
+
+Reorder priority with the `STOCK_SOURCES` env var (comma-separated). For the
+"untold historical stories" niche, putting `archive,wikimedia` first favours
+on-topic period footage over generic stock, e.g.
+`STOCK_SOURCES=archive,wikimedia,pexels,pixabay,nasa`.
 
 > [!IMPORTANT]
 > Publishing to social platforms is not implemented. The pipeline creates the
@@ -23,7 +45,7 @@ The project supports two video sources:
 2. Generate a structured 30-second script with Claude.
 3. Evaluate the script for factual accuracy, safety, length, and scene quality.
 4. Generate an ElevenLabs voiceover.
-5. Download Pexels footage or generate Hailuo clips.
+5. Download Pexels footage, generate Hailuo clips, or generate local ComfyUI clips.
 6. Convert footage to vertical video and merge it with the voiceover.
 7. Transcribe the voiceover with Faster Whisper and burn subtitles with FFmpeg.
 8. Save the final MP4 in `output/`.
@@ -109,6 +131,12 @@ TAVILY_API_KEY=
 ELEVENLABS_API_KEY=
 FAL_API_KEY=
 PEXELS_API_KEY=
+PIXABAY_API_KEY=
+COVERR_API_KEY=
+STOCK_SOURCES=pexels,pixabay,coverr,nasa,archive,wikimedia
+COMFYUI_URL=http://127.0.0.1:8188
+COMFY_WORKFLOW=
+COMFY_TIMEOUT=3600
 ```
 
 | Variable | Used for | When required |
@@ -116,8 +144,17 @@ PEXELS_API_KEY=
 | `ANTHROPIC_API_KEY` | Topic selection, script generation, and evaluation | Always |
 | `ELEVENLABS_API_KEY` | Voiceover generation | Always |
 | `TAVILY_API_KEY` | Trending-topic search | Only when no topic is supplied |
-| `PEXELS_API_KEY` | Stock-footage search and download | With `--source pexels` |
+| `PEXELS_API_KEY` | Pexels stock-footage search | With `--source pexels` |
+| `PIXABAY_API_KEY` | Pixabay stock source | Optional; extra free source for `--source pexels` |
+| `COVERR_API_KEY` | Coverr stock source | Optional; extra free source for `--source pexels` |
+| `STOCK_SOURCES` | Priority order of stock sources | Optional; defaults to all six |
 | `FAL_API_KEY` | Hailuo clip generation through fal.ai | With `--source hailuo` |
+| `COMFYUI_URL` | Address of the local ComfyUI server | With `--source comfy` (defaults to `http://127.0.0.1:8188`) |
+| `COMFY_WORKFLOW` | Path to a custom exported workflow JSON | Optional; blank uses `config/comfy_workflow_wan.json` |
+| `COMFY_TIMEOUT` | Per-clip generation timeout in seconds | Optional; defaults to `3600` |
+
+No API key is required for `--source comfy` — generation runs entirely on your
+own GPU.
 
 Example minimal configuration for a manual topic with Pexels:
 
@@ -149,6 +186,15 @@ Show all command-line options:
 .\venv\Scripts\python.exe main.py --source hailuo "Why the Sahara was once green"
 ```
 
+### Manual Topic with Local ComfyUI
+
+Requires the one-time setup in [Local AI Video (ComfyUI)](#local-ai-video-comfyui)
+and a running ComfyUI server.
+
+```powershell
+.\venv\Scripts\python.exe main.py --source comfy "Why the Sahara was once green"
+```
+
 ### Automatic Trending Topic
 
 Omit the topic to let Tavily and Claude choose one:
@@ -177,6 +223,75 @@ An unknown voice name falls back to `energetic`.
 
 Common script tones include `mysterious`, `epic`, `shocking`, `emotional`, and
 `educational`.
+
+## Local AI Video (ComfyUI)
+
+`--source comfy` generates clips with a video model running on your own GPU,
+driven through ComfyUI's API. There is no per-clip charge, but generation is
+slow and needs a one-time setup. This was built and tuned for an **8 GB VRAM**
+GPU (RTX 4070 Laptop) using **Wan 2.2 14B in GGUF** with block-swap offload —
+the strongest quality that fits 8 GB. Expect roughly **30–60+ minutes** for a
+full six-scene video on that hardware.
+
+The Python side is model-agnostic: it injects each scene's prompt and a fresh
+seed into an exported workflow JSON, then downloads the rendered clip. Swapping
+models or quality tiers only means exporting a different workflow — no code
+change.
+
+### 1. Install ComfyUI
+
+Install [Pinokio](https://pinokio.computer/) and use its 1-click ComfyUI
+installer, or install ComfyUI manually. Launch it and confirm the server is up:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8188/system_stats | Select-Object StatusCode
+```
+
+### 2. Add custom nodes
+
+Using ComfyUI Manager, install:
+
+- **ComfyUI-GGUF** (city96) — loads GGUF-quantized models to save VRAM.
+- **ComfyUI-WanVideoWrapper** (kijai) — Wan sampler plus a block-swap node, the
+  proven low-VRAM path for the 14B model on 8 GB.
+- **ComfyUI-VideoHelperSuite** — provides `VHS_VideoCombine` to write an `.mp4`.
+
+### 3. Download model files
+
+Into the matching ComfyUI `models/` subfolders:
+
+- Wan 2.2 14B text-to-video UNet, **GGUF Q4_K_M or Q5** (quality/VRAM sweet spot).
+- `umt5-xxl` text encoder (GGUF quant).
+- Wan 2.1/2.2 VAE.
+
+### 4. Build and export the workflow
+
+In ComfyUI, build a text-to-video graph: GGUF UNet loader → block-swap →
+positive/negative text encode → Wan sampler (target ~81 frames @ 16 fps ≈ 5 s,
+resolution **720×1280 vertical**) → VAE decode → `VHS_VideoCombine` (mp4). Tune
+the block-swap block count until it fits 8 GB without an out-of-memory error.
+
+Then:
+
+1. **Title the positive-prompt node `POSITIVE_PROMPT`** (right-click → Title) so
+   the pipeline can find it. Alternatively set `COMFY_PROMPT_NODE_ID` in `.env`.
+2. Enable **Settings → Enable Dev mode Options**, then use **Save (API Format)**
+   to export the graph to `config/comfy_workflow_wan.json`.
+
+The pipeline auto-detects the seed node (the sampler input named `seed` or
+`noise_seed`); set `COMFY_SEED_NODE_ID` only if auto-detection picks the wrong one.
+
+### 5. Run
+
+With ComfyUI running:
+
+```powershell
+.\venv\Scripts\python.exe main.py --source comfy "Why the Sahara was once green"
+```
+
+If 8 GB is still too tight even at Q4, fall back (in order): raise the
+block-swap count, drop to a lower GGUF quant, or switch to **Wan 2.2 TI2V-5B**.
+Each is just a different exported workflow JSON.
 
 ## Output and Logs
 
@@ -237,6 +352,8 @@ Package names and Python commands vary by distribution.
 - Pexels does not charge for stock-footage downloads under its API terms, but
   Claude and ElevenLabs usage can still incur charges.
 - Hailuo mode also incurs fal.ai video-generation charges.
+- ComfyUI mode has no per-clip charge (it runs locally) but is the slowest
+  source and depends on your GPU; Claude and ElevenLabs usage still applies.
 - Provider pricing and limits can change. Review each provider's current
   pricing before running batches.
 - Hailuo generation can take several minutes per clip.
@@ -324,6 +441,7 @@ model. Later runs in the same environment should start faster.
 |   |-- evaluator.py       # Script quality control
 |   |-- editor_hailuo.py   # Voice, Hailuo, FFmpeg, and subtitles
 |   |-- editor_pexels.py   # Pexels footage workflow
+|   |-- editor_comfy.py    # Local ComfyUI (Wan) workflow
 |   `-- publisher.py       # Explicit unimplemented publishing boundary
 |-- config/
 |   `-- paths.py           # Portable paths and shared model configuration

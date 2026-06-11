@@ -10,161 +10,169 @@ load_dotenv(get_env_path())
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 log = logging.getLogger("pipeline")
 
+# Pacing constants used to scale narration + scene count to a target duration.
+WORDS_PER_SECOND = 2.4          # fast, energetic VO pace
+SECONDS_PER_SCENE = 5.0         # each scene fills ~5s of the final video
+MIN_SCENES, MAX_SCENES = 6, 18
+
+
+def plan_for_duration(target_seconds: int) -> tuple:
+    """Return (num_scenes, min_words, max_words) for a target video length."""
+    num_scenes = max(MIN_SCENES, min(MAX_SCENES, round(target_seconds / SECONDS_PER_SCENE)))
+    center = int(target_seconds * WORDS_PER_SECOND)
+    return num_scenes, int(center * 0.85), int(center * 1.15)
+
+
 # Define the exact schema as a tool — Claude MUST return valid JSON matching this
-SCRIPT_TOOL = {
-    "name": "submit_video_script",
-    "description": "Submit a complete viral video script with all required fields.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "spoken_script": {
-                "type": "string",
-                "description": "The voiceover narration. 70-90 words. High energy, hook-first, with rhythm. Use single quotes for any quoted speech inside."
+def build_script_tool(num_scenes: int, min_words: int, max_words: int) -> dict:
+    return {
+        "name": "submit_video_script",
+        "description": "Submit a complete viral video script with a CONNECTED sequence of scenes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "spoken_script": {
+                    "type": "string",
+                    "description": f"The voiceover narration. {min_words}-{max_words} words. One continuous, flowing story (not disconnected facts). High energy, hook-first. Use single quotes for any quoted speech inside."
+                },
+                "visual_style": {
+                    "type": "string",
+                    "description": (
+                        "A SINGLE shared visual style + world anchor that ALL scenes share, so the "
+                        "video looks like one cohesive film. Include: one cinematographer/film look, "
+                        "ONE consistent color palette, ONE recurring main subject, ONE consistent "
+                        "setting/world, and a consistent lighting mood. This string is appended to "
+                        "EVERY scene prompt. Example: 'shot on 35mm, teal-and-amber grade, Denis "
+                        "Villeneuve cinematography, a lone diver in a red suit as recurring subject, "
+                        "deep-ocean world, soft volumetric god-rays, photoreal documentary look'."
+                    )
+                },
+                "scenes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": num_scenes,
+                    "maxItems": num_scenes,
+                    "description": (
+                        f"EXACTLY {num_scenes} scene prompts that form ONE CONTINUOUS, CONNECTED "
+                        "journey through the SAME world with the SAME recurring subject — NOT "
+                        "unrelated shots. Each scene flows from the previous one (same location/"
+                        "subject, progressing in time or moving deeper). Vary only shot type and "
+                        "camera angle; keep setting, subject, and palette consistent. Each scene = "
+                        "[SHOT TYPE] + [subject, ONE clear action] + [environment] + [camera movement] "
+                        "+ [atmosphere]. Do NOT restate the style (it is added automatically)."
+                    )
+                },
+                "video_title": {"type": "string", "description": "SEO title that triggers curiosity. Max 100 chars."},
+                "description": {"type": "string", "description": "Platform description with hook. Max 300 chars."},
+                "hashtags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 8,
+                    "maxItems": 12,
+                    "description": "10 relevant hashtags including the niche-specific ones."
+                },
+                "mood": {
+                    "type": "string",
+                    "enum": ["epic", "mysterious", "shocking", "emotional", "educational"]
+                },
+                "target_duration": {"type": "integer", "description": "Target video length in seconds."},
+                "pexels_queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": num_scenes,
+                    "maxItems": num_scenes,
+                    "description": (
+                        f"EXACTLY {num_scenes} stock-footage search queries, ONE per scene, in the "
+                        "same order. RULES, in priority order:\n"
+                        "1. 1-2 words, lowercase, a CONCRETE filmable thing (object, place, action, "
+                        "or creature) — never an abstract concept ('mystery', 'history', 'discovery').\n"
+                        "2. Use COMMON stock-library words that thousands of clips exist for "
+                        "('ancient ruins', 'bronze gears', 'ocean waves', 'city night'). NEVER proper "
+                        "nouns or niche names ('Antikythera', a specific person/place) — they return "
+                        "nothing; translate them to their generic visual instead.\n"
+                        "3. Stay inside the SAME world/subject as the other scenes so the clips cut "
+                        "together (e.g. all 'deep ocean' / 'ancient temple' shots), varying the "
+                        "framing word per scene ('diver', 'coral', 'shipwreck', 'dark water')."
+                    )
+                }
             },
-            "scene_1": {"type": "string", "description": "5-second hook scene prompt — most visually striking image."},
-            "scene_2": {"type": "string", "description": "5-second context scene prompt — establish the world."},
-            "scene_3": {"type": "string", "description": "5-second tension scene prompt — something unexpected."},
-            "scene_4": {"type": "string", "description": "5-second escalation scene prompt — raise stakes visually."},
-            "scene_5": {"type": "string", "description": "5-second climax scene prompt — peak emotion."},
-            "scene_6": {"type": "string", "description": "5-second resolution scene prompt — satisfying close."},
-            "video_title": {"type": "string", "description": "SEO title that triggers curiosity. Max 100 chars."},
-            "description": {"type": "string", "description": "Platform description with hook. Max 300 chars."},
-            "hashtags": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 8,
-                "maxItems": 12,
-                "description": "10 relevant hashtags including the niche-specific ones."
-            },
-            "mood": {
-                "type": "string",
-                "enum": ["epic", "mysterious", "shocking", "emotional", "educational"]
-            },
-            "target_duration": {"type": "integer", "description": "30"},
-            "pexels_queries": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 6,
-                "maxItems": 8,
-                "description": "6-8 simple 1-3 word search queries for Pexels stock footage. Each must be a CONCRETE NOUN that exists in stock libraries. Example: for a video about ocean waves, use ['ocean waves', 'crashing wave', 'sea storm', 'underwater coral', 'beach sunset', 'whale ocean']. NEVER use abstract concepts like 'mystery' or 'science' - only physical things a camera can film."
-            }
-        },
-        "required": [
-            "spoken_script", "scene_1", "scene_2", "scene_3", "scene_4",
-            "scene_5", "scene_6", "video_title", "description", "hashtags",
-            "mood", "target_duration", "pexels_queries"
-        ]
+            "required": [
+                "spoken_script", "visual_style", "scenes", "video_title",
+                "description", "hashtags", "mood", "target_duration", "pexels_queries"
+            ]
+        }
     }
-}
 
 
-SYSTEM_PROMPT = """You are an elite viral content director. Your videos hit 10M+ views on TikTok. You write like MrBeast scripts a documentary — high energy, zero filler, every line earns its place.
+SYSTEM_PROMPT = """You are an elite viral content director. Your videos hit 10M+ views on TikTok and YouTube. You write like MrBeast scripts a documentary — high energy, zero filler, every line earns its place.
 
 ═══ VOICEOVER NARRATION ═══
-- 70-90 words. Voiceover at fast speed = ~30 seconds.
+- Match the requested word count (it sets the video length).
 - HOOK (first 3 seconds, ~10 words): A shocking claim or mystery. Stop the scroll.
-- Sensory language. Make people SEE it.
-- Short punchy sentences. Mix 3-word bursts with 8-word builds. RHYTHM IS EVERYTHING.
-- Drop dramatic ONE-WORD sentences. Like this. Bam.
-- Power words: insane, hidden, secret, lost, forbidden, banned, impossible, terrifying.
-- Final 3 seconds: cliffhanger or callback. Never generic 'follow for more'.
+- ONE continuous story with a through-line — a beginning, build, and payoff. NOT a list of disconnected facts.
+- Sensory language. Make people SEE it. Short punchy sentences mixed with longer builds. RHYTHM.
+- Power words: insane, hidden, secret, lost, forbidden, impossible.
+- Final line: cliffhanger or callback. Never generic 'follow for more'.
 
 ═══ FACTUAL ACCURACY ═══
 - Only stated facts you are CERTAIN of. Skip disputed/legendary elements.
-- Famous quotes: must be EXACT or paraphrased neutrally.
 - Be conservative with names, dates, specific numbers.
 
-═══ SCENE PROMPTS — CRITICAL FOR VISUAL QUALITY ═══
+═══ CONNECTED SCENES — THE MOST IMPORTANT RULE ═══
 
-Each scene = 5 seconds. Total = 30 seconds. 6 scenes.
+The scenes must feel like ONE CONTINUOUS FILM, not a slideshow of unrelated clips.
 
-FORMULA: [SHOT TYPE] + [SUBJECT, ONE clear action] + [ENVIRONMENT] + [CINEMATIC STYLE REFERENCE] + [LIGHTING] + [CAMERA MOVEMENT] + [ATMOSPHERE/TEXTURE]
+1. ONE WORLD: every scene happens in the SAME setting/world established in scene 1.
+2. ONE RECURRING SUBJECT: the same main subject (a person, creature, vehicle, object) appears or is implied throughout.
+3. CONTINUITY: each scene flows from the previous — moving deeper, later in time, or closer in — like a camera following a single journey. No hard context switches.
+4. ONE LOOK: define a single `visual_style` (cinematographer, color palette, lighting, film look) — it is automatically appended to every scene, so DON'T repeat it inside scenes.
+5. VARY ONLY shot type and camera angle (wide → tracking → close-up → overhead) to keep it dynamic, while setting + subject + palette stay constant.
 
-VARIETY RULES:
-- Alternate shot types: extreme close-up → wide → medium → tracking → overhead → close-up
-- Each scene DIFFERENT lighting (warm/cool, hard/soft)
-- Each scene DIFFERENT camera movement
-- Vary COLOR PALETTE across scenes
+Think of it as storyboarding a single 60-90 second short film, scene by scene, in order.
 
-CINEMATIC ANCHORS — vary, don't repeat:
-- 'Denis Villeneuve cinematography' (epic, atmospheric)
-- 'David Fincher aesthetic' (cold, precise, dark)
-- 'National Geographic documentary quality'
-- 'Apple commercial style' (clean, polished)
-- 'A24 horror film tone' (slow, unsettling)
-- 'Christopher Nolan IMAX scale'
-- 'Wes Anderson symmetry'
-- 'Blade Runner 2049 neon'
+SCENE FORMULA (per scene): [SHOT TYPE] + [recurring subject, ONE clear action] + [same environment, progressed] + [camera movement] + [atmosphere: dust/fog/particles/light].
 
-LIGHTING SPECIFICITY:
-- 'Single hard spotlight cutting through fog'
-- 'Cold blue moonlight through tall windows'
-- 'Warm sodium streetlight on wet pavement'
-- 'Underwater god rays piercing deep blue'
-- 'Sunset rim lighting from behind'
-- 'Flickering firelight casting dancing shadows'
-
-CAMERA MOVEMENT:
-- 'Slow dolly push-in on subject hands'
-- 'Smooth orbit 90 degrees around object'
-- 'Crane shot rising from ground level'
-- 'Handheld tracking shot following from behind'
-- 'Static lock-off with subject moving through frame'
-
-ATMOSPHERE — every scene needs ONE:
-- Dust particles in light beams
-- Fog rolling across floor
-- Steam rising from surfaces
-- Rain streaking glass
-- Falling embers/ash
-- Floating debris underwater
+NARRATIVE ARC across the scenes:
+- Opening scenes: establish the world + hook.
+- Middle scenes: journey deeper / stakes rise.
+- Final scenes: climax, then a resolving pull-back in the SAME world.
 
 ═══ CONTENT SAFETY (NON-NEGOTIABLE) ═══
 
-Video generator REJECTS prompts with these. NEVER use:
+The video generator REJECTS prompts with these. NEVER use:
 - PAIN/HARM: pain, agony, suffering, screaming, writhing, contorted, blood, wound, burned, injured, bleeding, violent, attack
 - WEAPONS: gun, knife, blade, weapon
-- DISTRESSING: crying child, drowning, falling from height, medical procedures on body, sexual content
+- DISTRESSING: crying child, drowning, falling from height, medical procedures, sexual content
 
-INSTEAD show drama through:
-- OBJECTS: spilled liquid, knocked-over bottles, swinging lanterns
-- ENVIRONMENT: storm clouds, swirling dust, flickering flames
-- MOTION: rushing, sweeping, gripping, reaching (NOT 'in pain')
-
-═══ SCENE FLOW ═══
-
-Scene 1 — HOOK: most visually shocking image.
-Scene 2 — CONTEXT: establish location/world.
-Scene 3 — TENSION: something unexpected. Movement.
-Scene 4 — ESCALATION: tighter framing. Stakes rise.
-Scene 5 — CLIMAX: peak visual moment.
-Scene 6 — RESOLUTION: pull back, symbolic close.
+Show drama through OBJECTS (spilled liquid, swinging lanterns), ENVIRONMENT (storm clouds, swirling dust, flickering flames), and MOTION (rushing, sweeping, reaching) — NEVER through harm to a person.
 
 You MUST submit the script using the submit_video_script tool. Do not write JSON yourself — call the tool with the structured arguments."""
 
 
-def generate_script(topic: str, tone: str = "mysterious") -> dict:
-    """Generate a video script using Claude's tool_use for guaranteed valid JSON."""
+def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 75) -> dict:
+    """Generate a CONNECTED, target-length video script via Claude tool_use."""
+    num_scenes, min_words, max_words = plan_for_duration(target_seconds)
+    tool = build_script_tool(num_scenes, min_words, max_words)
 
-    prompt = f"""Create a viral 30-second video about:
+    prompt = f"""Create a viral {target_seconds}-second video about:
 
 TOPIC: {topic}
 TONE: {tone}
 
-Make it CINEMATIC, dramatic, scroll-stopping. 70-90 words for the narration.
-Each scene must look DIFFERENT from the others.
-Submit your complete script using the submit_video_script tool."""
+Write ONE continuous story for the narration ({min_words}-{max_words} words).
+Then storyboard EXACTLY {num_scenes} CONNECTED scenes that follow a single subject through ONE
+consistent world — each scene flowing from the last, like one short film. Define a single
+shared `visual_style` that all scenes inherit. Submit with the submit_video_script tool."""
 
     response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=2000,
+        max_tokens=4000,
         system=SYSTEM_PROMPT,
-        tools=[SCRIPT_TOOL],
+        tools=[tool],
         tool_choice={"type": "tool", "name": "submit_video_script"},
         messages=[{"role": "user", "content": prompt}]
     )
 
-    # Extract the tool call
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_video_script":
             return block.input
@@ -175,7 +183,7 @@ Submit your complete script using the submit_video_script tool."""
 if __name__ == "__main__":
     test_topic = "The Antikythera mechanism — a 2000-year-old Greek device that predicted eclipses"
     log.info(f"Generating script for: {test_topic}")
-    result = generate_script(test_topic, tone="mysterious")
+    result = generate_script(test_topic, tone="mysterious", target_seconds=75)
     log.info(json.dumps(result, indent=2))
     log.info(f"Word count: {len(result['spoken_script'].split())}")
-    log.info(f"All keys present: {list(result.keys())}")
+    log.info(f"Scenes: {len(result['scenes'])}")
