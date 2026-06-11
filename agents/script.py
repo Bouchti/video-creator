@@ -16,15 +16,28 @@ SECONDS_PER_SCENE = 5.0         # each scene fills ~5s of the final video
 MIN_SCENES, MAX_SCENES = 6, 18
 
 
-def plan_for_duration(target_seconds: int) -> tuple:
+def plan_for_duration(target_seconds: int, source: str = "hailuo") -> tuple:
     """Return (num_scenes, min_words, max_words) for a target video length."""
-    num_scenes = max(MIN_SCENES, min(MAX_SCENES, round(target_seconds / SECONDS_PER_SCENE)))
+    if source == "comfy":
+        # Shorter on-screen beats -> more storyboard scenes for 2s local clips.
+        num_scenes = max(MIN_SCENES, min(25, round(target_seconds / 3.0)))
+    else:
+        num_scenes = max(MIN_SCENES, min(MAX_SCENES, round(target_seconds / SECONDS_PER_SCENE)))
     center = int(target_seconds * WORDS_PER_SECOND)
     return num_scenes, int(center * 0.85), int(center * 1.15)
 
 
 # Define the exact schema as a tool — Claude MUST return valid JSON matching this
-def build_script_tool(num_scenes: int, min_words: int, max_words: int) -> dict:
+COMFY_SCENE_HINT = (
+    "LOCAL AI VIDEO (ComfyUI): each scene MUST show a SPECIFIC, LITERAL, VISIBLE "
+    "moment from the topic — name the real subjects (creatures, places, objects, "
+    "people, era). A silent viewer must recognize the story. NO generic b-roll "
+    "('cinematic landscape', 'mysterious atmosphere'). Chronological order must "
+    "match the narration beat-for-beat."
+)
+
+
+def build_script_tool(num_scenes: int, min_words: int, max_words: int, source: str = "hailuo") -> dict:
     return {
         "name": "submit_video_script",
         "description": "Submit a complete viral video script with a CONNECTED sequence of scenes.",
@@ -59,7 +72,8 @@ def build_script_tool(num_scenes: int, min_words: int, max_words: int) -> dict:
                         "subject, progressing in time or moving deeper). Vary only shot type and "
                         "camera angle; keep setting, subject, and palette consistent. Each scene = "
                         "[SHOT TYPE] + [subject, ONE clear action] + [environment] + [camera movement] "
-                        "+ [atmosphere]. Do NOT restate the style (it is added automatically)."
+                        "+ [atmosphere]. Do NOT restate the style (it is added automatically). "
+                        + (COMFY_SCENE_HINT if source == "comfy" else "")
                     )
                 },
                 "video_title": {"type": "string", "description": "SEO title that triggers curiosity. Max 100 chars."},
@@ -149,16 +163,29 @@ Show drama through OBJECTS (spilled liquid, swinging lanterns), ENVIRONMENT (sto
 You MUST submit the script using the submit_video_script tool. Do not write JSON yourself — call the tool with the structured arguments."""
 
 
-def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 75) -> dict:
+def generate_script(
+    topic: str, tone: str = "mysterious", target_seconds: int = 75, source: str = "hailuo"
+) -> dict:
     """Generate a CONNECTED, target-length video script via Claude tool_use."""
-    num_scenes, min_words, max_words = plan_for_duration(target_seconds)
-    tool = build_script_tool(num_scenes, min_words, max_words)
+    num_scenes, min_words, max_words = plan_for_duration(target_seconds, source=source)
+    tool = build_script_tool(num_scenes, min_words, max_words, source=source)
+
+    comfy_extra = ""
+    if source == "comfy":
+        comfy_extra = f"""
+LOCAL AI VIDEO MODE:
+- Each scene must depict a LITERAL on-screen moment from the story (who/what/where/when).
+- Name concrete visible subjects from the topic in EVERY scene (not abstract mood words).
+- Scene order must follow the narration chronologically — scene 1 = opening hook, last scene = payoff.
+- {COMFY_SCENE_HINT}
+"""
 
     prompt = f"""Create a viral {target_seconds}-second video about:
 
 TOPIC: {topic}
 TONE: {tone}
-
+VIDEO SOURCE: {source}
+{comfy_extra}
 Write ONE continuous story for the narration ({min_words}-{max_words} words).
 Then storyboard EXACTLY {num_scenes} CONNECTED scenes that follow a single subject through ONE
 consistent world — each scene flowing from the last, like one short film. Define a single

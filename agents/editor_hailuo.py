@@ -1,38 +1,15 @@
 import os
-import glob
 import time
 import subprocess
 import requests
 import re
 from datetime import datetime
 from dotenv import load_dotenv
-from config.paths import get_env_path, get_temp_dir, CLAUDE_MODEL
+from config.paths import get_env_path, get_ffmpeg, get_ffprobe, get_temp_dir, CLAUDE_MODEL
 import logging
 
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
-
-
-def _find_ffmpeg_bin(name: str) -> str:
-    """Return full path to ffmpeg/ffprobe, falling back to the winget install location."""
-    import shutil
-    found = shutil.which(name)
-    if found:
-        return found
-    # winget installs FFmpeg here on Windows; glob handles version changes
-    pattern = os.path.join(
-        os.environ.get("LOCALAPPDATA", ""),
-        "Microsoft", "WinGet", "Packages",
-        "Gyan.FFmpeg_*", "ffmpeg-*-full_build", "bin", name + ".exe",
-    )
-    matches = glob.glob(pattern)
-    if matches:
-        return matches[0]
-    return name  # last resort: hope it's on PATH at call time
-
-
-FFMPEG = _find_ffmpeg_bin("ffmpeg")
-FFPROBE = _find_ffmpeg_bin("ffprobe")
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 FAL_API_KEY = os.getenv("FAL_API_KEY")
@@ -98,7 +75,7 @@ def _run_process(cmd, timeout: int, cleanup_paths=()):
 
 
 def get_duration(file_path: str) -> float:
-    cmd = [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+    cmd = [get_ffprobe(), "-v", "error", "-show_entries", "format=duration",
            "-of", "default=noprint_wrappers=1:nokey=1", file_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     if r.returncode != 0:
@@ -108,7 +85,7 @@ def get_duration(file_path: str) -> float:
 
 def get_dimensions(file_path: str) -> tuple:
     """Returns (width, height)."""
-    cmd = [FFPROBE, "-v", "error", "-select_streams", "v:0",
+    cmd = [get_ffprobe(), "-v", "error", "-select_streams", "v:0",
            "-show_entries", "stream=width,height",
            "-of", "csv=s=x:p=0", file_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -258,14 +235,14 @@ def landscape_to_vertical(input_path: str, output_path: str, duration: float, lo
     """
     if loop:
         cmd = [
-            FFMPEG, "-y", "-stream_loop", "-1", "-i", input_path, "-t", str(duration),
+            get_ffmpeg(), "-y", "-stream_loop", "-1", "-i", input_path, "-t", str(duration),
             "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
             "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", output_path
         ]
     else:
         cmd = [
-            FFMPEG, "-y", "-t", str(duration), "-i", input_path,
+            get_ffmpeg(), "-y", "-t", str(duration), "-i", input_path,
             "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
             "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", output_path
@@ -328,10 +305,10 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float, loop_to_f
     # If total is less than target, loop last clip to fill the gap
     if total_supplied < target_duration - 0.5:
         gap = target_duration - total_supplied + 0.3
-        log.info(f"  Gap: {gap:.1f}s — looping last clip")
+        log.info(f"  Gap: {gap:.1f}s - looping last clip")
         last_loop = os.path.join(get_temp_dir(), f"loop_{ts}.mp4")
         cmd = [
-            FFMPEG, "-y", "-stream_loop", "-1", "-i", normalized[-1],
+            get_ffmpeg(), "-y", "-stream_loop", "-1", "-i", normalized[-1],
             "-t", str(gap),
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", last_loop
@@ -357,7 +334,7 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float, loop_to_f
 
     log.info(f"  Concatenating {len(normalized)} clips...")
     cmd = [
-        FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+        get_ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
         "-t", str(target_duration),
         "-c:v", "libx264", "-preset", "fast", "-crf", "21",
         "-r", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", stitched_path
@@ -388,7 +365,7 @@ def merge_audio_video(video_path: str, audio_path: str) -> str:
     merged = os.path.join(get_temp_dir(), f"merged_{ts}.mp4")
 
     cmd = [
-        FFMPEG, "-y",
+        get_ffmpeg(), "-y",
         "-i", video_path, "-i", audio_path,
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-map", "0:v:0", "-map", "1:a:0",
@@ -507,7 +484,7 @@ def burn_subtitles(video_path: str, srt_path: str) -> str:
     vf = f"subtitles={local_srt}:force_style='{style}'"
 
     cmd = [
-        FFMPEG, "-y", "-i", video_path,
+        get_ffmpeg(), "-y", "-i", video_path,
         "-vf", vf,
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "copy", "-movflags", "+faststart", final

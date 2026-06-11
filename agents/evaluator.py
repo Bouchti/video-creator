@@ -55,14 +55,26 @@ VERDICT_TOOL = {
 }
 
 
-def evaluate_script(script: dict, min_words: int = 55, max_words: int = 220) -> dict:
+def evaluate_script(
+    script: dict, min_words: int = 55, max_words: int = 220, source: str = "hailuo"
+) -> dict:
     wc = len(script.get("spoken_script", "").split())
+    comfy_check = ""
+    if source == "comfy":
+        comfy_check = """
+8. LOCAL AI LITERALNESS: Every scene must show a specific visible subject/action from the
+   topic — not generic stock-style b-roll. A silent viewer should follow the story. If scenes
+   are vague, abstract, or could fit any topic, FAIL with feedback naming which scene lacks
+   concrete story visuals.
+"""
     prompt = f"""Evaluate this video script:
 {json.dumps(script, indent=2)}
 
 Expected spoken_script word count for this video: {min_words}–{max_words} words (actual: {wc} words).
+Video source: {source}
 Check facts strictly. Check for forbidden pain/harm/weapon language in EVERY scene.
 Confirm the scenes form ONE connected world (recurring subject), not unrelated clips.
+{comfy_check}
 Be lenient on cinematic style. Submit your verdict with the submit_verdict tool."""
 
     response = client.messages.create(
@@ -102,10 +114,16 @@ def has_all_keys(script: dict) -> tuple:
     return (len(missing) == 0), missing
 
 
-def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int = 3, target_seconds: int = 75) -> dict:
+def evaluate_with_retry(
+    topic: str,
+    tone: str = "mysterious",
+    max_retries: int = 3,
+    target_seconds: int = 75,
+    source: str = "hailuo",
+) -> dict:
     from agents.script import generate_script, plan_for_duration
 
-    _, min_words, max_words = plan_for_duration(target_seconds)
+    _, min_words, max_words = plan_for_duration(target_seconds, source=source)
 
     last_feedback = None
     for attempt in range(1, max_retries + 1):
@@ -113,7 +131,9 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
         # Append previous failure feedback so the generator can fix the exact issue.
         augmented_topic = topic if not last_feedback else f"{topic}\n\nPREVIOUS ATTEMPT FAILED — fix this before regenerating: {last_feedback}"
         try:
-            script = generate_script(augmented_topic, tone, target_seconds=target_seconds)
+            script = generate_script(
+                augmented_topic, tone, target_seconds=target_seconds, source=source
+            )
         except Exception as e:
             log.error(f"Script generation crashed: {e}")
             if attempt == max_retries:
@@ -133,7 +153,9 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
         log.info(f"Script generated. Word count: {wc}")
 
         try:
-            result = evaluate_script(script, min_words=min_words, max_words=max_words)
+            result = evaluate_script(
+                script, min_words=min_words, max_words=max_words, source=source
+            )
         except Exception as e:
             log.error(f"Script evaluation crashed: {e}")
             if attempt == max_retries:

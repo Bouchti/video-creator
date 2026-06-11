@@ -19,6 +19,7 @@ import uuid
 import time
 import random
 import logging
+import math
 from datetime import datetime
 
 import requests
@@ -38,7 +39,6 @@ from agents.editor_hailuo import (
     words_to_srt,
     burn_subtitles,
     get_scenes,
-    scene_prompt,
 )
 
 load_dotenv(get_env_path())
@@ -47,6 +47,12 @@ log = logging.getLogger("pipeline")
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
 # Per-clip timeout. Wan 2.2 14B on 8 GB VRAM is slow — default generous.
 COMFY_TIMEOUT = int(os.getenv("COMFY_TIMEOUT", "3600"))
+
+# Short clips (low VRAM) — cover full voiceover by generating MANY of them.
+COMFY_FPS = int(os.getenv("COMFY_FPS", "16"))
+COMFY_CLIP_FRAMES = int(os.getenv("COMFY_CLIP_FRAMES", "33"))  # ~2s @ 16fps (Wan 4n+1)
+COMFY_CLIP_SECONDS = COMFY_CLIP_FRAMES / COMFY_FPS
+COMFY_MAX_CLIPS = int(os.getenv("COMFY_MAX_CLIPS", "45"))
 
 # Optional explicit node IDs (from the exported workflow). If unset, we
 # auto-detect: the positive-prompt node by its _meta.title containing
@@ -58,6 +64,83 @@ SEED_NODE_ID = os.getenv("COMFY_SEED_NODE_ID") or None
 _PROMPT_TEXT_KEYS = ("text", "positive_prompt", "prompt")
 _SEED_KEYS = ("seed", "noise_seed")
 _VIDEO_EXTS = (".mp4", ".webm", ".mkv", ".mov")
+_LATENT_NODE_TYPES = ("Wan22ImageToVideoLatent", "WanImageToVideoLatent", "EmptyHunyuanLatentVideo")
+
+_VARIANT_CUES = (
+    "",
+    "alternate angle, ",
+    "closer detail shot, ",
+    "wider establishing shot, ",
+    "slow tracking shot, ",
+    "over-the-shoulder view, ",
+    "low angle dramatic shot, ",
+    "aerial overhead shot, ",
+)
+
+
+# ------------------- CLIP PLANNING + PROMPTS -------------------
+
+def _wan_frame_count(_seconds: float = 0) -> int:
+    """Fixed short clip length for VRAM; Wan requires 4n+1 frames."""
+    return COMFY_CLIP_FRAMES
+
+
+def plan_comfy_clips(target_duration: float, num_scenes: int) -> tuple[int, float]:
+    """Return (num_clips, gen_seconds) — many short clips to cover the voiceover."""
+    num_clips = max(num_scenes, math.ceil(target_duration / COMFY_CLIP_SECONDS))
+    num_clips = min(num_clips, COMFY_MAX_CLIPS)
+    return num_clips, COMFY_CLIP_SECONDS
+
+
+def _scene_index_for_clip(clip_i: int, num_clips: int, num_scenes: int) -> int:
+    """Map clip slots onto scene prompts in story order (same idea as Pexels)."""
+    return (clip_i * num_scenes) // max(num_clips, 1)
+
+
+def _clip_variant(clip_i: int, num_clips: int, num_scenes: int) -> int:
+    """0-based variation index when multiple clips cover the same scene."""
+    scene_idx = _scene_index_for_clip(clip_i, num_clips, num_scenes)
+    return sum(
+        1 for j in range(clip_i)
+        if _scene_index_for_clip(j, num_clips, num_scenes) == scene_idx
+    )
+
+
+def _narration_beats_for_clips(script: dict, num_clips: int) -> list[str]:
+    """Split narration into one beat per clip so each generation matches the VO."""
+    words = script.get("spoken_script", "").split()
+    if not words or num_clips <= 0:
+        return []
+    chunk = max(1, len(words) // num_clips)
+    beats = []
+    for i in range(num_clips):
+        start = i * chunk
+        end = len(words) if i == num_clips - 1 else (i + 1) * chunk
+        beats.append(" ".join(words[start:end]))
+    return beats
+
+
+def comfy_scene_prompt(
+    script: dict, scene_idx: int, variant: int = 0, clip_beat: str = ""
+) -> str:
+    """Build a dense, story-literal prompt for local Wan text-to-video."""
+    scenes = get_scenes(script)
+    scene = scenes[scene_idx].strip()
+    title = (script.get("video_title") or "").strip()
+    mood = (script.get("mood") or "").strip()
+    style = (script.get("visual_style") or "").strip()
+    variant_cue = _VARIANT_CUES[variant % len(_VARIANT_CUES)]
+
+    parts = [
+        f"{variant_cue}{scene}",
+        f"Must visually depict this narration line: {clip_beat}" if clip_beat else "",
+        f"Documentary about: {title}" if title else "",
+        f"Emotional tone: {mood}" if mood else "",
+        "Photoreal cinematic footage, sharp focus, literal subject matter from the story, "
+        "coherent environment, no text overlays, no subtitles",
+        style,
+    ]
+    return ", ".join(p for p in parts if p)
 
 
 # ------------------- WORKFLOW TEMPLATING -------------------
@@ -82,13 +165,11 @@ def _find_prompt_node(workflow: dict) -> str:
             raise KeyError(f"COMFY_PROMPT_NODE_ID={PROMPT_NODE_ID} not in workflow")
         return PROMPT_NODE_ID
 
-    # Prefer a node explicitly titled POSITIVE_PROMPT.
     for node_id, node in workflow.items():
         title = (node.get("_meta") or {}).get("title", "")
         if "POSITIVE_PROMPT" in title.upper():
             return node_id
 
-    # Fallback: first node that has a settable text-like input.
     for node_id, node in workflow.items():
         inputs = node.get("inputs", {})
         if any(k in inputs and isinstance(inputs[k], str) for k in _PROMPT_TEXT_KEYS):
@@ -100,14 +181,18 @@ def _find_prompt_node(workflow: dict) -> str:
     )
 
 
-def _apply_prompt_and_seed(workflow: dict, prompt: str) -> dict:
-    """Return a copy of the workflow with this scene's prompt + a fresh seed.
+def _set_workflow_clip_length(workflow: dict, clip_seconds: float) -> None:
+    """Set Wan latent frame count so each generated clip matches the narration slot."""
+    frames = _wan_frame_count(clip_seconds)
+    for node in workflow.values():
+        if node.get("class_type") in _LATENT_NODE_TYPES:
+            node.setdefault("inputs", {})["length"] = frames
 
-    One fresh seed is applied to every seed-bearing node (multi-stage samplers,
-    e.g. the Wan MoE high/low-noise pair, each carry their own seed input), so
-    clips actually vary regardless of which sampler adds the noise.
-    """
+
+def _apply_prompt_and_seed(workflow: dict, prompt: str, clip_seconds: float) -> dict:
+    """Return a copy of the workflow with prompt, seed, and clip length set."""
     wf = copy.deepcopy(workflow)
+    _set_workflow_clip_length(wf, clip_seconds)
 
     prompt_node = wf[_find_prompt_node(wf)]
     for key in _PROMPT_TEXT_KEYS:
@@ -162,7 +247,7 @@ def _await_completion(prompt_id: str, client_id: str, clip_number: int) -> None:
                     f"ComfyUI clip {clip_number} timed out after {COMFY_TIMEOUT}s"
                 )
             if not isinstance(raw, str):
-                continue  # binary preview frames — ignore
+                continue
             msg = json.loads(raw)
             mtype = msg.get("type")
             data = msg.get("data", {})
@@ -179,7 +264,7 @@ def _await_completion(prompt_id: str, client_id: str, clip_number: int) -> None:
                 )
             elif mtype == "executing" and data.get("prompt_id") == prompt_id:
                 if data.get("node") is None:
-                    return  # null node => this prompt is fully executed
+                    return
     finally:
         ws.close()
 
@@ -194,7 +279,6 @@ def _download_output(prompt_id: str, clip_number: int) -> str:
 
     video = None
     for node_out in outputs.values():
-        # VHS_VideoCombine reports under "gifs"; other savers under "videos"/"images".
         for key in ("gifs", "videos", "images"):
             for item in node_out.get(key, []):
                 fn = item.get("filename", "")
@@ -231,10 +315,16 @@ def _download_output(prompt_id: str, clip_number: int) -> str:
 
 # ------------------- CLIP GENERATION -------------------
 
-def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str:
+def generate_single_clip(
+    prompt: str, clip_number: int, total_clips: int, clip_seconds: float
+) -> str:
     """Generate one clip via the local ComfyUI server."""
-    log.info(f"[{clip_number}/{total_clips}] Submitting to ComfyUI (local Wan)...")
-    workflow = _apply_prompt_and_seed(_load_workflow(), prompt)
+    frames = _wan_frame_count(clip_seconds)
+    log.info(
+        f"[{clip_number}/{total_clips}] Submitting to ComfyUI "
+        f"({frames} frames ~ {frames / COMFY_FPS:.1f}s)..."
+    )
+    workflow = _apply_prompt_and_seed(_load_workflow(), prompt, clip_seconds)
     client_id = uuid.uuid4().hex
 
     started = time.time()
@@ -242,23 +332,39 @@ def generate_single_clip(prompt: str, clip_number: int, total_clips: int) -> str
     _await_completion(prompt_id, client_id, clip_number)
     path = _download_output(prompt_id, clip_number)
 
+    dur = get_duration(path)
     size_mb = os.path.getsize(path) / 1024 / 1024
-    log.info(f"  Clip {clip_number}: OK ({size_mb:.1f} MB, {time.time()-started:.0f}s)")
+    log.info(
+        f"  Clip {clip_number}: OK ({dur:.1f}s, {size_mb:.1f} MB, "
+        f"{time.time()-started:.0f}s wall)"
+    )
     return path
 
 
-def generate_all_clips(script: dict, num_clips: int) -> list:
-    """Sequential clip generation, one clip per connected scene (local, no cost).
-
-    Each prompt carries the script's shared visual_style so the clips read as one
-    cohesive film rather than unrelated shots.
-    """
+def generate_all_clips(script: dict, num_clips: int, clip_seconds: float) -> list:
+    """Sequential clip generation mapped to scenes in story order."""
     scenes = get_scenes(script)
-    num_clips = min(num_clips, len(scenes))
-    log.info(f"\n[2/5] Generating {num_clips} connected clips via local ComfyUI (Wan)...\n")
+    num_scenes = len(scenes)
+    log.info(
+        f"\n[2/5] Generating {num_clips} clips via local ComfyUI "
+        f"({num_scenes} scenes, ~{clip_seconds:.1f}s each)...\n"
+    )
+    clip_beats = _narration_beats_for_clips(script, num_clips)
     clips = []
     for i in range(num_clips):
-        clips.append(generate_single_clip(scene_prompt(script, i), clip_number=i + 1, total_clips=num_clips))
+        scene_idx = _scene_index_for_clip(i, num_clips, num_scenes)
+        variant = _clip_variant(i, num_clips, num_scenes)
+        beat = clip_beats[i] if i < len(clip_beats) else ""
+        prompt = comfy_scene_prompt(script, scene_idx, variant, clip_beat=beat)
+        log.info(
+            f"  Scene {scene_idx + 1}/{num_scenes} (variant {variant + 1}) "
+            f"| VO: {beat[:60]}{'...' if len(beat) > 60 else ''}"
+        )
+        clips.append(
+            generate_single_clip(
+                prompt, clip_number=i + 1, total_clips=num_clips, clip_seconds=clip_seconds
+            )
+        )
     log.info(f"\nAll {num_clips} clips ready.\n")
     return clips
 
@@ -266,11 +372,7 @@ def generate_all_clips(script: dict, num_clips: int) -> list:
 # ------------------- MAIN PIPELINE -------------------
 
 def process_video(script: dict, voice: str = "energetic") -> str:
-    """Local ComfyUI video + ElevenLabs voice + word-by-word subtitles.
-
-    Same orchestration and cleanup contract as editor_hailuo.process_video;
-    only the clip source is local instead of fal.ai.
-    """
+    """Local ComfyUI video + ElevenLabs voice + word-by-word subtitles."""
     audio_path = None
     clips = []
     stitched = None
@@ -280,17 +382,20 @@ def process_video(script: dict, voice: str = "energetic") -> str:
     try:
         audio_path, audio_duration = generate_voiceover(script["spoken_script"], voice=voice)
 
-        # One clip per connected scene — maximizes unique footage so the loop-fill
-        # for long (60-90s) videos repeats as little as possible.
-        num_clips = len(get_scenes(script))
-        log.info(f"\nVoice = {audio_duration:.1f}s. Generating {num_clips} local clips (one per scene).\n")
-
-        clips = generate_all_clips(script, num_clips=num_clips)
-
         target_duration = audio_duration + 0.5
-        # Local clips are short (~2s) to fit 8GB VRAM at high resolution; loop each
-        # clip to fill its narration slot so every beat has its own footage.
-        stitched = stitch_clips_to_duration(clips, target_duration=target_duration, loop_to_fill=True)
+        num_scenes = len(get_scenes(script))
+        num_clips, clip_seconds = plan_comfy_clips(target_duration, num_scenes)
+        slot = target_duration / num_clips
+        log.info(
+            f"\nVoice = {audio_duration:.1f}s. Generating {num_clips} short clips "
+            f"({num_scenes} story scenes, {COMFY_CLIP_FRAMES} frames ~{clip_seconds:.1f}s each, "
+            f"~{slot:.1f}s on-screen slot).\n"
+        )
+
+        clips = generate_all_clips(script, num_clips=num_clips, clip_seconds=clip_seconds)
+        stitched = stitch_clips_to_duration(
+            clips, target_duration=target_duration, loop_to_fill=True
+        )
 
         merged = merge_audio_video(stitched, audio_path)
 
@@ -306,8 +411,8 @@ def process_video(script: dict, voice: str = "energetic") -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    # Single-clip smoke test (requires a running ComfyUI + exported workflow).
     test = generate_single_clip(
-        "a calm ocean wave rolling at golden-hour sunset, cinematic, slow dolly", 1, 1
+        "a calm ocean wave rolling at golden-hour sunset, cinematic, slow dolly",
+        1, 1, COMFY_CLIP_SECONDS,
     )
     log.info(f"Smoke-test clip: {test} ({get_duration(test):.1f}s)")

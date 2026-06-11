@@ -67,7 +67,7 @@ if ($ver -match "Python (\d+)\.(\d+)") {
 Write-Step "Installing Python dependencies (requirements.txt)"
 python -m pip install --upgrade pip -q
 python -m pip install -r requirements.txt
-# huggingface_hub CLI is needed for model downloads; install with [cli] extras.
+# huggingface_hub CLI (`hf download`) is needed for model downloads.
 python -m pip install "huggingface_hub[cli]" -q
 Write-OK "Python packages installed"
 
@@ -193,7 +193,7 @@ if (Test-Path $comfyPython) {
 #
 #    HuggingFace repo references (verify at https://huggingface.co if a download
 #    fails — model repos occasionally move or get renamed):
-#      UNet:    city96/Wan2.2-TI2V-5B-GGUF
+#      UNet:    QuantStack/Wan2.2-TI2V-5B-GGUF
 #      Encoder: city96/umt5-xxl-encoder-GGUF
 #      VAE:     Comfy-Org/Wan_2.2_ComfyUI_repackaged
 # ══════════════════════════════════════════════════════════════════════════════
@@ -212,8 +212,8 @@ if (Test-Path $unetFile) {
     Write-OK "UNet already downloaded: Wan2.2-TI2V-5B-Q8_0.gguf"
 } else {
     Write-Host "    Downloading Wan2.2-TI2V-5B-Q8_0.gguf (~5.1 GB) — this takes a few minutes..."
-    huggingface-cli download `
-        city96/Wan2.2-TI2V-5B-GGUF `
+    hf download `
+        QuantStack/Wan2.2-TI2V-5B-GGUF `
         Wan2.2-TI2V-5B-Q8_0.gguf `
         --local-dir $DIR_UNET
     Write-OK "UNet downloaded"
@@ -225,7 +225,7 @@ if (Test-Path $teFile) {
     Write-OK "Text encoder already downloaded: umt5-xxl-encoder-Q5_K_M.gguf"
 } else {
     Write-Host "    Downloading umt5-xxl-encoder-Q5_K_M.gguf (~3.9 GB)..."
-    huggingface-cli download `
+    hf download `
         city96/umt5-xxl-encoder-GGUF `
         umt5-xxl-encoder-Q5_K_M.gguf `
         --local-dir $DIR_TE
@@ -241,7 +241,7 @@ if (Test-Path $vaeFile) {
     Write-OK "VAE already downloaded: wan2.2_vae.safetensors"
 } else {
     Write-Host "    Downloading wan2.2_vae.safetensors (~450 MB)..."
-    huggingface-cli download `
+    hf download `
         Comfy-Org/Wan_2.2_ComfyUI_repackaged `
         split_files/vae/wan2.2_vae.safetensors `
         --local-dir $DIR_VAE

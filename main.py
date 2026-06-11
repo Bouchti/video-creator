@@ -28,10 +28,26 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 LOG_FILE = get_log_file()
 
+
+class _SafeStreamHandler(logging.StreamHandler):
+    """Avoid Windows cp1252 crashes when log messages contain Unicode."""
+
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except UnicodeEncodeError:
+            record.msg = str(record.msg).encode("ascii", errors="replace").decode("ascii")
+            record.args = None
+            super().emit(record)
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()]
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        _SafeStreamHandler(),
+    ],
 )
 log = logging.getLogger("pipeline")
 
@@ -70,7 +86,9 @@ def run_pipeline(topic: str = None, source: str = DEFAULT_SOURCE, tone: str = No
 
     log.info("\n[STAGE 1] Script generation + evaluation")
     from agents.evaluator import evaluate_with_retry
-    script = evaluate_with_retry(topic, tone=tone, max_retries=3, target_seconds=duration)
+    script = evaluate_with_retry(
+        topic, tone=tone, max_retries=3, target_seconds=duration, source=source
+    )
     if not script:
         log.error("Script generation failed. Aborting.")
         return {"success": False, "stage_failed": "script", "topic": topic}

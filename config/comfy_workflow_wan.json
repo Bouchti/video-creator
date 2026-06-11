@@ -35,7 +35,7 @@
   "55": {
     "class_type": "Wan22ImageToVideoLatent",
     "inputs": { "vae": ["39", 0], "width": 704, "height": 1280, "length": 33, "batch_size": 1 },
-    "_meta": { "title": "Empty Latent Video (9:16, ~2s@16fps, loop-filled in stitch)" }
+    "_meta": { "title": "Empty Latent Video (9:16, ~2s@16fps; length overridden per clip)" }
   },
   "3": {
     "class_type": "KSampler",
