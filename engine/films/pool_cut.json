@@ -17,7 +17,8 @@
           "text": "GROUNDWATER"
         }
       ],
-      "duration": 3.0
+      "duration": 3.0,
+      "action": "float_hook"
     },
     {
       "id": "rewind",
@@ -26,7 +27,8 @@
       "shot": "Freeze, then the whole build plays backwards to bare lawn.",
       "camera": "hold",
       "callouts": [],
-      "duration": 2.0
+      "duration": 2.0,
+      "action": "rewind"
     },
     {
       "id": "dig",
@@ -40,7 +42,8 @@
           "text": "of soil"
         }
       ],
-      "duration": 5.0
+      "duration": 5.0,
+      "action": "dig"
     },
     {
       "id": "layers",
@@ -65,7 +68,8 @@
           "text": "GROUNDWATER"
         }
       ],
-      "duration": 5.0
+      "duration": 5.0,
+      "action": "layers"
     },
     {
       "id": "gravel",
@@ -78,7 +82,8 @@
           "text": "Gravel bed"
         }
       ],
-      "duration": 4.0
+      "duration": 4.0,
+      "action": "gravel"
     },
     {
       "id": "valve",
@@ -91,7 +96,8 @@
           "text": "RELIEF VALVE"
         }
       ],
-      "duration": 6.0
+      "duration": 6.0,
+      "action": "valve"
     },
     {
       "id": "pipes",
@@ -108,7 +114,8 @@
           "text": "SKIMMER"
         }
       ],
-      "duration": 5.5
+      "duration": 5.5,
+      "action": "pipes"
     },
     {
       "id": "rebar",
@@ -121,7 +128,8 @@
           "text": "25 cm"
         }
       ],
-      "duration": 4.5
+      "duration": 4.5,
+      "action": "rebar"
     },
     {
       "id": "shotcrete",
@@ -134,7 +142,8 @@
           "text": "20 cm"
         }
       ],
-      "duration": 5.0
+      "duration": 5.0,
+      "action": "shotcrete"
     },
     {
       "id": "cure",
@@ -148,7 +157,8 @@
           "text": "to cure"
         }
       ],
-      "duration": 4.5
+      "duration": 4.5,
+      "action": "cure"
     },
     {
       "id": "finish",
@@ -161,7 +171,8 @@
           "text": "PLASTER"
         }
       ],
-      "duration": 5.0
+      "duration": 5.0,
+      "action": "finish"
     },
     {
       "id": "fill",
@@ -175,7 +186,8 @@
           "text": "of water"
         }
       ],
-      "duration": 5.5
+      "duration": 5.5,
+      "action": "fill"
     },
     {
       "id": "weight",
@@ -189,7 +201,8 @@
           "text": "holding it down"
         }
       ],
-      "duration": 5.0
+      "duration": 5.0,
+      "action": "weight"
     },
     {
       "id": "flow",
@@ -206,7 +219,8 @@
           "text": "FILTER"
         }
       ],
-      "duration": 6.5
+      "duration": 6.5,
+      "action": "flow"
     },
     {
       "id": "cycle",
@@ -220,7 +234,8 @@
           "text": "per full cycle"
         }
       ],
-      "duration": 3.5
+      "duration": 3.5,
+      "action": "cycle"
     },
     {
       "id": "outro",
@@ -228,7 +243,9 @@
       "shot": "Back to the hook angle; rain falls; water table rises toward the pool.",
       "camera": "settle on the hook framing (loops into the opening)",
       "callouts": [],
-      "duration": 4.0
+      "duration": 4.0,
+      "action": "storm"
     }
-  ]
+  ],
+  "set": "pool"
 }

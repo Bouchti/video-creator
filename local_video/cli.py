@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import PipelineConfig
 from .models import ProjectState
-from .project import create_project, load_project, project_status, reset_shot, set_control_state
+from .project import create_project, load_project, project_status, replan_project, reset_shot, set_control_state
 from .queue import QueueBusyError, QueueRunner
 
 
@@ -81,6 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     regenerate = sub.add_parser("regenerate", help="Archive and regenerate one selected shot")
     regenerate.add_argument("project")
     regenerate.add_argument("shot", type=int)
+    replan = sub.add_parser("replan", help="Archive old clips and rebuild local prompts from the reviewed script")
+    replan.add_argument("project")
+    replan.add_argument("--run", action="store_true", help="Start the clean generation immediately")
     return parser
 
 
@@ -119,6 +122,14 @@ def main(argv: list[str] | None = None) -> int:
             manifest = QueueRunner(config, progress=_progress).run(manifest, shots={args.shot})
             _print_status(manifest)
             return 0 if manifest.shots[args.shot - 1].status == "accepted" else 1
+        if args.command == "replan":
+            manifest = replan_project(args.project, config)
+            _print_plan(manifest)
+            print(f"Archived prior clips and rebuilt: {Path(manifest.project_dir) / 'project.json'}")
+            if args.run:
+                manifest = QueueRunner(config, progress=_progress).run(manifest)
+                _print_status(manifest)
+            return 0 if manifest.state not in {"failed", "partially_completed"} else 1
         manifest = load_project(args.project, config)
         if args.command == "resume":
             manifest.set_state(ProjectState.QUEUED, requested_by="user")

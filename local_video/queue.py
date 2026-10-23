@@ -24,6 +24,7 @@ from .models import ProjectManifest, ProjectState, completed_shots
 from .planner import MINIMAX_SUFFIX, WAN_SUFFIX, reseed
 from .project import load_project
 from .validation import extract_last_frame, validate_clip, validate_final
+from .visual_review import review_clip
 
 log = logging.getLogger("pipeline")
 
@@ -140,6 +141,7 @@ class QueueRunner:
         validator: Callable[..., dict[str, Any]] = validate_clip,
         assembler: Callable[..., dict[str, str]] = assemble_project,
         extractor: Callable[..., Path] = extract_last_frame,
+        visual_reviewer: Callable[..., dict[str, Any]] = review_clip,
         progress: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.config = config or PipelineConfig()
@@ -147,6 +149,7 @@ class QueueRunner:
         self.validator = validator
         self.assembler = assembler
         self.extractor = extractor
+        self.visual_reviewer = visual_reviewer
         self.progress = progress
 
     def _emit(self, manifest: ProjectManifest, backend: str | None = None, error: str | None = None) -> None:
@@ -210,6 +213,7 @@ class QueueRunner:
         primary_failures = 0
         total_attempts = self.config.retry_limit + 1
         last_error = "No backend was attempted"
+        revision_notes: list[str] = []
         for attempt_index in range(total_attempts):
             backend_name = sequence[0]
             if len(sequence) > 1 and primary_failures >= self.config.fallback_failures:
@@ -260,10 +264,15 @@ class QueueRunner:
                     attempt["prompt_id"] = prompt_id
                     manifest.save()
 
-                result: GenerationResult = backend.generate(
-                    _prompt_for_backend(shot, backend_name), target,
-                    self._reference_for(manifest, index), submitted,
-                )
+                candidate_shot = _prompt_for_backend(shot, backend_name)
+                if revision_notes:
+                    candidate_shot = replace(
+                        candidate_shot,
+                        prompt=candidate_shot.prompt + "\nMANDATORY CORRECTIONS FROM THE PREVIOUS REVIEW: "
+                        + " ".join(revision_notes[-2:]),
+                    )
+                reference = self._reference_for(manifest, index)
+                result: GenerationResult = backend.generate(candidate_shot, target, reference, submitted)
                 attempt.update({
                     "prompt_id": result.prompt_id,
                     "generation_seconds": round(result.elapsed_seconds, 3),
@@ -281,6 +290,17 @@ class QueueRunner:
                 height = self.config.minimax_height if backend_name == "minimax" else self.config.wan_height
                 seconds = self.config.minimax_seconds if backend_name == "minimax" else self.config.wan_frames / self.config.wan_fps
                 report = self.validator(result.path, self.config, width, height, seconds)
+                visual_report = self.visual_reviewer(result.path, shot, reference, manifest)
+                report["semantic_review"] = visual_report
+                attempt["validation"] = report
+                if not visual_report.get("valid", False):
+                    corrections = str(visual_report.get("revision_prompt") or "").strip()
+                    if not corrections:
+                        corrections = "; ".join(
+                            [*visual_report.get("fatal_problems", []), *visual_report.get("problems", [])]
+                        )
+                    revision_notes.append(corrections or "Match the assigned action and continuity exactly.")
+                    raise ValueError("visual review rejected clip: " + revision_notes[-1])
                 shot.validation = report
                 shot.output = str(result.path.relative_to(manifest.project_dir))
                 frame_path = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
@@ -328,7 +348,7 @@ class QueueRunner:
                 if requested_stop in {ProjectState.PAUSED.value, ProjectState.CANCELLED.value}:
                     return False
         reference = self._reference_for(manifest, index)
-        if reference:
+        if reference and manifest.settings.get("allow_still_replacement", False):
             replacement = Path(manifest.project_dir) / "shots" / f"{shot.id}-still-replacement.mp4"
             duration = shot.duration_seconds
             frames = max(1, round(duration * 30))

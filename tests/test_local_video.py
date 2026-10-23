@@ -17,7 +17,7 @@ from local_video.backends import BackendAdapter, GenerationResult
 from local_video.config import PipelineConfig, resolve_within
 from local_video.models import ProjectManifest, Shot
 from local_video.planner import QUALITY_BAN, allocate_frames, plan_shots, shot_count_for_duration
-from local_video.project import create_project
+from local_video.project import create_project, replan_project
 from local_video.queue import FileLock, QueueBusyError, QueueRunner
 from local_video.validation import ffprobe, validate_clip
 
@@ -72,8 +72,12 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("Dialogue: none", shots[0].prompt)
         self.assertIn("Narration: none", shots[0].prompt)
         self.assertIn("CURRENT RENDER TASK — SHOT 01 OF 20", shots[0].prompt)
-        self.assertIn("FULL VISUAL SCREENPLAY — SILENT CONTEXT ONLY", shots[0].prompt)
-        self.assertIn("VOICEOVER REFERENCE (never speak or display): Beat 20", shots[0].prompt)
+        self.assertIn("STORY BIBLE", shots[0].prompt)
+        self.assertIn("CURRENT SHOT (the only event to render)", shots[0].prompt)
+        self.assertIn("NEXT SHOT (motivate, never render)", shots[0].prompt)
+        self.assertNotIn("FULL VISUAL SCREENPLAY", shots[0].prompt)
+        self.assertNotIn("Beat 20", shots[0].prompt)
+        self.assertLess(len(shots[0].prompt), 6000)
         self.assertNotIn("Story beat:", shots[0].prompt)
         self.assertNotIn("license plate", shots[0].prompt.lower())
         self.assertEqual(shots[0].continuity, continuity)
@@ -120,12 +124,14 @@ class FakeBackend(BackendAdapter):
         self.name = name
         self.outcomes = list(outcomes)
         self.calls = 0
+        self.prompts = []
 
     def available(self):
         return True, "fake"
 
     def generate(self, shot, target, reference_image=None, on_submitted=None):
         self.calls += 1
+        self.prompts.append(shot.prompt)
         if on_submitted:
             on_submitted(f"fake-{self.name}-{self.calls}")
         outcome = self.outcomes.pop(0) if self.outcomes else "ok"
@@ -211,6 +217,48 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(minimax.calls, 1)
             self.assertEqual(Path(result.shots[0].output), Path("shots/shot-001.mp4"))
             self.assertEqual(result.shots[1].status, "accepted")
+
+    def test_visual_rejection_revises_retry_prompt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = test_config(folder, retry_limit=1, fallback_failures=9)
+            project = self._project(folder, config)
+            minimax = FakeBackend(config, "minimax", ["ok", "ok"])
+            wan = FakeBackend(config, "wan", [])
+            reviews = iter([
+                {"valid": False, "problems": ["wrong opening location"], "fatal_problems": [],
+                 "revision_prompt": "Stay underwater and show only chamber one."},
+                {"valid": True, "problems": [], "fatal_problems": [], "revision_prompt": ""},
+            ])
+            runner = QueueRunner(
+                config, {"minimax": minimax, "wan": wan}, validator=fake_validator,
+                extractor=fake_extractor, visual_reviewer=lambda *args: next(reviews),
+            )
+            result = runner.run(project, shots={1})
+            self.assertEqual(result.shots[0].status, "accepted")
+            self.assertEqual(minimax.calls, 2)
+            self.assertNotIn("MANDATORY CORRECTIONS", minimax.prompts[0])
+            self.assertIn("Stay underwater and show only chamber one", minimax.prompts[1])
+
+    def test_replan_archives_old_clips_and_keeps_full_screenplay(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = test_config(folder)
+            project = self._project(folder, config)
+            old_clip = Path(project.project_dir) / "shots" / "shot-001-old.mp4"
+            old_clip.write_bytes(b"old")
+            project.shots[0].status = "accepted"
+            project.shots[0].output = str(old_clip.relative_to(project.project_dir))
+            project.save()
+            replanned = replan_project(project.project_dir, config)
+            self.assertTrue(all(shot.status == "pending" for shot in replanned.shots))
+            self.assertEqual(replanned.state, "queued")
+            self.assertFalse(old_clip.exists())
+            archives = list((Path(project.project_dir) / "superseded").glob(
+                "replan-*/shots/shot-001-old.mp4"
+            ))
+            self.assertEqual(len(archives), 1)
+            screenplay = (Path(project.project_dir) / "screenplay.txt").read_text(encoding="utf-8")
+            self.assertIn("VOICEOVER REFERENCE (never speak or display): Beat 20", screenplay)
+            self.assertNotIn("Beat 20", replanned.shots[0].prompt)
 
 
 class ValidationTests(unittest.TestCase):

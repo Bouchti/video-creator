@@ -58,7 +58,7 @@ log = logging.getLogger("pipeline")
 DEFAULT_TOPIC = "The hidden science behind why ocean waves never stop moving"
 DEFAULT_TONE = "mysterious"
 DEFAULT_VOICE = "mysterious"
-DEFAULT_SOURCE = "animated"
+DEFAULT_SOURCE = "cutaway"
 
 OUTPUT_DIR = get_output_dir()
 
@@ -204,8 +204,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["animated", "pexels", "comfy", "local-ai", "hailuo"], default=DEFAULT_SOURCE,
-                        help="animated (Pixar-style 3D scenes generated locally, default), pexels "
+    parser.add_argument("--source", choices=["cutaway", "animated", "pexels", "comfy", "local-ai", "hailuo"],
+                        default=DEFAULT_SOURCE,
+                        help="cutaway (3D cross-section explainer: the showrunner picks the best topic our "
+                             "Blender sets can film, writes + critiques the script, renders; default), "
+                             "animated (Pixar-style 3D scenes generated locally), pexels "
                              "(free stock + photos + diagrams), comfy (legacy local AI video), local-ai "
                              "(durable MiniMax/Wan production), or hailuo "
                              "(paid cloud AI video, opt-in)")
@@ -222,6 +225,13 @@ if __name__ == "__main__":
     parser.add_argument("--no-captions", action="store_true", help="Disable captions for --source local-ai")
     parser.add_argument("--no-narration", action="store_true", help="Create a music-and-ambience local AI edit")
     args = parser.parse_args()
+
+    if args.source == "cutaway":
+        # Topic → research → competing drafts → editor → render, all in the showrunner.
+        # A positional topic is treated as the angle to develop.
+        from agents.showrunner import run as run_showrunner
+        logging.getLogger("pipeline").info(f"Film: {run_showrunner(angle=args.topic)}")
+        raise SystemExit(0)
 
     # Pass tone=None if user didn't override, so Leader Agent's choice wins
     user_tone = args.tone

@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import subprocess
 import requests
@@ -117,19 +118,105 @@ def get_dimensions(file_path: str) -> tuple:
 
 # ------------------- VOICE -------------------
 
+# ------------------- ELEVENLABS KEY ROTATION -------------------
+#
+# Keys: ELEVENLABS_API_KEY, ELEVENLABS_API_KEY_2, _3, ... (any number). The current key is used
+# until it runs out of credits, then the next one, wrapping around; the position persists across
+# runs. Before each voiceover the key's remaining credits are checked so a script never fails
+# half-way, and any quota / auth / rate-limit error falls through to the next key.
+# Logs name the key slot (e.g. ELEVENLABS_API_KEY_2), never the key itself.
+
+_ROTATION_FILE = os.path.join(get_temp_dir(), "elevenlabs_rotation.json")
+_RETRYABLE = ("quota_exceeded", "invalid_api_key", "detected_unusual_activity", "too_many_concurrent_requests",
+              "system_busy", "payment_required", "unusual_activity", "max_character_limit_exceeded")
+
+
+def _elevenlabs_keys() -> list:
+    """[(slot_name, key)] in rotation order, without blanks or duplicates."""
+    names = ["ELEVENLABS_API_KEY"] + [f"ELEVENLABS_API_KEY_{i}" for i in range(2, 21)]
+    out, seen = [], set()
+    for n in names:
+        k = (os.getenv(n) or "").strip()
+        if k and k not in seen:
+            out.append((n, k))
+            seen.add(k)
+    return out
+
+
+def _rotation_start(n: int) -> int:
+    try:
+        with open(_ROTATION_FILE, encoding="utf-8") as f:
+            return int(json.load(f).get("index", 0)) % max(n, 1)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0
+
+
+def _rotation_save(i: int):
+    try:
+        with open(_ROTATION_FILE, "w", encoding="utf-8") as f:
+            json.dump({"index": i}, f)
+    except OSError:
+        pass
+
+
+def _credits_left(key: str):
+    """Remaining characters on this key's plan, or None if it can't be checked."""
+    try:
+        r = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers={"xi-api-key": key}, timeout=15)
+        if r.status_code != 200:
+            return None
+        d = r.json()
+        return int(d.get("character_limit", 0)) - int(d.get("character_count", 0))
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def _tts_with_rotation(url: str, payload: dict, chars: int):
+    keys = _elevenlabs_keys()
+    if not keys:
+        raise RuntimeError("No ElevenLabs key configured (ELEVENLABS_API_KEY, ELEVENLABS_API_KEY_2, ...)")
+    start = _rotation_start(len(keys))
+    order = [(start + k) % len(keys) for k in range(len(keys))]
+    # Prefer, in rotation order, the first key that can cover the whole script.
+    left = {i: _credits_left(keys[i][1]) for i in order}
+    order = [i for i in order if left[i] is None or left[i] >= chars] + \
+            [i for i in order if left[i] is not None and left[i] < chars]
+    errors = []
+    for i in order:
+        name, key = keys[i]
+        if left[i] is not None and left[i] < chars:
+            errors.append(f"{name}: only {left[i]} credits left")
+            continue
+        headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": key}
+        for attempt in range(2):
+            r = requests.post(url, json=payload, headers=headers, timeout=60)
+            if r.status_code == 429 and attempt == 0:          # busy: one short wait on the same key
+                time.sleep(5)
+                continue
+            break
+        if r.status_code == 200:
+            if i != start:
+                log.info(f"  ElevenLabs: switched to {name}")
+            _rotation_save(i)
+            remaining = f", {left[i] - chars} credits left" if left[i] is not None else ""
+            log.info(f"  ElevenLabs key: {name}{remaining}")
+            return r
+        body = r.text[:300]
+        if r.status_code in (401, 402, 403, 429) or any(s in body for s in _RETRYABLE):
+            errors.append(f"{name}: {r.status_code} {body[:120]}")
+            log.warning(f"  ElevenLabs {name} unusable ({r.status_code}); trying the next key")
+            continue
+        raise Exception(f"ElevenLabs failed ({name}): {r.status_code} {body}")
+    raise Exception("All ElevenLabs keys are out of credits or unusable: " + " | ".join(errors))
+
+
 def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple:
     """ElevenLabs voiceover with expressive settings."""
     log.info(f"[1/5] Generating voiceover (ElevenLabs - {voice})...")
-    if not ELEVENLABS_API_KEY:
+    if not _elevenlabs_keys():
         raise RuntimeError("ELEVENLABS_API_KEY is not configured")
 
     voice_id = VOICES.get(voice, VOICES["energetic"])
-
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": ELEVENLABS_API_KEY,
-    }
     payload = {
         "text": spoken_script,
         "model_id": "eleven_multilingual_v2",
@@ -141,10 +228,7 @@ def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple:
         }
     }
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    r = requests.post(url, json=payload, headers=headers, timeout=60)
-
-    if r.status_code != 200:
-        raise Exception(f"ElevenLabs failed: {r.status_code} {r.text[:300]}")
+    r = _tts_with_rotation(url, payload, len(spoken_script))
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(get_temp_dir(), f"voiceover_{ts}.mp3")

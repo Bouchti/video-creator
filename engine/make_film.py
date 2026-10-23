@@ -111,6 +111,13 @@ def _vhs(img, k, rng):
     return im
 
 
+def _beat_ids(beats):
+    """Beat ids, with the hook / rewind beats identified by their `video` role (data-driven films
+    name beats after their action, e.g. "float_hook")."""
+    roles = {"epilogue": "hook", "rewind": "rewind"}
+    return [roles.get(b.get("video"), b.get("id", b.get("action"))) for b in beats]
+
+
 def _rewind_hold(n):
     return min(18, max(6, n // 3))
 
@@ -118,7 +125,7 @@ def _rewind_hold(n):
 def _rewind_montage(film, beats, spans, frames_dir):
     """Hook → rewind: freeze the hook's last frame (record scratch), then play the whole build
     backwards at high speed with a VHS look, ending on the bare lawn where the build starts."""
-    ids = [b["id"] for b in beats]
+    ids = _beat_ids(beats)
     if "rewind" not in ids or "hook" not in ids:
         return
     r = spans[ids.index("rewind")]
@@ -151,11 +158,21 @@ def main():
                     help="reuse the rendered video; rebuild only sound + captions (implies --reuse-voice)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    return produce(args)
 
+
+def produce(args):
+    """Voice → timings → Blender render → post. `args.film` is a film name in engine/films/ or a
+    path to a film JSON (e.g. a script written by agents/showrunner.py). Returns the final mp4."""
     films = os.path.join(PROJECT_ROOT, "engine", "films")
-    film_json = os.path.join(films, f"{args.film}.json")
-    film_py = os.path.join(films, f"{args.film}_film.py")
+    if args.film.endswith(".json") and os.path.exists(args.film):
+        film_json = os.path.abspath(args.film)
+        args.film = os.path.splitext(os.path.basename(film_json))[0]
+    else:
+        film_json = os.path.join(films, f"{args.film}.json")
     film = json.load(open(film_json, encoding="utf-8"))
+    # Data-driven films (a 3D set + one action per beat) all render through the generic runner.
+    film_py = os.path.join(films, "cutaway_film.py" if film.get("set") else f"{args.film}_film.py")
     beats = film["beats"]
     work = os.path.join(PROJECT_ROOT, "output", f"{args.film}_work")
     os.makedirs(work, exist_ok=True)
@@ -212,7 +229,7 @@ def main():
     subprocess.run([FFMPEG, "-y", "-framerate", str(FPS), "-i", os.path.join(work, "frames", "f_%04d.png"),
                     "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p", video],
                    check=True, capture_output=True)
-    _finish(args, film, beats, spans, words, total, work, voice_path, video)
+    return _finish(args, film, beats, spans, words, total, work, voice_path, video)
 
 
 # Effects sit well under the narration: the voice must always win.
@@ -225,7 +242,7 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     pops = [s["start"] / FPS + 0.18 for b, s in zip(beats, spans) if _overlay(b)]
     whoosh = _read_wav(build_fx_track(total, cuts, pops, os.path.join(work, "whoosh.wav")))
     events = json.load(open(os.path.join(work, "events.json"), encoding="utf-8"))
-    ids = [b["id"] for b in beats]
+    ids = _beat_ids(beats)
     if "rewind" in ids:                                    # record scratch on the freeze, then the VCR whirr
         r = spans[ids.index("rewind")]
         hold = _rewind_hold(r["end"] - r["start"] + 1)
@@ -254,6 +271,7 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     subprocess.run([FFMPEG, "-v", "error", "-y", "-i", out, "-c:v", "copy", "-c:a", "libopus", "-b:a", "128k",
                     preview], check=True)
     log.info(f"\nFILM: {out} ({get_duration(out):.1f}s)\nVS Code preview: {preview}")
+    return out
 
 
 if __name__ == "__main__":

@@ -99,6 +99,41 @@ def motion_metrics(path: str | Path, samples: int = 24) -> dict[str, float]:
     }
 
 
+def visual_quality_metrics(path: str | Path, samples: int = 12) -> dict[str, float]:
+    """Detect severely blurred or oversaturated artifact frames missed by container checks."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return {"focus_score": math.inf, "edge_density": math.inf, "colorfulness": 0.0,
+                "artifact_score": 0.0, "quality_samples": 0}
+    capture = cv2.VideoCapture(str(path))
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    values = []
+    if count > 0:
+        for position in np.linspace(0, count - 1, min(samples, count), dtype=int):
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(position))
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                continue
+            frame = cv2.resize(frame, (160, 90), interpolation=cv2.INTER_AREA)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            focus = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            edges = float((cv2.Canny(gray, 80, 160) > 0).mean() * 100.0)
+            b, g, r = cv2.split(frame.astype("float32"))
+            rg, yb = np.abs(r - g), np.abs(0.5 * (r + g) - b)
+            color = float(np.sqrt(rg.mean() ** 2 + yb.mean() ** 2) +
+                          0.3 * np.sqrt(rg.std() ** 2 + yb.std() ** 2))
+            values.append((focus, edges, color))
+    capture.release()
+    if not values:
+        return {"focus_score": math.inf, "edge_density": math.inf, "colorfulness": 0.0,
+                "artifact_score": 0.0, "quality_samples": 0}
+    focus, edges, colors = (float(np.median([row[i] for row in values])) for i in range(3))
+    return {"focus_score": focus, "edge_density": edges, "colorfulness": colors,
+            "artifact_score": colors / max(edges, 1.0), "quality_samples": len(values)}
+
+
 def validate_clip(
     path: str | Path,
     config: PipelineConfig,
@@ -123,7 +158,14 @@ def validate_clip(
         problems.append(f"mostly frozen frames ({metrics['frozen_ratio']:.0%})")
     if metrics["samples"] and metrics["motion_score"] < 0.18:
         problems.append(f"extremely low motion ({metrics['motion_score']:.3f})")
-    report = {**metadata, **metrics, "valid": not problems, "problems": problems}
+    quality = visual_quality_metrics(path)
+    if quality["quality_samples"] and quality["focus_score"] < 12.0:
+        problems.append(f"severely blurred frames (focus {quality['focus_score']:.1f})")
+    if (quality["quality_samples"] and (
+            (quality["artifact_score"] > 22.0 and quality["colorfulness"] > 85.0)
+            or (quality["artifact_score"] > 14.0 and quality["colorfulness"] > 140.0))):
+        problems.append("probable smeared/oversaturated generation artifacts")
+    report = {**metadata, **metrics, **quality, "valid": not problems, "problems": problems}
     if problems:
         raise ValueError("; ".join(problems))
     return report

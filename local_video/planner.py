@@ -116,7 +116,7 @@ def construct_prompt(
     backend: str,
     stage: str,
     story_link: str,
-    screenplay: str,
+    generation_context: str,
     shot_number: int,
     shot_count: int,
 ) -> str:
@@ -128,14 +128,14 @@ def construct_prompt(
     return (
         f"CURRENT RENDER TASK — SHOT {shot_number:02d} OF {shot_count:02d}. Render only this shot, "
         "not a montage and not the other screenplay events. "
-        f"[{stage.upper()}] Subject and action: {subject_action}. Environment: {environment}. "
-        f"Lighting: {lighting}. Camera: {camera_action}; {framing}; 9:16 portrait composition. "
-        f"Atmosphere: {atmosphere}. Sequential continuity: {story_link}. "
-        f"Continuity lock: {continuity_text(continuity)}. Visual style: {style}. {suffix}. {QUALITY_BAN}"
+        f"CURRENT SHOT (the only event to render): {subject_action}. "
+        f"[{stage.upper()}] Lighting: {lighting}. Camera: {camera_action}; {framing}; 9:16 portrait composition. "
+        f"Atmosphere: {atmosphere}. Visual style: {style}. {suffix}. {QUALITY_BAN}"
         f" Audio direction: {ambience}, environmental sound only. Dialogue: none. Narration: none. "
-        "Voices and vocals: none. The screenplay below is silent production context; never speak, "
-        "display, caption, subtitle, label, or spell any of its words.\n\n"
-        f"{screenplay}"
+        "Voices and vocals: none. The production notes below are silent context; never speak, "
+        "display, caption, subtitle, label, or spell any of their words. Do not restart the story, "
+        "show an earlier location, or compress multiple scenes into this clip.\n\n"
+        f"{generation_context}"
     )
 
 
@@ -173,7 +173,7 @@ def build_visual_screenplay(
     continuity: dict[str, Any],
     descriptions: list[str],
 ) -> str:
-    """Create the complete silent screenplay supplied to every generation request."""
+    """Create the complete silent screenplay used as the project's source of truth."""
     beats = script.get("beats") if isinstance(script.get("beats"), list) else []
     premise = script.get("story_premise") or script.get("description") or concept
     goal = script.get("protagonist_goal") or "The protagonist pursues the goal established by the premise."
@@ -208,6 +208,56 @@ def build_visual_screenplay(
     return "\n".join(lines)
 
 
+def build_generation_context(
+    script: dict[str, Any],
+    concept: str,
+    continuity: dict[str, Any],
+    descriptions: list[str],
+    index: int,
+) -> str:
+    """Build a compact local window so a short clip renders one beat, not the whole story."""
+    beats = script.get("beats") if isinstance(script.get("beats"), list) else []
+
+    def beat_data(position: int) -> tuple[str, str, str, str]:
+        beat = beats[position] if position < len(beats) and isinstance(beats[position], dict) else {}
+        visual = beat.get("visual") if isinstance(beat.get("visual"), dict) else {}
+        return (
+            descriptions[min(position, len(descriptions) - 1)],
+            str(visual.get("continuity_in") or "").strip(),
+            str(visual.get("continuity_out") or "").strip(),
+            str(beat.get("text") or "").strip(),
+        )
+
+    premise = script.get("story_premise") or script.get("description") or concept
+    current, inherit, handoff, narration = beat_data(index)
+    lines = [
+        "STORY BIBLE (render only CURRENT SHOT)",
+        f"Required starting state: {inherit or 'begin exactly where the previous shot ended'}",
+        f"Required ending state: {handoff or 'finish with a clear visual handoff to the next action'}",
+        f"Narration meaning to support silently: {narration or 'advance this exact story beat visually'}",
+        f"Character identity lock: {continuity.get('characters')}",
+        f"World lock: {continuity.get('location')}; palette: {continuity.get('palette')}",
+        f"Recurring prop lock: {continuity.get('recurring_objects') or 'preserve every established prop exactly'}",
+        f"Story intent: {premise} Goal: {script.get('protagonist_goal') or 'complete the central objective'}. "
+        f"Stakes: {script.get('stakes') or 'failure prevents it'}. "
+        f"Payoff: {script.get('ending_payoff') or 'resolve the opening setup'}",
+    ]
+    if index > 0:
+        _, _, previous_handoff, _ = beat_data(index - 1)
+        lines.append(
+            "PREVIOUS SHOT (inherit, never replay): "
+            + (previous_handoff or "continue its final pose, props, lighting, and geography")
+        )
+    if index + 1 < len(descriptions):
+        _, following_in, _, _ = beat_data(index + 1)
+        lines.append(
+            "NEXT SHOT (motivate, never render): "
+            + (following_in or "preserve the current handoff for the following action")
+        )
+    lines.append("ONE-SHOT RULE: one continuous moment, one protagonist, one location, no montage, no flashback, no scene reset.")
+    return "\n".join(lines)
+
+
 def plan_shots(
     script: dict[str, Any],
     concept: str,
@@ -224,7 +274,6 @@ def plan_shots(
     segments = _split_text(narration, count)
     descriptions = _physical_descriptions(beats, concept)
     continuity = _continuity(script, visual_style, concept)
-    screenplay = build_visual_screenplay(script, concept, continuity, descriptions)
     prompt_backend = "minimax" if preferred_backend in ("auto", "minimax") else "wan"
     shots: list[Shot] = []
     for index in range(count):
@@ -253,7 +302,10 @@ def plan_shots(
                 backend=prompt_backend,
                 stage=_stage(index, count),
                 story_link=story_link,
-                screenplay=screenplay,
+                generation_context=build_generation_context(
+                    script, concept, continuity, descriptions,
+                    min(len(descriptions) - 1, math.floor(index * len(descriptions) / count)),
+                ),
                 shot_number=index + 1,
                 shot_count=count,
             ),

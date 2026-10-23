@@ -56,7 +56,7 @@ def generate_script(concept: str, duration: int, visual_style: str, narration_te
 
 
 def export_screenplay(manifest: ProjectManifest) -> Path:
-    """Write the exact full-story context embedded in generation prompts."""
+    """Write the full-story source of truth; clip prompts receive only a local scene window."""
     screenplay = build_visual_screenplay(
         manifest.script,
         manifest.concept,
@@ -121,6 +121,9 @@ def create_project(
             "services": config.tool_versions(),
             "wan_workflow": str(config.wan_workflow),
             "final": {"width": 1080, "height": 1920, "fps": 30, "video_codec": "h264", "audio_codec": "aac"},
+            "prompt_strategy": "story-bible+previous-current-next",
+            "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
+            "allow_still_replacement": False,
         },
     )
     music_source = Path(music).expanduser()
@@ -187,6 +190,48 @@ def reset_shot(project: str | Path, shot_number: int, config: PipelineConfig | N
     shot.attempts = []
     manifest.outputs = {}
     manifest.set_state(ProjectState.QUEUED, reason="shot_regeneration", shot=shot.id)
+    manifest.save()
+    return manifest
+
+
+def replan_project(project: str | Path, config: PipelineConfig | None = None) -> ProjectManifest:
+    """Archive prior generations and rebuild prompts from the existing reviewed script."""
+    manifest = load_project(project, config)
+    root = Path(manifest.project_dir)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    archive = root / "superseded" / f"replan-{stamp}"
+    archive.mkdir(parents=True, exist_ok=False)
+    current_manifest = root / "project.json"
+    if current_manifest.is_file():
+        shutil.copy2(current_manifest, archive / "project-before-replan.json")
+    shots_dir = root / "shots"
+    archived_files = 0
+    if shots_dir.is_dir():
+        archived_shots = archive / "shots"
+        archived_shots.mkdir()
+        for source in shots_dir.iterdir():
+            if source.is_file():
+                shutil.move(str(source), str(archived_shots / source.name))
+                archived_files += 1
+    manifest.shots, manifest.continuity = plan_shots(
+        manifest.script, manifest.concept, manifest.duration_seconds, manifest.visual_style,
+        manifest.preferred_backend, manifest.ambience, manifest.fps,
+    )
+    manifest.outputs = {}
+    manifest.active_shot = None
+    manifest.started_at = None
+    manifest.completed_at = None
+    manifest.elapsed_seconds = 0.0
+    manifest.error = None
+    manifest.settings.update({
+        "prompt_strategy": "story-bible+previous-current-next",
+        "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
+        "allow_still_replacement": False,
+    })
+    export_screenplay(manifest)
+    manifest.record("project_replanned", archive=str(archive.relative_to(root)), archived_files=archived_files,
+                    reason="immersive_local_scene_prompts_and_visual_critique")
+    manifest.set_state(ProjectState.QUEUED)
     manifest.save()
     return manifest
 
