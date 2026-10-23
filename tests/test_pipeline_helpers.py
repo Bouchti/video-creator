@@ -63,8 +63,11 @@ class EvaluatorTests(unittest.TestCase):
 
     def test_evaluator_failure_consumes_retry(self):
         script = {key: "value" for key in evaluator.REQUIRED_KEYS}
-        script["spoken_script"] = "one two three"
-        script["scenes"] = ["scene one", "scene two"]  # must be a non-trivial list
+        script["spoken_script"] = " ".join(["word"] * 180)  # inside the 75s word range
+        script["beats"] = [  # must be a valid beat list
+            {"text": "scene one", "visual": {"kind": "footage", "description": "one", "queries": ["a"]}},
+            {"text": "scene two", "visual": {"kind": "footage", "description": "two", "queries": ["b"]}},
+        ]
         with (
             patch("agents.script.generate_script", return_value=script) as generate,
             patch.object(

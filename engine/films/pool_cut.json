@@ -1,0 +1,234 @@
+{
+  "title": "How a swimming pool is built (cutaway)",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 1.2,
+  "beats": [
+    {
+      "id": "hook",
+      "video": "epilogue",
+      "text": "An empty swimming pool can float right out of the ground.",
+      "shot": "Cutaway of the finished, drained pool. Groundwater rises in the soil and the whole concrete shell lifts out, cracking the deck.",
+      "camera": "slow push-in on the section, low and centered",
+      "callouts": [
+        {
+          "type": "label",
+          "text": "GROUNDWATER"
+        }
+      ],
+      "duration": 3.0
+    },
+    {
+      "id": "rewind",
+      "video": "rewind",
+      "text": "So how do you build one that stays put?",
+      "shot": "Freeze, then the whole build plays backwards to bare lawn.",
+      "camera": "hold",
+      "callouts": [],
+      "duration": 2.0
+    },
+    {
+      "id": "dig",
+      "text": "It starts with a hole. An excavator digs out about fifty tons of soil.",
+      "shot": "Excavator behind the cut bites the lawn; soil columns drop away in section; spoil pile grows.",
+      "camera": "wide establishing side view, slow drift right",
+      "callouts": [
+        {
+          "type": "stat",
+          "value": "50 tons",
+          "text": "of soil"
+        }
+      ],
+      "duration": 5.0
+    },
+    {
+      "id": "layers",
+      "text": "Underground, it's layers: topsoil, clay, sand, and then groundwater.",
+      "shot": "Strata labels pop up on the section face; the water table glows blue at the bottom.",
+      "camera": "glide down the section face from grass to groundwater",
+      "callouts": [
+        {
+          "type": "label3d",
+          "text": "TOPSOIL"
+        },
+        {
+          "type": "label3d",
+          "text": "CLAY"
+        },
+        {
+          "type": "label3d",
+          "text": "SAND"
+        },
+        {
+          "type": "label3d",
+          "text": "GROUNDWATER"
+        }
+      ],
+      "duration": 5.0
+    },
+    {
+      "id": "gravel",
+      "text": "So the floor gets gravel, to let that water drain away.",
+      "shot": "Gravel spreads across the floor of the hole, seen in section.",
+      "camera": "push-in on the hole floor",
+      "callouts": [
+        {
+          "type": "label",
+          "text": "Gravel bed"
+        }
+      ],
+      "duration": 4.0
+    },
+    {
+      "id": "valve",
+      "text": "A relief valve in the floor opens if groundwater pushes up, so water comes in, instead of lifting the pool.",
+      "shot": "Relief valve set into the floor; arrows show water pushing up through it.",
+      "camera": "close-up on the valve in section",
+      "callouts": [
+        {
+          "type": "label3d",
+          "text": "RELIEF VALVE"
+        }
+      ],
+      "duration": 6.0
+    },
+    {
+      "id": "pipes",
+      "text": "Then the plumbing: a drain at the bottom, a skimmer at the top, jets in the walls.",
+      "shot": "Transparent pipes appear in the section, running from drain and skimmer to the equipment pad.",
+      "camera": "follow the pipe path from the drain to the pad",
+      "callouts": [
+        {
+          "type": "label3d",
+          "text": "MAIN DRAIN"
+        },
+        {
+          "type": "label3d",
+          "text": "SKIMMER"
+        }
+      ],
+      "duration": 5.5
+    },
+    {
+      "id": "rebar",
+      "text": "Next, a cage of steel rebar, with a bar every twenty-five centimeters.",
+      "shot": "Rebar grid builds bar by bar over floor and walls.",
+      "camera": "slow orbit-like slide along the hole",
+      "callouts": [
+        {
+          "type": "dimension",
+          "text": "25 cm"
+        }
+      ],
+      "duration": 4.5
+    },
+    {
+      "id": "shotcrete",
+      "text": "Concrete is sprayed on at high speed, twenty centimeters thick.",
+      "shot": "Shell grows over the rebar; dimension line shows the 20 cm wall in section.",
+      "camera": "push-in on the wall section",
+      "callouts": [
+        {
+          "type": "dimension",
+          "text": "20 cm"
+        }
+      ],
+      "duration": 5.0
+    },
+    {
+      "id": "cure",
+      "text": "It cures for four weeks, and gets watered every day so it doesn't crack.",
+      "shot": "Day-night time-lapse over the cutaway; sprinkler mist each morning.",
+      "camera": "wide, static",
+      "callouts": [
+        {
+          "type": "stat",
+          "value": "28 days",
+          "text": "to cure"
+        }
+      ],
+      "duration": 4.5
+    },
+    {
+      "id": "finish",
+      "text": "Then tiles, stone coping, and smooth plaster to seal it.",
+      "shot": "Tile band, coping and plaster layer appear; plaster thickness visible in section.",
+      "camera": "glide along the rim",
+      "callouts": [
+        {
+          "type": "label3d",
+          "text": "PLASTER"
+        }
+      ],
+      "duration": 5.0
+    },
+    {
+      "id": "fill",
+      "text": "It's filled right away: fresh plaster cures best underwater. Twenty thousand liters.",
+      "shot": "Water rises in section; fill gauge counts up.",
+      "camera": "wide, slow push-in",
+      "callouts": [
+        {
+          "type": "stat",
+          "value": "20,000 L",
+          "text": "of water"
+        }
+      ],
+      "duration": 5.5
+    },
+    {
+      "id": "weight",
+      "text": "Twenty tons of water now hold it down. It stays put.",
+      "shot": "Down arrows on the water vs up arrows from the groundwater; the down arrows win.",
+      "camera": "pull back to show the whole section",
+      "callouts": [
+        {
+          "type": "stat",
+          "value": "20 tons",
+          "text": "holding it down"
+        }
+      ],
+      "duration": 5.0
+    },
+    {
+      "id": "flow",
+      "text": "To stay clean, water flows from the skimmer and drain, through a pump and filter, and back out the jets.",
+      "shot": "Flow stripes run through the transparent pipes: drain/skimmer → pump → filter → jets.",
+      "camera": "follow the flow along the pipes",
+      "callouts": [
+        {
+          "type": "label3d",
+          "text": "PUMP"
+        },
+        {
+          "type": "label3d",
+          "text": "FILTER"
+        }
+      ],
+      "duration": 6.5
+    },
+    {
+      "id": "cycle",
+      "text": "The whole pool passes through that filter about every six hours.",
+      "shot": "Wide cutaway, everything flowing.",
+      "camera": "slow pull-back",
+      "callouts": [
+        {
+          "type": "stat",
+          "value": "6 hours",
+          "text": "per full cycle"
+        }
+      ],
+      "duration": 3.5
+    },
+    {
+      "id": "outro",
+      "text": "And that's why you should never drain a pool after a week of heavy rain.",
+      "shot": "Back to the hook angle; rain falls; water table rises toward the pool.",
+      "camera": "settle on the hook framing (loops into the opening)",
+      "callouts": [],
+      "duration": 4.0
+    }
+  ]
+}

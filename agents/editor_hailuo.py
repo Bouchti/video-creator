@@ -11,6 +11,19 @@ import logging
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
 
+
+def _tool_path(name: str) -> str:
+    """Resolved ffmpeg/ffprobe path for modules that import the FFMPEG/FFPROBE constants
+    (engine, beats, render); falls back to the bare name so import never fails."""
+    try:
+        return get_ffmpeg() if name == "ffmpeg" else get_ffprobe()
+    except FileNotFoundError:
+        return name
+
+
+FFMPEG = _tool_path("ffmpeg")
+FFPROBE = _tool_path("ffprobe")
+
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 
@@ -39,9 +52,13 @@ def _get_whisper_model():
 def get_scenes(script: dict) -> list:
     """Return the ordered list of scene prompts.
 
-    Supports the connected long-form schema (`scenes` list) and the legacy
-    fixed `scene_1..scene_6` schema.
+    Supports the beat schema (each beat's visual description), the connected
+    `scenes` list, and the legacy fixed `scene_1..scene_6` schema.
     """
+    beats = script.get("beats")
+    if isinstance(beats, list) and beats:
+        return [((b.get("visual") or {}).get("description") or b.get("text") or "").strip()
+                for b in beats if isinstance(b, dict)]
     scenes = script.get("scenes")
     if isinstance(scenes, list) and scenes:
         return scenes
@@ -222,7 +239,31 @@ def generate_all_clips(script: dict, num_clips: int) -> list:
 
 # ------------------- VERTICAL CONVERSION (Smart Hybrid) -------------------
 
-def landscape_to_vertical(input_path: str, output_path: str, duration: float, loop: bool = False) -> str:
+def detect_crop(input_path: str):
+    """FFmpeg crop filter that removes black bars baked into a clip, or None.
+
+    Some stock/archival clips are letterboxed or pillarboxed inside their frame;
+    filling 9:16 without removing the bars leaves black bands on screen.
+    """
+    cmd = [FFMPEG, "-ss", "1", "-i", input_path, "-t", "2",
+           "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        w0, h0 = get_dimensions(input_path)
+    except Exception:
+        return None
+    found = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", r.stderr)
+    if not found or not w0 or not h0:
+        return None
+    w, h, x, y = map(int, found[-1])
+    # Only crop real bars (>=4% of the frame), never a near-blank/dark clip.
+    if w < w0 * 0.4 or h < h0 * 0.4 or w * h > w0 * h0 * 0.96:
+        return None
+    return f"crop={w}:{h}:{x}:{y}"
+
+
+def landscape_to_vertical(input_path: str, output_path: str, duration: float, loop: bool = False,
+                          overlay_path: str = None, crop: str = None) -> str:
     """Convert landscape clip to 9:16 vertical filling the FULL frame.
 
     Strategy: scale source to FILL 1080x1920 with center-crop.
@@ -232,18 +273,30 @@ def landscape_to_vertical(input_path: str, output_path: str, duration: float, lo
     If loop=True, the source is looped (-stream_loop) and the OUTPUT is capped to
     exactly `duration` seconds — used for short local clips that must fill a longer
     narration slot.
+
+    overlay_path: optional full-frame transparent PNG (e.g. an on-screen label)
+    composited on top of the vertical frame. crop: optional pre-crop filter
+    (from detect_crop) applied before filling the frame.
     """
-    if loop:
+    fill = (f"{crop}," if crop else "") + "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+    if overlay_path:
+        cmd = [FFMPEG, "-y"] + (["-stream_loop", "-1"] if loop else []) + [
+            "-i", input_path, "-i", overlay_path, "-t", str(duration),
+            "-filter_complex", f"[0:v]{fill}[v];[v][1:v]overlay=0:0",
+            "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-an", output_path
+        ]
+    elif loop:
         cmd = [
-            get_ffmpeg(), "-y", "-stream_loop", "-1", "-i", input_path, "-t", str(duration),
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            FFMPEG, "-y", "-stream_loop", "-1", "-i", input_path, "-t", str(duration),
+            "-vf", fill,
             "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", output_path
         ]
     else:
         cmd = [
-            get_ffmpeg(), "-y", "-t", str(duration), "-i", input_path,
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            FFMPEG, "-y", "-t", str(duration), "-i", input_path,
+            "-vf", fill,
             "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-an", output_path
         ]
@@ -265,8 +318,6 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float, loop_to_f
     log.info(f"\n[3/5] Converting to vertical 9:16 + stitching to {target_duration:.1f}s...")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    concat_file = os.path.join(get_temp_dir(), f"concat_{ts}.txt")
-    stitched_path = os.path.join(get_temp_dir(), f"stitched_{ts}.mp4")
     if not clip_paths:
         raise ValueError("At least one clip is required for stitching")
 
@@ -297,7 +348,7 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float, loop_to_f
             actual_norm = get_duration(norm)
             total_supplied += actual_norm
     except Exception:
-        _remove_files(normalized + [concat_file, stitched_path])
+        _remove_files(normalized)
         raise
 
     log.info(f"  Total supplied: {total_supplied:.1f}s (target {target_duration:.1f}s)")
@@ -316,44 +367,54 @@ def stitch_clips_to_duration(clip_paths: list, target_duration: float, loop_to_f
         r = _run_process(
             cmd,
             timeout=60,
-            cleanup_paths=normalized + [last_loop, concat_file, stitched_path],
+            cleanup_paths=normalized + [last_loop],
         )
         if r.returncode != 0:
-            _remove_files(normalized + [last_loop, concat_file, stitched_path])
+            _remove_files(normalized + [last_loop])
             raise RuntimeError(f"Clip loop failed: {r.stderr[-300:]}")
         normalized.append(last_loop)
 
     try:
+        return concat_clips(normalized, target_duration)
+    finally:
+        _remove_files(normalized)
+
+
+def concat_clips(clip_paths: list, target_duration: float) -> str:
+    """Concatenate already-vertical 1080x1920 clips and cap at target_duration."""
+    if not clip_paths:
+        raise ValueError("At least one clip is required for stitching")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    concat_file = os.path.join(get_temp_dir(), f"concat_{ts}.txt")
+    stitched_path = os.path.join(get_temp_dir(), f"stitched_{ts}.mp4")
+
+    try:
         with open(concat_file, "w", encoding="utf-8") as f:
-            for p in normalized:
+            for p in clip_paths:
                 escaped_path = p.replace("'", "'\\''")
                 f.write(f"file '{escaped_path}'\n")
     except Exception:
-        _remove_files(normalized + [concat_file, stitched_path])
+        _remove_files([concat_file, stitched_path])
         raise
 
-    log.info(f"  Concatenating {len(normalized)} clips...")
+    log.info(f"  Concatenating {len(clip_paths)} clips...")
     cmd = [
         get_ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
         "-t", str(target_duration),
         "-c:v", "libx264", "-preset", "fast", "-crf", "21",
         "-r", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", stitched_path
     ]
-    r = _run_process(
-        cmd,
-        timeout=240,
-        cleanup_paths=normalized + [concat_file, stitched_path],
-    )
+    r = _run_process(cmd, timeout=240, cleanup_paths=[concat_file, stitched_path])
     if r.returncode != 0:
-        _remove_files(normalized + [concat_file, stitched_path])
+        _remove_files([concat_file, stitched_path])
         raise RuntimeError(f"Stitch failed: {r.stderr[-300:]}")
 
     try:
         final_dur = get_duration(stitched_path)
     except Exception:
-        _remove_files(normalized + [concat_file, stitched_path])
+        _remove_files([concat_file, stitched_path])
         raise
-    _remove_files(normalized + [concat_file])
+    _remove_files([concat_file])
     log.info(f"  Stitched: {final_dur:.1f}s")
     return stitched_path
 
@@ -462,7 +523,8 @@ def burn_subtitles(video_path: str, srt_path: str) -> str:
     final = os.path.join(temp_dir, f"final_{ts}.mp4")
 
     # Copy SRT next to the output so the filter can reference it by filename only.
-    local_srt = f"subs_{ts}.srt"
+    ext = os.path.splitext(srt_path)[1].lower() or ".srt"
+    local_srt = f"subs_{ts}{ext}"
     local_srt_path = os.path.join(temp_dir, local_srt)
     shutil.copy(srt_path, local_srt_path)
 
@@ -481,7 +543,8 @@ def burn_subtitles(video_path: str, srt_path: str) -> str:
         "Alignment=2,"
         "MarginV=60"
     )
-    vf = f"subtitles={local_srt}:force_style='{style}'"
+    # .ass files carry their own styling/animation (agents/captions.py).
+    vf = f"subtitles={local_srt}" if ext == ".ass" else f"subtitles={local_srt}:force_style='{style}'"
 
     cmd = [
         get_ffmpeg(), "-y", "-i", video_path,
@@ -510,6 +573,11 @@ def burn_subtitles(video_path: str, srt_path: str) -> str:
 
 def process_video(script: dict, voice: str = "energetic") -> str:
     """Hailuo 02 video + ElevenLabs voice + word-by-word subtitles."""
+    from agents.beats import get_beats
+    if get_beats(script):  # beat scripts: visuals timed to the narration
+        from agents.editor_beats import process_video as process_beats
+        return process_beats(script, voice=voice, footage="hailuo")
+
     audio_path = None
     clips = []
     stitched = None

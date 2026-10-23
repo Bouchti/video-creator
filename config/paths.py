@@ -99,3 +99,12 @@ def get_ffmpeg() -> str:
 
 def get_ffprobe() -> str:
     return get_ffmpeg_tool("ffprobe")
+
+
+# Wikimedia (and Internet Archive) reject generic user agents with HTTP 429;
+# their policy requires a contact URL or email. Override with HTTP_USER_AGENT.
+DEFAULT_USER_AGENT = "VideoCreator/1.0 (https://github.com/Bouchti/video-creator)"
+
+
+def get_user_agent() -> str:
+    return os.getenv("HTTP_USER_AGENT") or DEFAULT_USER_AGENT

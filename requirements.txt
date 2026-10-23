@@ -5,3 +5,7 @@ python-dotenv
 requests
 tavily-python
 websocket-client
+Pillow
+opencv-python-headless
+onnxruntime
+numpy

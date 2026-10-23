@@ -21,7 +21,7 @@ import requests
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
-from config.paths import get_env_path, get_temp_dir
+from config.paths import get_env_path, get_temp_dir, get_user_agent
 
 load_dotenv(get_env_path())
 
@@ -36,8 +36,8 @@ MAX_CLIP_SECONDS = 600
 # Cap archival file size so we never pull a multi-GB feature film.
 MAX_ARCHIVE_BYTES = 150 * 1024 * 1024
 
-# Polite UA — Wikimedia and Internet Archive require/expect one.
-_UA = {"User-Agent": "VideoCreatorBot/1.0 (+https://github.com/)"}
+# Polite UA with a contact URL — Wikimedia and Internet Archive require one.
+_UA = {"User-Agent": get_user_agent()}
 
 # Default priority order; reorder via STOCK_SOURCES env.
 DEFAULT_SOURCES = ["pexels", "pixabay", "coverr", "nasa", "archive", "wikimedia"]
@@ -69,7 +69,8 @@ def _duration_ok(dur, min_duration: int) -> bool:
 
 
 # ------------------- PER-SOURCE SEARCHERS -------------------
-# Each returns a list of {"url", "duration", "source"} dicts in relevance order.
+# Each returns a list of {"url", "duration", "source", "thumb"} dicts in relevance
+# order ("thumb" is a preview image URL, or None — used by the vision check).
 # Network errors are swallowed (return []) so one flaky source never breaks a run.
 
 def _search_pexels(query: str, min_duration: int, count: int) -> list:
@@ -95,7 +96,8 @@ def _search_pexels(query: str, min_duration: int, count: int) -> list:
         if not chosen and files:
             chosen = files[-1]
         if chosen and chosen.get("link"):
-            out.append({"url": chosen["link"], "duration": dur, "source": "pexels"})
+            out.append({"url": chosen["link"], "duration": dur, "source": "pexels",
+                        "thumb": v.get("image")})
         if len(out) >= count:
             break
     return out
@@ -121,7 +123,8 @@ def _search_pixabay(query: str, min_duration: int, count: int) -> list:
         chosen = next((videos[k] for k in ("large", "medium", "small", "tiny")
                        if videos.get(k) and videos[k].get("url")), None)
         if chosen:
-            out.append({"url": chosen["url"], "duration": dur, "source": "pixabay"})
+            out.append({"url": chosen["url"], "duration": dur, "source": "pixabay",
+                        "thumb": chosen.get("thumbnail")})
         if len(out) >= count:
             break
     return out
@@ -146,7 +149,8 @@ def _search_coverr(query: str, min_duration: int, count: int) -> list:
         urls = v.get("urls") or {}
         link = urls.get("mp4_download") or urls.get("mp4")
         if link:
-            out.append({"url": link, "duration": dur, "source": "coverr"})
+            out.append({"url": link, "duration": dur, "source": "coverr",
+                        "thumb": v.get("thumbnail") or v.get("poster")})
         if len(out) >= count:
             break
     return out
@@ -173,7 +177,8 @@ def _search_nasa(query: str, min_duration: int, count: int) -> list:
             continue
         # Prefer a smaller/mobile variant over the large original.
         mp4s.sort(key=lambda u: (0 if ("mobile" in u.lower() or "small" in u.lower()) else 1, len(u)))
-        out.append({"url": mp4s[0], "duration": None, "source": "nasa"})
+        preview = next((l.get("href") for l in item.get("links") or [] if l.get("href")), None)
+        out.append({"url": mp4s[0], "duration": None, "source": "nasa", "thumb": preview})
         if len(out) >= count:
             break
     return out
@@ -207,7 +212,8 @@ def _search_archive(query: str, min_duration: int, count: int) -> list:
         mp4s.sort(key=lambda c: c[1] or 1e12)
         name = mp4s[0][0]
         url = f"https://archive.org/download/{ident}/{requests.utils.quote(name)}"
-        out.append({"url": url, "duration": None, "source": "archive"})
+        out.append({"url": url, "duration": None, "source": "archive",
+                    "thumb": f"https://archive.org/services/img/{ident}"})
         if len(out) >= count:
             break
     return out
@@ -220,7 +226,8 @@ def _search_wikimedia(query: str, min_duration: int, count: int) -> list:
         "https://commons.wikimedia.org/w/api.php",
         params={"action": "query", "format": "json", "generator": "search",
                 "gsrsearch": f"filetype:video {query}", "gsrnamespace": "6",
-                "gsrlimit": max(count * 5, 20), "prop": "imageinfo", "iiprop": "url|size"},
+                "gsrlimit": max(count * 5, 20), "prop": "imageinfo", "iiprop": "url|size",
+                "iiurlwidth": 480},
         headers=_UA, timeout=20,
     )
     if r.status_code != 200:
@@ -230,7 +237,8 @@ def _search_wikimedia(query: str, min_duration: int, count: int) -> list:
         info = (page.get("imageinfo") or [{}])[0]
         url = info.get("url")
         if url and url.lower().endswith((".webm", ".ogv", ".mp4", ".mov")):
-            out.append({"url": url, "duration": None, "source": "wikimedia"})
+            out.append({"url": url, "duration": None, "source": "wikimedia",
+                        "thumb": info.get("thumburl")})
         if len(out) >= count:
             break
     return out
@@ -417,6 +425,11 @@ def fetch_stock_footage(script: dict, num_clips: int, per_clip_duration: float =
 
 def process_video(script: dict, voice: str = "energetic") -> str:
     """Pexels stock + ElevenLabs voice + word-by-word subtitles. Cost: ~$0."""
+    from agents.beats import get_beats
+    if get_beats(script):  # beat scripts: visuals timed to the narration
+        from agents.editor_beats import process_video as process_beats
+        return process_beats(script, voice=voice, footage="pexels")
+
     audio_path = None
     clips = []
     stitched = None

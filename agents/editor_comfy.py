@@ -372,7 +372,16 @@ def generate_all_clips(script: dict, num_clips: int, clip_seconds: float) -> lis
 # ------------------- MAIN PIPELINE -------------------
 
 def process_video(script: dict, voice: str = "energetic") -> str:
-    """Local ComfyUI video + ElevenLabs voice + word-by-word subtitles."""
+    """Local ComfyUI video + ElevenLabs voice + word-by-word subtitles.
+
+    Same orchestration and cleanup contract as editor_hailuo.process_video;
+    only the clip source is local instead of fal.ai.
+    """
+    from agents.beats import get_beats
+    if get_beats(script):  # beat scripts: visuals timed to the narration
+        from agents.editor_beats import process_video as process_beats
+        return process_beats(script, voice=voice, footage="comfy")
+
     audio_path = None
     clips = []
     stitched = None
