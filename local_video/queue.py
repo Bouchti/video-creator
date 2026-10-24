@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -18,12 +19,12 @@ from agents.editor_hailuo import generate_voiceover
 from config.paths import PROJECT_ROOT
 
 from .assembly import assemble_project
-from .backends import BackendAdapter, GenerationResult, build_backends
+from .backends import BackendAdapter, GenerationResult, _remove_generated_audio, build_backends
 from .config import PipelineConfig, resolve_within
 from .models import ProjectManifest, ProjectState, completed_shots
 from .planner import MINIMAX_SUFFIX, WAN_SUFFIX, reseed
 from .project import load_project
-from .validation import extract_last_frame, validate_clip, validate_final
+from .validation import extract_last_frame, ffprobe, media_metadata, validate_clip, validate_final
 from .visual_review import review_clip
 
 log = logging.getLogger("pipeline")
@@ -31,6 +32,10 @@ log = logging.getLogger("pipeline")
 
 class QueueBusyError(RuntimeError):
     pass
+
+
+class VisualReviewRejected(ValueError):
+    """A usable render that failed the director's story/continuity review."""
 
 
 class FileLock(AbstractContextManager):
@@ -133,6 +138,41 @@ def _prompt_for_backend(shot, backend: str):
     return shot
 
 
+def _retake_prompt(shot, correction: str, has_reference: bool) -> str:
+    """Prioritize visible story progression when retrying a short generated clip."""
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", shot.subject_action) if part.strip()]
+    payoff = sentences[-1] if sentences else shot.subject_action
+    reference_direction = (
+        "The supplied image is the exact opening continuity anchor only. Match the character, equipment, "
+        "lighting, and geography, then leave its camera composition immediately. Do not replay or linger on "
+        "the previous shot's action."
+        if has_reference else
+        "Establish the current beat immediately; do not add an earlier setup or unrelated establishing shot."
+    )
+    return (
+        "DIRECTOR'S RETAKE — ADVANCE THE STORY IN THIS THREE-SECOND CLIP.\n"
+        f"CURRENT BEAT: {shot.subject_action}\n"
+        f"REQUIRED END-FRAME PAYOFF: {payoff}\n"
+        f"CAMERA: {shot.camera_action}. Use one continuous physical move toward the payoff.\n"
+        f"CONTINUITY IMAGE RULE: {reference_direction}\n"
+        "Keep one protagonist, one location, and stable anatomy. Spend the clip on the new event, not on setup.\n"
+        f"APPLY THIS PRIOR REVIEW NOTE ONLY WHERE IT SUPPORTS THE CURRENT BEAT: {correction[:900]}\n\n"
+        + shot.prompt
+    )
+
+
+def _is_infrastructure_failure(exc: Exception) -> bool:
+    """Identify transient service/GPU failures that should not spend a creative attempt."""
+    if isinstance(exc, VisualReviewRejected):
+        return False
+    message = str(exc).lower()
+    return any(token in message for token in (
+        "cuda error", "acceleratorerror", "worker exited", "generation timeout",
+        "timed out", "connection error", "connection aborted", "connection refused",
+        "service unavailable", "remote end closed", "comfyui generation failed",
+    ))
+
+
 class QueueRunner:
     def __init__(
         self,
@@ -209,12 +249,33 @@ class QueueRunner:
 
     def _generate_shot(self, manifest: ProjectManifest, index: int) -> bool:
         shot = manifest.shots[index]
+        for prior in shot.attempts:
+            if prior.get("status") in {"generating", "validating"}:
+                prior.update(status="failed", error="generation process ended before the attempt completed",
+                             ended_at=time.time())
         sequence = self._backend_sequence(manifest)
         primary_failures = 0
         total_attempts = self.config.retry_limit + 1
+        infrastructure_retry_limit = 2
+        maximum_attempts = total_attempts + infrastructure_retry_limit
+        creative_failures = 0
+        infrastructure_failures = 0
         last_error = "No backend was attempted"
-        revision_notes: list[str] = []
-        for attempt_index in range(total_attempts):
+        revision_notes: list[tuple[float, str]] = []
+        for prior in shot.attempts:
+            review = (prior.get("validation") or {}).get("semantic_review") or {}
+            correction = str(review.get("revision_prompt") or "").strip()
+            if not correction and not review.get("valid", True):
+                correction = (
+                    f"Render the assigned current action exactly: {shot.subject_action}. "
+                    f"Use {shot.camera_action}. Preserve the required start and end states, one continuous take, "
+                    "one protagonist, stable anatomy and identity."
+                )
+            if correction and not review.get("valid", True):
+                revision_notes.append((float(review.get("average_score") or 0), correction[:1200]))
+        for attempt_index in range(maximum_attempts):
+            if creative_failures >= total_attempts:
+                break
             backend_name = sequence[0]
             if len(sequence) > 1 and primary_failures >= self.config.fallback_failures:
                 backend_name = sequence[1]
@@ -264,14 +325,14 @@ class QueueRunner:
                     attempt["prompt_id"] = prompt_id
                     manifest.save()
 
+                reference = self._reference_for(manifest, index)
                 candidate_shot = _prompt_for_backend(shot, backend_name)
                 if revision_notes:
+                    best_correction = max(revision_notes, key=lambda item: item[0])[1]
                     candidate_shot = replace(
                         candidate_shot,
-                        prompt=candidate_shot.prompt + "\nMANDATORY CORRECTIONS FROM THE PREVIOUS REVIEW: "
-                        + " ".join(revision_notes[-2:]),
+                        prompt=_retake_prompt(candidate_shot, best_correction, reference is not None),
                     )
-                reference = self._reference_for(manifest, index)
                 result: GenerationResult = backend.generate(candidate_shot, target, reference, submitted)
                 attempt.update({
                     "prompt_id": result.prompt_id,
@@ -296,11 +357,14 @@ class QueueRunner:
                 if not visual_report.get("valid", False):
                     corrections = str(visual_report.get("revision_prompt") or "").strip()
                     if not corrections:
-                        corrections = "; ".join(
-                            [*visual_report.get("fatal_problems", []), *visual_report.get("problems", [])]
+                        corrections = (
+                            f"Render the assigned current action exactly: {shot.subject_action}. "
+                            f"Use {shot.camera_action}. Preserve the required start and end states, one continuous "
+                            "take, one protagonist, stable anatomy and identity."
                         )
-                    revision_notes.append(corrections or "Match the assigned action and continuity exactly.")
-                    raise ValueError("visual review rejected clip: " + revision_notes[-1])
+                    correction = (corrections or "Match the assigned action and continuity exactly.")[:1200]
+                    revision_notes.append((float(visual_report.get("average_score") or 0), correction))
+                    raise VisualReviewRejected("visual review rejected clip: " + correction)
                 shot.validation = report
                 shot.output = str(result.path.relative_to(manifest.project_dir))
                 frame_path = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
@@ -326,9 +390,19 @@ class QueueRunner:
             except Exception as exc:
                 last_error = str(exc)
                 attempt.update(status="failed", error=last_error, ended_at=time.time())
-                shot.status = "retrying" if attempt_index + 1 < total_attempts else "failed"
+                transient = _is_infrastructure_failure(exc)
+                if transient and infrastructure_failures < infrastructure_retry_limit:
+                    infrastructure_failures += 1
+                    manifest.record(
+                        "infrastructure_retry", shot=shot.id, backend=backend_name,
+                        retry=infrastructure_failures, limit=infrastructure_retry_limit,
+                    )
+                else:
+                    creative_failures += 1
+                retries_left = creative_failures < total_attempts and attempt_index + 1 < maximum_attempts
+                shot.status = "retrying" if retries_left else "failed"
                 shot.error = last_error
-                if backend_name == "minimax":
+                if backend_name == "minimax" and not isinstance(exc, VisualReviewRejected):
                     primary_failures += 1
                 if target.is_file():
                     rejected = Path(manifest.project_dir) / "rejected" / target.name
@@ -408,10 +482,40 @@ class QueueRunner:
         manifest.save()
         return target
 
+    def _silence_accepted_clips(self, manifest: ProjectManifest) -> None:
+        """Upgrade legacy accepted clips so native model audio can never reach assembly."""
+        changed: list[str] = []
+        metadata_changed = False
+        for shot in manifest.shots:
+            if shot.status != "accepted" or not shot.output:
+                continue
+            clip = resolve_within(manifest.project_dir, shot.output)
+            if not clip.is_file():
+                continue
+            try:
+                has_audio = media_metadata(ffprobe(clip, self.config)).get("has_audio")
+            except ValueError:
+                continue
+            if has_audio:
+                _remove_generated_audio(clip, self.config.ffmpeg)
+                changed.append(shot.id)
+            if shot.validation and (
+                shot.validation.get("has_audio") is not False
+                or shot.validation.get("audio_codec") is not None
+            ):
+                shot.validation["has_audio"] = False
+                shot.validation["audio_codec"] = None
+                metadata_changed = True
+        if changed:
+            manifest.record("accepted_clip_audio_removed", shots=changed)
+        if changed or metadata_changed:
+            manifest.save()
+
     def run(self, project: str | Path | ProjectManifest, shots: set[int] | None = None) -> ProjectManifest:
         manifest = project if isinstance(project, ProjectManifest) else load_project(project, self.config)
         lock_path = self.config.output_root / ".gpu-generation.lock"
         with FileLock(lock_path):
+            self._silence_accepted_clips(manifest)
             if manifest.started_at is None:
                 from .models import utc_now
                 manifest.started_at = utc_now()

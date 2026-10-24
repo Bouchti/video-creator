@@ -125,6 +125,41 @@ def strata_material():
     below.operation = "LESS_THAN"
     nt.links.new(sep.outputs["Z"], below.inputs[0])
     nt.links.new(wt.outputs[0], below.inputs[1])
+    # Soak zone: an ellipse around the pit whose radius (`wet_radius`, keyable) grows when water
+    # leaks out of the hole into the ground.
+    wr = _mat_node_value(mat, "wet_radius", 0.0)
+    ex = nt.nodes.new("ShaderNodeMath")
+    ex.operation = "DIVIDE"
+    nt.links.new(sep.outputs["X"], ex.inputs[0])
+    ex.inputs[1].default_value = 3.4
+    ez0 = nt.nodes.new("ShaderNodeMath")
+    ez0.operation = "ADD"
+    nt.links.new(sep.outputs["Z"], ez0.inputs[0])
+    ez0.inputs[1].default_value = 1.0
+    ez = nt.nodes.new("ShaderNodeMath")
+    ez.operation = "DIVIDE"
+    nt.links.new(ez0.outputs[0], ez.inputs[0])
+    ez.inputs[1].default_value = 1.4
+    ell = nt.nodes.new("ShaderNodeVectorMath")
+    ell.operation = "LENGTH"
+    cmb = nt.nodes.new("ShaderNodeCombineXYZ")
+    nt.links.new(ex.outputs[0], cmb.inputs["X"])
+    nt.links.new(ez.outputs[0], cmb.inputs["Y"])
+    nt.links.new(cmb.outputs[0], ell.inputs[0])
+    nwob = nt.nodes.new("ShaderNodeMath")
+    nwob.operation = "MULTIPLY_ADD"                         # ragged soak front
+    nt.links.new(noise.outputs["Fac"], nwob.inputs[0])
+    nwob.inputs[1].default_value = 0.4
+    nt.links.new(ell.outputs["Value"], nwob.inputs[2])
+    soak = nt.nodes.new("ShaderNodeMath")
+    soak.operation = "LESS_THAN"
+    nt.links.new(nwob.outputs[0], soak.inputs[0])
+    nt.links.new(wr.outputs[0], soak.inputs[1])
+    wetmask = nt.nodes.new("ShaderNodeMath")
+    wetmask.operation = "MAXIMUM"
+    nt.links.new(below.outputs[0], wetmask.inputs[0])
+    nt.links.new(soak.outputs[0], wetmask.inputs[1])
+    below = wetmask
     wet = nt.nodes.new("ShaderNodeMix")
     wet.data_type = "RGBA"
     wet.blend_type = "MIX"
@@ -235,11 +270,18 @@ def caustics_plaster_material(fps=30):
     vor.voronoi_dimensions = "4D"
     vor.feature = "DISTANCE_TO_EDGE"
     vor.inputs["Scale"].default_value = 6.5
-    nt.links.new(geo.outputs["Position"], vor.inputs["Vector"])
+    drift = nt.nodes.new("ShaderNodeMapping")
+    nt.links.new(geo.outputs["Position"], drift.inputs["Vector"])
+    nt.links.new(drift.outputs["Vector"], vor.inputs["Vector"])
+    dl = drift.inputs["Location"]
+    dl.default_value = (0, 0, 0)
+    dl.keyframe_insert("default_value", frame=1)
+    dl.default_value = (0.0008 * 6000, 0.0, 0.0005 * 6000)
+    dl.keyframe_insert("default_value", frame=6001)
     w = vor.inputs["W"]
     w.default_value = 0.0
     w.keyframe_insert("default_value", frame=1)
-    w.default_value = 0.022 * 6000
+    w.default_value = 0.004 * 6000          # slow: a fast W re-rolls the pattern every frame (flicker)
     w.keyframe_insert("default_value", frame=6001)
     lines = nt.nodes.new("ShaderNodeMapRange")
     lines.inputs["From Min"].default_value = 0.0
@@ -259,7 +301,7 @@ def caustics_plaster_material(fps=30):
     gain = nt.nodes.new("ShaderNodeMath")
     gain.operation = "MULTIPLY"
     nt.links.new(amt.outputs[0], gain.inputs[0])
-    gain.inputs[1].default_value = 0.9
+    gain.inputs[1].default_value = 0.6
     toy._set(bsdf, "Emission Color", (0.72, 0.93, 1.0, 1))
     nt.links.new(gain.outputs[0], bsdf.inputs["Emission Strength"])
     # Under water the wall reads bluer.
@@ -292,12 +334,28 @@ def water_section_material():
     ramp.color_ramp.elements[0].color = (*toy.srgb("#145A9E"), 1)
     ramp.color_ramp.elements[1].color = (*toy.srgb("#4CC3F2"), 1)
     nt.links.new(mr.outputs["Result"], ramp.inputs["Fac"])
-    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    murk = _mat_node_value(mat, "murk", 0.0)               # 0 clear blue … 1 green algae soup
+    green = nt.nodes.new("ShaderNodeMix")
+    green.data_type = "RGBA"
+    nt.links.new(murk.outputs[0], green.inputs["Factor"])
+    nt.links.new(ramp.outputs["Color"], green.inputs["A"])
+    green.inputs["B"].default_value = (*toy.srgb("#4F7A2C"), 1)
+    nt.links.new(green.outputs["Result"], bsdf.inputs["Base Color"])
     bsdf.inputs["Roughness"].default_value = 0.04
+    alpha = nt.nodes.new("ShaderNodeMath")
+    alpha.operation = "MULTIPLY_ADD"
+    nt.links.new(murk.outputs[0], alpha.inputs[0])
+    alpha.inputs[1].default_value = 0.28
+    alpha.inputs[2].default_value = 0.66
+    nt.links.new(alpha.outputs[0], bsdf.inputs["Alpha"])
     toy._set(bsdf, "Alpha", 0.66)
     toy._set(bsdf, "IOR", 1.33)
+    # Order-independent (dithered) transparency: BLENDED sorts whole objects per frame, so the
+    # water volume, its surface sheet and the pipes swap order as the camera moves (brightness pops).
     if hasattr(mat, "surface_render_method"):
-        mat.surface_render_method = "BLENDED"
+        mat.surface_render_method = "DITHERED"
+    if hasattr(mat, "use_backface_culling"):
+        mat.use_backface_culling = True
     return mat
 
 
@@ -527,7 +585,7 @@ class CutawayYard:
                                         location=(x, y, 1.4 * s))
         trunk = bpy.context.active_object
         trunk.name = f"trunk{x}"
-        toy._finish(trunk, self.m["bark"], subdiv=1)
+        toy._finish(trunk, self.m["bark"], subdiv=0)
         sway = toy.empty(f"canopy{x}", (x, y, 2.6 * s))
         toy.add_noise(sway, "rotation_euler", 0, strength=0.015, scale=70, phase=x * 3)
         toy.add_noise(sway, "rotation_euler", 1, strength=0.015, scale=90, phase=x * 5)
@@ -1030,6 +1088,86 @@ class CutawayYard:
             _pop(root, start + 2 * k, end)
             out.append(root)
         return out
+
+
+def muddy_water_material():
+    mat = toy.material("muddy_water", toy.srgb("#7C6A4A"), roughness=0.1, alpha=0.75)
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = "DITHERED"
+    if hasattr(mat, "use_backface_culling"):
+        mat.use_backface_culling = True
+    return mat
+
+
+class WaterBody:
+    """Water filling any open-front container (bare hole, cracked shell, finished pool): a section
+    volume plus a rippling surface sheet, both keyed by `level(frame, z)`. Starts hidden/empty."""
+
+    def __init__(self, name, x0, x1, y1, z0, mat, parent=None, ripples=0.025):
+        self.z0 = z0 + 0.003
+        self.H = 2.0
+        y0 = CUT + 0.004
+        self.y = (y0 + y1) / 2
+        self.box = toy.box(name, (x1 - x0, y1 - y0, self.H), ((x0 + x1) / 2, self.y, self.z0 + self.H / 2), mat=mat,
+                           bevel=0)
+        self.x = (x0 + x1) / 2
+        bpy.ops.mesh.primitive_grid_add(x_subdivisions=80, y_subdivisions=20, size=1, location=(0, 0, 0))
+        surf = bpy.context.active_object
+        surf.name = f"{name}_surface"
+        surf.scale = (x1 - x0, y1 - y0, 1)
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        surf.data.materials.append(mat)
+        surf.data.shade_smooth()
+        tex = bpy.data.textures.get("pool_ripples") or bpy.data.textures.new("pool_ripples", "CLOUDS")
+        tex.noise_scale = 0.3
+        drift = bpy.data.objects.get("ripple_drift")
+        if drift is None:
+            drift = toy.empty("ripple_drift", (0, 0, 0))
+            drift.keyframe_insert("location", frame=1)
+            drift.location = (9, 5, 3.5)
+            drift.keyframe_insert("location", frame=6000)
+            toy.set_interpolation(drift, "location", (1,), "LINEAR")
+        disp = surf.modifiers.new("ripples", "DISPLACE")
+        disp.texture = tex
+        disp.texture_coords = "OBJECT"
+        disp.texture_coords_object = drift
+        disp.strength = ripples
+        self.surf = surf
+        for o in (self.box, surf):
+            if parent is not None:
+                toy.parent_keep(o, parent)
+            _hide(o, 0, True)
+        self.cur = self.z0
+
+    def show(self, frame, visible=True):
+        for o in (self.box, self.surf):
+            _hide(o, frame, not visible)
+
+    def level(self, frame, z):
+        """Water surface at height z on this frame (a hair above the floor = empty)."""
+        z = max(z, self.z0 + 0.01)
+        h = max(0.004, z - self.z0 - 0.015)
+        _key(self.box, frame, scale=Vector((1, 1, h / self.H)), location=Vector((self.x, self.y, self.z0 + h / 2)))
+        _key(self.surf, frame, location=Vector((self.x, self.y, z)))
+        self.cur = z
+
+
+def crack(name, x, z_top, z_bottom, start, frames=14, seed=1, width=0.03):
+    """A jagged dark crack drawn on the section face, growing from top to bottom over `frames`."""
+    import random as _r
+    rnd = _r.Random(seed)
+    mat = toy.material("crack_dark", toy.srgb("#1C1A18"), roughness=0.9)
+    n = 7
+    pts = [(x + (rnd.uniform(-0.09, 0.09) if 0 < k < n else 0), z_top + (z_bottom - z_top) * k / n) for k in range(n + 1)]
+    segs = []
+    for k in range(n):
+        (xa, za), (xb, zb) = pts[k], pts[k + 1]
+        length = math.hypot(xb - xa, zb - za)
+        seg = toy.box(f"{name}_{k}", (width, 0.008, length + 0.01), ((xa + xb) / 2, CUT - 0.004, (za + zb) / 2),
+                      mat=mat, bevel=0, rotation=(0, math.atan2(xb - xa, zb - za), 0))
+        _appear(seg, start + int(frames * k / n), frames=3)
+        segs.append(seg)
+    return segs, pts
 
 
 def _grass_tuft():

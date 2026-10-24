@@ -13,13 +13,13 @@ from local_video.assembly import (
     build_mix_command,
     build_video_command,
 )
-from local_video.backends import BackendAdapter, GenerationResult
+from local_video.backends import BackendAdapter, GenerationResult, _remove_generated_audio
 from local_video.config import PipelineConfig, resolve_within
 from local_video.models import ProjectManifest, Shot
 from local_video.planner import QUALITY_BAN, allocate_frames, plan_shots, shot_count_for_duration
-from local_video.project import create_project, replan_project
-from local_video.queue import FileLock, QueueBusyError, QueueRunner
-from local_video.validation import ffprobe, validate_clip
+from local_video.project import create_project, refresh_project_from_shot, replan_project
+from local_video.queue import FileLock, QueueBusyError, QueueRunner, _retake_prompt
+from local_video.validation import ffprobe, media_metadata, validate_clip
 
 
 def test_config(root, **values):
@@ -72,9 +72,10 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("Dialogue: none", shots[0].prompt)
         self.assertIn("Narration: none", shots[0].prompt)
         self.assertIn("CURRENT RENDER TASK — SHOT 01 OF 20", shots[0].prompt)
-        self.assertIn("STORY BIBLE", shots[0].prompt)
+        self.assertIn("SINGLE-SHOT CONTINUITY LOCK", shots[0].prompt)
         self.assertIn("CURRENT SHOT (the only event to render)", shots[0].prompt)
-        self.assertIn("NEXT SHOT (motivate, never render)", shots[0].prompt)
+        self.assertNotIn("NEXT SHOT", shots[0].prompt)
+        self.assertNotIn("Final payoff", shots[0].prompt)
         self.assertNotIn("FULL VISUAL SCREENPLAY", shots[0].prompt)
         self.assertNotIn("Beat 20", shots[0].prompt)
         self.assertLess(len(shots[0].prompt), 6000)
@@ -105,6 +106,16 @@ class PlanningTests(unittest.TestCase):
         shots, _ = plan_shots(script, "desert city", 60, "35mm nocturne", "auto")
         self.assertNotIn("card reading", shots[5].prompt.lower())
         self.assertNotIn("3 pulses", shots[5].prompt.lower())
+
+    def test_explicit_screenplay_framing_overrides_rotating_presets(self):
+        script = sample_script()
+        script["beats"][3]["visual"]["description"] = "Low angle wide shot looking up at the diver."
+        script["beats"][4]["visual"]["description"] = "Extreme close-up on her wrist computer."
+        shots, _ = plan_shots(script, "desert city", 60, "cinematic", "auto")
+        self.assertEqual(shots[3].camera_action, "slow low-angle drift")
+        self.assertIn("24mm low-angle wide frame", shots[3].prompt)
+        self.assertEqual(shots[4].camera_action, "controlled macro push-in")
+        self.assertIn("macro detail shot", shots[4].prompt)
 
 
 class PathTests(unittest.TestCase):
@@ -199,6 +210,21 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(result.shots[0].status, "failed")
             self.assertEqual(len(result.shots[0].attempts), 3)
 
+    def test_cuda_failure_does_not_consume_creative_retry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = test_config(folder, retry_limit=0, fallback_failures=1)
+            project = self._project(folder, config)
+            minimax = FakeBackend(config, "minimax", ["CUDA error: unspecified launch failure"])
+            wan = FakeBackend(config, "wan", ["ok"])
+            result = QueueRunner(
+                config, {"minimax": minimax, "wan": wan}, validator=fake_validator,
+                extractor=fake_extractor,
+            ).run(project, shots={1})
+            self.assertEqual(result.shots[0].status, "accepted")
+            self.assertEqual(minimax.calls, 1)
+            self.assertEqual(wan.calls, 1)
+            self.assertTrue(any(event["event"] == "infrastructure_retry" for event in result.events))
+
     def test_resume_skips_successful_shots(self):
         with tempfile.TemporaryDirectory() as folder:
             config = test_config(folder, retry_limit=0)
@@ -236,8 +262,22 @@ class QueueTests(unittest.TestCase):
             result = runner.run(project, shots={1})
             self.assertEqual(result.shots[0].status, "accepted")
             self.assertEqual(minimax.calls, 2)
-            self.assertNotIn("MANDATORY CORRECTIONS", minimax.prompts[0])
+            self.assertNotIn("DIRECTOR'S RETAKE", minimax.prompts[0])
+            self.assertTrue(minimax.prompts[1].startswith("DIRECTOR'S RETAKE"))
             self.assertIn("Stay underwater and show only chamber one", minimax.prompts[1])
+
+    def test_retake_prompt_leaves_continuity_frame_and_targets_payoff(self):
+        shot = Shot(
+            id="shot-003", index=2, duration_frames=90, prompt="BASE PROMPT",
+            negative_prompt="n", seed=1,
+            subject_action="Mara reaches the archway. Close on her intact mask.",
+            camera_action="smooth push-in",
+        )
+        prompt = _retake_prompt(shot, "Keep the regulator visible.", has_reference=True)
+        self.assertIn("leave its camera composition immediately", prompt)
+        self.assertIn("REQUIRED END-FRAME PAYOFF: Close on her intact mask.", prompt)
+        self.assertIn("Keep the regulator visible", prompt)
+        self.assertTrue(prompt.endswith("BASE PROMPT"))
 
     def test_replan_archives_old_clips_and_keeps_full_screenplay(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -260,8 +300,45 @@ class QueueTests(unittest.TestCase):
             self.assertIn("VOICEOVER REFERENCE (never speak or display): Beat 20", screenplay)
             self.assertNotIn("Beat 20", replanned.shots[0].prompt)
 
+    def test_refresh_from_shot_preserves_earlier_acceptance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = test_config(folder)
+            project = self._project(folder, config)
+            kept = Path(project.project_dir) / "shots" / "shot-001.mp4"
+            replaced = Path(project.project_dir) / "shots" / "shot-004.mp4"
+            kept.write_bytes(b"keep")
+            replaced.write_bytes(b"replace")
+            project.shots[0].status = "accepted"
+            project.shots[0].output = str(kept.relative_to(project.project_dir))
+            project.shots[3].status = "accepted"
+            project.shots[3].output = str(replaced.relative_to(project.project_dir))
+            project.save()
+            refreshed = refresh_project_from_shot(project.project_dir, 4, config)
+            self.assertEqual(refreshed.state, "paused")
+            self.assertEqual(refreshed.shots[0].status, "accepted")
+            self.assertTrue(kept.is_file())
+            self.assertEqual(refreshed.shots[3].status, "pending")
+            self.assertFalse(replaced.exists())
+            self.assertTrue(list((Path(project.project_dir) / "superseded").glob(
+                "refresh-from-004-*/shots/shot-004.mp4"
+            )))
+
 
 class ValidationTests(unittest.TestCase):
+    def test_minimax_output_audio_is_physically_removed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = test_config(folder)
+            source = Path(folder) / "generated-with-audio.mp4"
+            subprocess.run([
+                config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=c=blue:s=544x960:r=24:d=0.5",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=0.5",
+                "-c:v", "libx264", "-c:a", "aac", "-shortest", str(source),
+            ], check=True)
+            self.assertTrue(media_metadata(ffprobe(source, config))["has_audio"])
+            _remove_generated_audio(source, config.ffmpeg)
+            self.assertFalse(media_metadata(ffprobe(source, config))["has_audio"])
+
     def test_ffprobe_rejects_corrupt_media(self):
         with tempfile.TemporaryDirectory() as folder:
             config = test_config(folder)

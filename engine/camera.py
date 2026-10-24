@@ -107,6 +107,13 @@ class CameraRig:
                                aim_from=Vector(aim_from), aim_to=Vector(aim_to or aim_from), lens=lens,
                                fstop=fstop, cut=cut, blend=self.blend if blend is None else blend))
 
+    def track(self, start, end, keys, lens=26.0, fstop=8.0, cut=False):
+        """A shot that follows a moving subject: keys = [(frame, cam_xyz, aim_xyz), ...] sampled
+        along its path (dense enough for a smooth Bezier through them)."""
+        self.shots.append(dict(start=start, end=end, path=[(f, Vector(c), Vector(a)) for f, c, a in keys],
+                               cam_from=Vector(keys[0][1]), cam_to=Vector(keys[-1][1]), aim_from=Vector(keys[0][2]),
+                               aim_to=Vector(keys[-1][2]), lens=lens, fstop=fstop, cut=cut, blend=self.blend))
+
     def _key(self, frame, loc, aim, lens, fstop, constant=False):
         self.cam.location = loc
         self.cam.keyframe_insert("location", frame=frame)
@@ -132,6 +139,11 @@ class CameraRig:
                 p = shots[i - 1]
                 self._key(s["start"] - 1, p["cam_to"], p["aim_to"], p["lens"], p["fstop"], constant=True)
             settle = s["start"] if first else min(s["end"] - 1, s["start"] + s["blend"])
+            if s.get("path"):
+                for f, c, a in s["path"]:
+                    if f >= settle:
+                        self._key(f, c, a, s["lens"], s["fstop"])
+                continue
             self._key(settle, s["cam_from"], s["aim_from"], s["lens"], s["fstop"])
             self._key(s["end"], s["cam_to"], s["aim_to"], s["lens"], s["fstop"])
         if handheld:                                  # slow, organic drift: a person holding it

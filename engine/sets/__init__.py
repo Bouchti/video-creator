@@ -5,7 +5,7 @@ New topics become possible by adding a set; the script writer only ever chooses 
 """
 import importlib
 
-AVAILABLE = ["pool"]
+AVAILABLE = ["pool_story", "plane_story"]          # sets the showrunner writes for (pool = explainer variant)
 
 
 def spec(set_id: str):

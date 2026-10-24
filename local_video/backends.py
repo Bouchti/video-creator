@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,24 @@ class BackendAdapter:
         on_submitted: Callable[[str], None] | None = None,
     ) -> GenerationResult:
         raise NotImplementedError
+
+
+def _remove_generated_audio(path: Path, ffmpeg: str) -> None:
+    """Make generated scene files silent before they enter validation or assembly."""
+    silent = path.with_name(f"{path.stem}.silent{path.suffix}")
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(path),
+        "-map", "0:v:0", "-c:v", "copy", "-an", str(silent),
+    ]
+    try:
+        process = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        if process.returncode != 0 or not silent.is_file():
+            detail = (process.stderr or process.stdout or "unknown ffmpeg error").strip()
+            raise RuntimeError(f"Could not remove generated clip audio: {detail[-500:]}")
+        os.replace(silent, path)
+    finally:
+        if silent.is_file():
+            silent.unlink()
 
 
 class MiniMaxAdapter(BackendAdapter):
@@ -89,6 +108,7 @@ class MiniMaxAdapter(BackendAdapter):
         ok, reason = self.available()
         if not ok or not self.client:
             raise RuntimeError(reason)
+        self.client.free_memory()
         settings = {
             "resolution": [self.config.minimax_width, self.config.minimax_height],
             "seconds": self.config.minimax_seconds,
@@ -97,11 +117,12 @@ class MiniMaxAdapter(BackendAdapter):
             "base_steps": 8,
             "refine_steps": 3,
             "gpu_streaming": "automatic",
-            "native_audio": "generated but discarded during assembly",
+            "native_audio": "removed immediately after generation",
             "encoder": "Qwen3-VL 32B NVFP4/AWQ",
         }
         started = time.monotonic()
         path, prompt_id, _ = self.client.generate(self.workflow(shot, reference_image), target, on_submitted)
+        _remove_generated_audio(path, self.config.ffmpeg)
         return GenerationResult(path, self.name, prompt_id, time.monotonic() - started, self.model, settings)
 
 

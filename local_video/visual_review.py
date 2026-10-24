@@ -26,11 +26,12 @@ REVIEW_TOOL = {
             "image_quality": {"type": "integer", "minimum": 1, "maximum": 10},
             "anatomy": {"type": "integer", "minimum": 1, "maximum": 10},
             "immersion": {"type": "integer", "minimum": 1, "maximum": 10},
+            "story_progression": {"type": "integer", "minimum": 1, "maximum": 10},
             "fatal_problems": {"type": "array", "items": {"type": "string"}},
             "problems": {"type": "array", "items": {"type": "string"}},
             "revision_prompt": {"type": "string"},
         },
-        "required": ["visual_match", "continuity", "image_quality", "anatomy", "immersion",
+        "required": ["visual_match", "continuity", "image_quality", "anatomy", "immersion", "story_progression",
                      "fatal_problems", "problems", "revision_prompt"],
     },
 }
@@ -93,7 +94,11 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
         prior = _encode_still(previous_frame)
         if prior:
             content.extend([
-                {"type": "text", "text": "Previous shot's final continuity frame:"},
+                {"type": "text", "text": (
+                    "Intended first-frame composition and identity reference:"
+                    if getattr(shot, "index", 0) == 0 else
+                    "Previous shot's final continuity frame:"
+                )},
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": prior}},
             ])
     for index, frame in enumerate(frames, 1):
@@ -102,12 +107,24 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": frame}},
         ])
     content.append({"type": "text", "text": (
-        "Review this candidate as a strict film editor. It must render only this assigned beat:\n"
+        "Review this candidate as a pragmatic film editor judging whether it works in the finished story. "
+        "It must render only this assigned beat:\n"
         f"Visual action: {shot.subject_action}\nNarration meaning: {shot.narration}\n"
         f"World and identity lock: {shot.continuity}\n"
-        "Reject story resets, wrong locations/actions, duplicated protagonists, broken anatomy, smeared or "
-        "corrupt images, visible text/subtitles/logos, and clips that do not feel like one immersive continuous "
-        "moment. A previous frame, if supplied, is reference only. Give concise, filmable corrections for a retry."
+        "Fatal problems are limited to: a clearly unrelated scene or story reset, montage across multiple "
+        "locations, duplicate protagonist, seriously broken anatomy, corrupt/smeared frames, visible text or "
+        "logos, or a major identity/continuity break. Do not mark small differences in camera angle, subject "
+        "scale, body drift, visibility of minor props, or ambiguous reflections as fatal when the clip is "
+        "otherwise coherent and tells the correct beat. A transparent mask or visor is still present when the "
+        "face is visible behind its frame; colored light reflected in eyes or glass is not broken anatomy. "
+        "Camera movement and the resulting background perspective change are intentional, not a scene reset. "
+        "Large opaque bubble clumps attached to a face or body, fused equipment, and implausible effect geometry "
+        "must reduce image-quality and immersion scores. "
+        "Reserve fatal findings for concrete, visually unambiguous failures and describe the exact visible "
+        "evidence. Judge narrative function and immersion, not pixel-perfect obedience. The candidate must "
+        "visibly advance beyond the supplied continuity frame instead of replaying its composition. A supplied "
+        "reference is an identity and opening-state guide, not a frame that must be copied throughout. Give "
+        "concise, positively worded, filmable corrections that prioritize the current beat's end-frame payoff."
     )})
     try:
         import anthropic
@@ -125,13 +142,27 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
         )
         if not isinstance(values, dict):
             raise ValueError("vision reviewer returned no structured result")
-        score_names = ("visual_match", "continuity", "image_quality", "anatomy", "immersion")
+        score_names = ("visual_match", "continuity", "image_quality", "anatomy", "immersion", "story_progression")
         scores = {name: int(values.get(name, 0)) for name in score_names}
         fatal = [str(item) for item in values.get("fatal_problems", []) if item]
         threshold = int(os.getenv("LOCAL_VIDEO_VISION_MIN_SCORE", "7"))
-        valid = not fatal and all(score >= threshold for score in scores.values())
+        strict_pass = all(score >= threshold for score in scores.values())
+        average = sum(scores.values()) / len(scores)
+        quality_floor_pass = (
+            scores["visual_match"] >= max(1, threshold - 2)
+            and scores["continuity"] >= max(1, threshold - 1)
+            and scores["image_quality"] >= threshold
+            and scores["anatomy"] >= threshold
+            and scores["immersion"] >= max(1, threshold - 1)
+            and scores["story_progression"] >= threshold
+            and average >= threshold - 0.6
+        )
+        valid = not fatal and (strict_pass or quality_floor_pass)
         return {
-            "valid": valid, "skipped": False, "threshold": threshold, **scores,
+            "valid": valid, "skipped": False, "threshold": threshold,
+            "average_score": round(average, 2),
+            "acceptance": "strict" if strict_pass else "quality-floor" if valid else "rejected",
+            **scores,
             "fatal_problems": fatal,
             "problems": [str(item) for item in values.get("problems", []) if item],
             "revision_prompt": str(values.get("revision_prompt") or "").strip(),

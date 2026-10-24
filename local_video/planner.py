@@ -27,6 +27,26 @@ FRAMINGS = (
 )
 
 
+def _camera_plan(subject: str, index: int) -> tuple[str, str]:
+    """Honor explicit screenplay composition instead of adding a conflicting camera preset."""
+    action = subject.lower()
+    if "extreme close-up" in action or "macro" in action:
+        return "controlled macro push-in", "macro detail shot"
+    if "close-up" in action or "close shot" in action:
+        return "slow intimate push-in", "85mm intimate close-up"
+    if "low angle" in action or "looking up" in action or "floor level" in action:
+        return "slow low-angle drift", "24mm low-angle wide frame"
+    if "top-down" in action or "overhead" in action or "looking straight down" in action:
+        return "slow overhead drift", "24mm overhead wide frame"
+    if "side angle" in action or "side shot" in action or "from the side" in action:
+        return "gentle lateral tracking shot", "35mm side-angle medium-wide frame"
+    if "wide" in action:
+        return CAMERA_MOVES[index % len(CAMERA_MOVES)], "24mm wide establishing frame"
+    if "medium" in action:
+        return CAMERA_MOVES[index % len(CAMERA_MOVES)], "50mm medium frame"
+    return CAMERA_MOVES[index % len(CAMERA_MOVES)], FRAMINGS[index % len(FRAMINGS)]
+
+
 def validate_duration(seconds: int) -> int:
     if not 60 <= int(seconds) <= 90:
         raise ValueError("TikTok project duration must be between 60 and 90 seconds")
@@ -228,31 +248,19 @@ def build_generation_context(
             str(beat.get("text") or "").strip(),
         )
 
-    premise = script.get("story_premise") or script.get("description") or concept
-    current, inherit, handoff, narration = beat_data(index)
+    _, inherit, handoff, _ = beat_data(index)
     lines = [
-        "STORY BIBLE (render only CURRENT SHOT)",
+        "SINGLE-SHOT CONTINUITY LOCK",
         f"Required starting state: {inherit or 'begin exactly where the previous shot ended'}",
         f"Required ending state: {handoff or 'finish with a clear visual handoff to the next action'}",
-        f"Narration meaning to support silently: {narration or 'advance this exact story beat visually'}",
         f"Character identity lock: {continuity.get('characters')}",
         f"World lock: {continuity.get('location')}; palette: {continuity.get('palette')}",
-        f"Recurring prop lock: {continuity.get('recurring_objects') or 'preserve every established prop exactly'}",
-        f"Story intent: {premise} Goal: {script.get('protagonist_goal') or 'complete the central objective'}. "
-        f"Stakes: {script.get('stakes') or 'failure prevents it'}. "
-        f"Payoff: {script.get('ending_payoff') or 'resolve the opening setup'}",
     ]
     if index > 0:
         _, _, previous_handoff, _ = beat_data(index - 1)
         lines.append(
             "PREVIOUS SHOT (inherit, never replay): "
             + (previous_handoff or "continue its final pose, props, lighting, and geography")
-        )
-    if index + 1 < len(descriptions):
-        _, following_in, _, _ = beat_data(index + 1)
-        lines.append(
-            "NEXT SHOT (motivate, never render): "
-            + (following_in or "preserve the current handoff for the following action")
         )
     lines.append("ONE-SHOT RULE: one continuous moment, one protagonist, one location, no montage, no flashback, no scene reset.")
     return "\n".join(lines)
@@ -278,8 +286,7 @@ def plan_shots(
     shots: list[Shot] = []
     for index in range(count):
         subject = descriptions[min(len(descriptions) - 1, math.floor(index * len(descriptions) / count))]
-        camera = CAMERA_MOVES[index % len(CAMERA_MOVES)]
-        framing = FRAMINGS[index % len(FRAMINGS)]
+        camera, framing = _camera_plan(subject, index)
         scene_ambience = ambience or "natural location tone and specific diegetic details"
         previous = descriptions[max(0, min(len(descriptions) - 1, math.floor((index - 1) * len(descriptions) / count)))]
         following = descriptions[min(len(descriptions) - 1, math.floor((index + 1) * len(descriptions) / count))]

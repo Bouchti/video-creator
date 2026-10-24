@@ -9,7 +9,10 @@ from pathlib import Path
 
 from .config import PipelineConfig
 from .models import ProjectState
-from .project import create_project, load_project, project_status, replan_project, reset_shot, set_control_state
+from .project import (
+    adopt_reviewed_clip, create_project, load_project, project_status, refresh_project_from_shot, replan_project,
+    reset_shot, set_control_state, set_reference_image,
+)
 from .queue import QueueBusyError, QueueRunner
 
 
@@ -58,6 +61,23 @@ def _progress(value: dict) -> None:
     print(message, flush=True)
 
 
+def _shot_selection(value: str | None) -> set[int] | None:
+    if not value:
+        return None
+    selected: set[int] = set()
+    for part in value.split(","):
+        bounds = part.strip().split("-", 1)
+        try:
+            start = int(bounds[0])
+            end = int(bounds[-1])
+        except ValueError as exc:
+            raise ValueError("--shots must look like 1,3-5,8") from exc
+        if start < 1 or end < start:
+            raise ValueError("--shots values must be positive ascending ranges")
+        selected.update(range(start, end + 1))
+    return selected
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create and control durable local AI-video projects.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -78,12 +98,24 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("run", "resume", "status", "pause", "cancel", "retry"):
         command = sub.add_parser(name)
         command.add_argument("project")
+        if name in {"run", "resume", "retry"}:
+            command.add_argument("--shots", help="Only process selected shots, for example 1 or 2-5,8")
     regenerate = sub.add_parser("regenerate", help="Archive and regenerate one selected shot")
     regenerate.add_argument("project")
     regenerate.add_argument("shot", type=int)
     replan = sub.add_parser("replan", help="Archive old clips and rebuild local prompts from the reviewed script")
     replan.add_argument("project")
     replan.add_argument("--run", action="store_true", help="Start the clean generation immediately")
+    refresh = sub.add_parser("refresh-plan", help="Preserve earlier clips and rebuild prompts from one shot onward")
+    refresh.add_argument("project")
+    refresh.add_argument("--from-shot", type=int, required=True)
+    reference = sub.add_parser("set-reference", help="Set a first-frame identity/composition reference")
+    reference.add_argument("project")
+    reference.add_argument("image", type=Path)
+    adopt = sub.add_parser("adopt", help="Adopt an archived clip only if current quality gates pass")
+    adopt.add_argument("project")
+    adopt.add_argument("shot", type=int)
+    adopt.add_argument("clip", type=Path)
     return parser
 
 
@@ -122,6 +154,14 @@ def main(argv: list[str] | None = None) -> int:
             manifest = QueueRunner(config, progress=_progress).run(manifest, shots={args.shot})
             _print_status(manifest)
             return 0 if manifest.shots[args.shot - 1].status == "accepted" else 1
+        if args.command == "set-reference":
+            manifest = set_reference_image(args.project, args.image, config)
+            print(f"Reference: {Path(manifest.project_dir) / manifest.reference_image}")
+            return 0
+        if args.command == "adopt":
+            manifest = adopt_reviewed_clip(args.project, args.shot, args.clip, config)
+            _print_status(manifest)
+            return 0
         if args.command == "replan":
             manifest = replan_project(args.project, config)
             _print_plan(manifest)
@@ -130,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
                 manifest = QueueRunner(config, progress=_progress).run(manifest)
                 _print_status(manifest)
             return 0 if manifest.state not in {"failed", "partially_completed"} else 1
+        if args.command == "refresh-plan":
+            manifest = refresh_project_from_shot(args.project, args.from_shot, config)
+            _print_status(manifest)
+            return 0
         manifest = load_project(args.project, config)
         if args.command == "resume":
             manifest.set_state(ProjectState.QUEUED, requested_by="user")
@@ -141,7 +185,9 @@ def main(argv: list[str] | None = None) -> int:
                     shot.error = None
             manifest.set_state(ProjectState.QUEUED, requested_by="user", reason="retry_failed_shots")
             manifest.save()
-        manifest = QueueRunner(config, progress=_progress).run(manifest)
+        manifest = QueueRunner(config, progress=_progress).run(
+            manifest, shots=_shot_selection(getattr(args, "shots", None))
+        )
         _print_status(manifest)
         return 0 if manifest.state == ProjectState.COMPLETED.value else 1
     except (ValueError, FileNotFoundError, RuntimeError, QueueBusyError) as exc:

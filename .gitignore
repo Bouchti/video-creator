@@ -35,3 +35,6 @@ logs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Generated sound-effect library (made once with ElevenLabs, reused by every video)
+!assets/sfx/*.mp3

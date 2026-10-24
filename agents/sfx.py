@@ -238,8 +238,20 @@ LOOPS = {"engine": engine, "engine_rev": lambda s: engine(s, rev=True), "spray":
          "pump": pump, "tick": ticks, "rewind": rewind, "snore": snore}
 
 
+# Relative loudness of each event kind in the effects mix (library samples are loudness-matched).
+MIX = {"step": 0.35, "hammer": 0.75, "boing": 0.55, "whoosh": 0.55, "kids_cheer": 1.0, "snore": 0.8,
+       "scratch": 1.0, "rewind": 0.9, "pop": 0.4, "splash": 1.0, "engine": 0.55, "engine_rev": 0.6,
+       "scoop": 0.8, "dump": 0.8, "clink": 0.5, "tile": 0.5, "spray": 0.5, "pour": 0.55, "pump": 0.3,
+       "crack": 1.0, "rain": 0.6, "thunder": 0.8, "plane_start": 0.9, "plane_engine": 0.7,
+       "plane_flyby": 1.0, "crash_tree": 1.1, "hay_thud": 0.9, "flop": 1.0, "roll": 0.4, "pant": 0.8,
+       "tick": 0.6}
+VARY = {"step", "hammer", "clink", "tile", "pop", "scoop", "dump", "boing", "whoosh", "splash"}
+
+
 def render_events(events: list, fps: int, total_seconds: float, path: str, ambience: bool = True) -> str:
-    """Mix every event into a mono 16-bit WAV of the film's length."""
+    """Mix every event into a mono 16-bit WAV of the film's length. Each event uses the realistic
+    library sound when one exists (agents/sfx_library.py), else the synthesized fallback."""
+    from agents import sfx_library as lib
     n = int(SR * (total_seconds + 1.5))
     track = np.zeros(n)
 
@@ -249,15 +261,32 @@ def render_events(events: list, fps: int, total_seconds: float, path: str, ambie
         if j > i:
             track[i:j] += sound[: j - i] * gain
 
-    for ev in events:
+    for k, ev in enumerate(events):
+        kind = ev["kind"]
         at = (ev["frame"] - 1) / fps
-        gain = ev.get("gain", 1.0)
-        if ev["kind"] in ONE_SHOTS:
-            add(ONE_SHOTS[ev["kind"]](), at, gain)
-        elif ev["kind"] in LOOPS and ev.get("duration", 0) > 0:
-            add(LOOPS[ev["kind"]](ev["duration"] / fps), at, gain)
+        dur = ev.get("duration", 0) / fps
+        gain = ev.get("gain", 1.0) * MIX.get(kind, 1.0)
+        sound = None
+        if lib.load(kind) is not None:
+            if lib.is_loop(kind):
+                sound = lib.tiled(kind, max(dur, 1.0))
+            else:
+                sound = lib.varied(kind, seed=k) if kind in VARY else lib.load(kind)
+        elif kind in ONE_SHOTS:
+            sound, gain = ONE_SHOTS[kind](), ev.get("gain", 1.0)
+        elif kind in LOOPS and dur > 0:
+            sound, gain = LOOPS[kind](dur), ev.get("gain", 1.0)
+        if sound is not None:
+            add(sound, at, gain)
     if ambience:
-        add(birds(total_seconds), 0, 1.0)
+        bed = lib.tiled("birds", total_seconds) if lib.load("birds") is not None else None
+        if bed is not None:
+            add(bed, 0, 0.35)
+            wind = lib.tiled("wind", total_seconds)
+            if wind is not None:
+                add(wind, 0, 0.25)
+        else:
+            add(birds(total_seconds), 0, 1.0)
     peak = np.abs(track).max()
     if peak > 0.95:
         track *= 0.95 / peak

@@ -36,7 +36,11 @@ WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 wor
 TARGET_WORDS = (140, 185)              # ≈ 60–78 s with this voice
 HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # every rubric score must reach this to ship
-MAX_REVISIONS = 2
+MAX_REVISIONS = 1                      # a 2nd round rarely raised the score; it doubled the wait
+# QUALITY=best: 3 competing drafts (~5 min). QUALITY=fast: 1 draft, 1 review, 1 fix (~2-3 min).
+QUALITY = os.getenv("SHOWRUNNER_QUALITY", "best")
+FACTS_DIR = os.path.join(get_output_dir(), "facts")
+FACTS_MAX_AGE_DAYS = 30
 HISTORY = os.path.join(get_output_dir(), "explainer_history.json")
 WISHLIST = os.path.join(get_output_dir(), "set_wishlist.json")
 FILMS_DIR = os.path.join(get_output_dir(), "films")
@@ -78,6 +82,43 @@ What makes these videos great:
 - PAYOFF: the last beat closes the loop: it answers the hook and ties it to everyday life (what
   the viewer will notice or should never do), so the video invites a rewatch.
 - Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
+
+
+STORY_STYLE = """You write narration for 60-80 second vertical 3D cutaway CARTOON videos (TikTok, Reels,
+Shorts): the world is sliced open so viewers see what is hidden underground, starring a hero who
+learns how things are really built by getting it hilariously wrong first.
+
+The format is TRIAL AND ERROR:
+- THE HOOK (beat 1, at most 13 words, about 2 seconds): the funniest disaster (or the happy payoff),
+  shown on screen, phrased so the viewer has to know how it happened. Example of the energy, not
+  the words: "This is Max. His brand new pool just floated out of the ground." Never "Did you know",
+  never a question to the viewer.
+- THE BRIDGE (beat 2, the rewind): one short line back to the start.
+- THE LADDER: the hero tries the obvious thing, it FAILS on screen, the narration names the REAL
+  physical reason in one plain sentence, the FIX is the real engineering solution and says why it
+  works, and the next attempt reveals the next problem. Every failure is a true lesson and every
+  fix answers exactly that failure. Make cause and effect explicit ("because", "so", "but").
+- THE HERO: endearing and overconfident, never stupid: we laugh WITH him. The comedy is his
+  confidence colliding with physics: deadpan understatement, famous last words ("What could go
+  wrong?"), escalating disasters, a running gag (counting the fails, the kids waiting with towels),
+  and a callback at the end. Short punchy sentences, contractions, fragments, timing.
+- CONCRETE: real numbers people can picture (tons, metres, litres, hours), only from the model
+  facts or the fact sheet.
+- STORYTELLING, NOT TELEGRAMS: write like a great narrator telling a funny story out loud: full,
+  natural sentences that flow into each other, with rhythm and a clear subject in each one. Fragments
+  only as a deliberate punchline, never as the default ("Rewind. One field. Big idea." is wrong;
+  "Let's rewind to the day Max had a big idea." is right). No repeated catchphrase in every beat.
+- CLARITY: a viewer who sees the video once must always know what Max is trying, what went wrong and
+  why, and what he changes. Never cryptic, never an inside joke the viewer can't follow.
+- PAYOFF: the last beat is a clear, satisfying happy ending: say plainly what finally works and show
+  the family enjoying it (it must feel finished), then call back the hook.
+- SYNC: each beat's words match what that beat's action shows on screen.
+- Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
+
+
+def _style(set_id):
+    """Story sets (with a hero) get the trial-and-error comedy voice; others the explainer voice."""
+    return STORY_STYLE if getattr(sets.spec(set_id), "HERO", None) else STYLE
 
 
 # ------------------- low-level call -------------------
@@ -212,7 +253,7 @@ def pick_topic(set_ids=None, forced_angle=None):
 Already published (do NOT repeat these angles or hooks):
 {chr(10).join('- ' + u for u in used) or '- (nothing yet)'}
 
-{'The producer asked for this angle; develop it: ' + forced_angle if forced_angle else ''}
+{'The producer asked for this angle; develop it, using the set whose SUBJECT matches it: ' + forced_angle if forced_angle else ''}
 
 Brainstorm 10 distinct ANGLES that these sets can film: different hooks and questions about the
 same subject (why it is built that way, what goes wrong if..., the hidden part nobody sees, the
@@ -227,7 +268,12 @@ angle about the water, the soil or the machinery works as well as one about cons
 Also list 5 wishlist topics that would make outstanding cutaway videos but need a NEW set (for
 example a gas station's underground tanks, a septic system, a water tower): topic, hook line, and
 the set to build."""
-    out = _call(STYLE, prompt, TOPIC_SCHEMA, effort="high")
+    if any(getattr(sets.spec(s_), "HERO", None) for s_ in set_ids):
+        prompt += """
+
+For hero (story) sets, an ANGLE is a fresh telling of the hero's trial-and-error story: what he is
+building it for, the running gag, which disaster becomes the hook, the comic voice, the payoff."""
+    out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium")
     _save_wishlist(out.get("wishlist", []))
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
@@ -251,16 +297,33 @@ def _save_wishlist(items):
 # ------------------- 2. research -------------------
 
 def research(topic):
+    """Fact sheet for the set's subject, web-researched once and reused for FACTS_MAX_AGE_DAYS."""
+    import time
+    cache = os.path.join(FACTS_DIR, f"{topic['set']}.txt")
+    try:
+        if time.time() - os.path.getmtime(cache) < FACTS_MAX_AGE_DAYS * 86400:
+            facts = open(cache, encoding="utf-8").read()
+            log.info(f"[showrunner] fact sheet: cached ({len(facts.split())} words)")
+            return facts
+    except OSError:
+        pass
+    facts = _research(topic)
+    os.makedirs(FACTS_DIR, exist_ok=True)
+    with open(cache, "w", encoding="utf-8") as f:
+        f.write(facts)
+    return facts
+
+
+def _research(topic):
     sp = sets.spec(topic["set"])
     prompt = f"""Research facts for a short video.
-Title: {topic['title']}
-Angle: {topic['angle']}
-Hook claim to verify: {topic['hook_line']}
-Subject the 3D model shows: {sp.SUBJECT}
+Subject: {sp.SUBJECT}
+Facts the 3D model already shows: {json.dumps(sp.MODEL_FACTS, ensure_ascii=False)}
+Example hook to verify: {topic['hook_line']}
 
 Search the web and return a compact FACT SHEET (plain text, max ~350 words): 8-15 bullet facts
-with concrete numbers, each with its source domain in brackets. Start with a verdict on the hook
-claim (TRUE / NEEDS REWORDING + the accurate wording). Prefer engineering, trade and government
+with concrete numbers about this subject, each with its source domain in brackets; correct any of
+the model facts that are wrong. Start with a verdict on the example hook (TRUE / NEEDS REWORDING). Prefer engineering, trade and government
 sources. Include 2-3 surprising details that would delight a viewer."""
     tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
     try:
@@ -287,8 +350,8 @@ SCRIPT_SCHEMA = _obj({
 })
 
 CRITIQUE_SCHEMA = _obj({
-    "scores": _obj({"hook": I, "clarity": I, "story_flow": I, "fun": I, "accuracy": I, "pacing": I,
-                    "visual_sync": I}),
+    "scores": _obj({"hook": I, "clarity": I, "story_flow": I, "problem_solution": I, "fun": I, "accuracy": I,
+                    "pacing": I, "visual_sync": I}),
     "problems": {"type": "array", "items": S},
     "line_edits": {"type": "array", "items": S},
     "verdict": {"type": "string", "enum": ["ship", "revise"]},
@@ -297,25 +360,39 @@ CRITIQUE_SCHEMA = _obj({
 
 def _rules(set_id):
     sp = sets.spec(set_id)
-    order = " → ".join(sp.BUILD_ORDER)
+    order = getattr(sp, "STORY_ORDER", None) or sp.BUILD_ORDER
+    hooks = ", ".join(k for k, v in sp.ACTIONS.items() if v["kind"] == "hook")
+    explain = "; ".join(f"{k} after {v['after']}" for k, v in sp.ACTIONS.items() if v["kind"] == "explain")
+    outros = ", ".join(k for k, v in sp.ACTIONS.items() if v["kind"] == "outro")
+    fails = [k for k, v in sp.ACTIONS.items() if v["kind"] == "fail"]
+    max_group = 3 if fails else 4
+    ladder = (f"\n- The fail_* actions are the hero's failures ({', '.join(fails)}): give each its own beat, name the"
+              f"\n  real cause, and make the NEXT beat the fix that answers it. Never use 'Fail #' or 'Attempt #'"
+              f"\n  stickers.") if fails else ""
     return f"""STRUCTURE RULES (the renderer enforces them):
-- Beat 1 = a hook action ({', '.join(k for k, v in sp.ACTIONS.items() if v['kind'] == 'hook')}): pick the one
-  whose VISUAL matches your hook line (the viewer must see what the first words say); beat 2 = rewind.
-- Then EVERY build action exactly once, in this order: {order}.
-- Optional explainer actions may be inserted after their prerequisite (layers after dig; weight and
-  flow after fill; cycle after flow). Optional outro (storm or glamour) can only be the last beat.
-- Each action at most once. A beat plays ONE action, or a quick MONTAGE of 2-4 consecutive actions
-  ("actions": ["gravel", "valve", "pipes"]): use montages to race through build steps that are not
-  the point of your angle, so the story stays on the angle. Hook and rewind beats are single actions.
+- Beat 1 = a hook action ({hooks}): pick the one whose VISUAL matches your hook line (the viewer must
+  see what the first words say); beat 2 = rewind.
+- Then these actions exactly once each, in this order: {' → '.join(order)}.{ladder}
+- Optional explainer actions after their prerequisite: {explain or 'none'}.{(' Optional outro (last beat only): ' + outros + '.') if outros else ''}
+- A beat plays ONE action, or a quick MONTAGE of 2-{max_group} consecutive actions ("actions": ["rebar",
+  "shotcrete"]) to race through steps that are not the point. Hooks, the rewind{' and failures' if fails else ''} are single.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
   {WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. 10-17 beats in total.
-- Word budget: {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{WORDS_PER_SECOND} words/s); a beat runs as
-  long as its words, so give each action roughly its listed seconds x {WORDS_PER_SECOND} words. Hook <= {HOOK_MAX_WORDS} words.
+- Word budget: {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{WORDS_PER_SECOND} words/s). Hook <= {HOOK_MAX_WORDS} words.
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
-  "50 tons", text like "of soil"); "label" = a short badge (text only). Use "none" on most beats,
+  "50 tons", text like "of dirt"); "label" = a short badge (text only). Use "none" on most beats,
   at most 6 stickers in total, never on the hook.
 - Numbers must match the model facts: what is ON SCREEN is the model."""
 
+
+STORY_DIRECTIONS = {
+    "slapstick": "Escalating physical comedy: every disaster bigger than the last, big reactions, the "
+                 "narrator gleefully counting the fails. Fast, punchy.",
+    "deadpan": "A dry, deadpan narrator who describes each catastrophe with total calm and perfect "
+               "understatement. The calmer the voice, the bigger the disaster.",
+    "sitcom": "A family sitcom: the kids waiting with towels and floaties as a running gag, Max's famous "
+              "last words before each fail, a warm callback at the end.",
+}
 
 DIRECTIONS = {
     "mystery": "Play it as a slow-burn mystery: the hook is a threat, every beat tightens the screw, "
@@ -352,9 +429,30 @@ THE EDITOR'S NOTES (fix every one; keep what works):
 Write the improved script."""
     else:
         if direction:
-            prompt += f"\nCREATIVE DIRECTION: {DIRECTIONS[direction]}\n"
+            prompt += f"\nCREATIVE DIRECTION: {_directions(set_id)[direction]}\n"
+        example = _tone_example(set_id)
+        if example:
+            prompt += ("\nTONE EXAMPLE: another writer's script for this same set. Do NOT reuse its jokes, lines "
+                       f"or hook; beat it.\n{example}\n")
         prompt += "\nWrite the script. Make the hook impossible to scroll past and every beat earn its place."
-    return _call(STYLE, prompt, SCRIPT_SCHEMA, effort="high")
+    return _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort="high")
+
+
+def _directions(set_id):
+    return STORY_DIRECTIONS if getattr(sets.spec(set_id), "HERO", None) else DIRECTIONS
+
+
+def _tone_example(set_id):
+    """Narration of a hand-written reference film for this set (engine/films/*.json), if any."""
+    import glob
+    for path in glob.glob(os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "films", "*.json")):
+        try:
+            film = json.load(open(path, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if film.get("set") == set_id:
+            return "\n".join(f"[{b.get('id')}] {b['text']}" for b in film["beats"])
+    return ""
 
 
 def polish(script, topic, facts):
@@ -371,7 +469,7 @@ FACT SHEET (for reference only):
 
 SCRIPT:
 {json.dumps(script, ensure_ascii=False, indent=1)}"""
-    out = _call(STYLE, prompt, SCRIPT_SCHEMA, effort="medium")
+    out = _call(_style(topic["set"]), prompt, SCRIPT_SCHEMA, effort="low")
     if [b["actions"] for b in out["beats"]] != [b["actions"] for b in script["beats"]]:
         return script                                   # polish must not restructure
     return out
@@ -380,9 +478,12 @@ SCRIPT:
 def critique_script(script, topic, facts, hard_problems):
     prompt = f"""You are the channel's head editor. Grade this script ruthlessly (1-10 each): hook (would
 it stop the scroll in 2 s?), clarity (a 12-year-old follows every beat), story_flow (each beat
-answers the last and raises the next), fun (personality, wit, surprise, no filler), accuracy (every
-claim matches the fact sheet or the model facts), pacing (no beat too long or rushed, total
-length right), visual_sync (each beat's words match what that action shows).
+answers the last and raises the next; a clear, satisfying ending; natural spoken sentences, not
+telegraphic fragments), problem_solution (every problem/failure has its REAL cause
+named, and the next beat's fix clearly answers it and says why it works), fun (genuinely funny:
+character, comic timing, escalation, callbacks; no filler, nothing cringe), accuracy (every claim
+matches the fact sheet or the model facts), pacing (no beat too long or rushed, total length
+right), visual_sync (each beat's words match what that action shows).
 
 {_set_brief(topic['set'])}
 
@@ -396,7 +497,7 @@ Automatic checks found: {hard_problems or 'nothing'}
 
 List concrete problems and line edits (quote the line, give the better line). verdict = "ship"
 only if every score is {PASS_SCORE}+ and there are no factual errors or rule breaks."""
-    return _call(STYLE, prompt, CRITIQUE_SCHEMA, effort="high")
+    return _call(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
 def hard_checks(script, set_id):
@@ -447,17 +548,24 @@ def develop(topic, facts):
         problems = hard_checks(script, topic["set"])
         return script, problems, critique_script(script, topic, facts, problems), direction
 
-    with ThreadPoolExecutor(max_workers=len(DIRECTIONS)) as pool:
-        drafts = list(pool.map(draft_and_review, DIRECTIONS))
+    directions = _directions(topic["set"])
+    if QUALITY == "fast":
+        directions = dict(list(directions.items())[:1])
+    with ThreadPoolExecutor(max_workers=len(directions)) as pool:
+        drafts = list(pool.map(draft_and_review, directions))
     for script, problems, review, direction in drafts:
         log.info(f"[showrunner] draft '{direction}': {json.dumps(review['scores'])} | hard problems: {len(problems)}")
     script, problems, review, direction = max(drafts, key=lambda d: _rank(d[2], d[1]))
     log.info(f"[showrunner] best draft: '{direction}'")
     best = (script, problems, review)
+    revised = False
     for round_ in range(MAX_REVISIONS):
         if _ships(review, problems):
             break
-        script = write_script(topic, facts, previous=script, critique={"automatic_checks": problems, **review})
+        script = write_script(topic, facts, previous=script, critique={
+            "automatic_checks": problems, **review,
+            "also": "read it aloud as a voice actor and polish rhythm and awkward phrases while you fix it"})
+        revised = True
         problems = hard_checks(script, topic["set"])
         review = critique_script(script, topic, facts, problems)
         log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(review['scores'])} | hard problems: {len(problems)}")
@@ -466,9 +574,10 @@ def develop(topic, facts):
     script, problems, review = best
     if problems:
         raise RuntimeError(f"no renderable script: {problems}")
-    polished = polish(script, topic, facts)
-    if not hard_checks(polished, topic["set"]):
-        script = polished
+    if not revised:                                     # a revision already polished it
+        polished = polish(script, topic, facts)
+        if not hard_checks(polished, topic["set"]):
+            script = polished
     if not _ships(review, problems):
         log.warning(f"[showrunner] best script scores {json.dumps(review['scores'])}: below the bar, shipping anyway")
     return script, review
@@ -489,6 +598,8 @@ def to_film(script, topic, facts, review=None):
         elif sp.ACTIONS[acts[0]]["kind"] == "hook":
             beat["video"] = "epilogue"
         ov = b.get("overlay") or {}
+        if re.match(r"\s*(fail|attempt)\s*#?\s*\d", str(ov.get("text", "")), re.I):
+            ov = {}                                     # no "Fail #N" stickers (they read as noise)
         if ov.get("type") == "stat" and ov.get("value"):
             beat["overlay"] = {"type": "stat", "value": ov["value"], "text": ov.get("text", "")}
         elif ov.get("type") == "label" and ov.get("text"):
@@ -506,10 +617,14 @@ def slug(text):
 
 
 def run(angle=None, render=True, preview=False):
-    log.info(f"[showrunner] backend: {BACKEND}" + (f" (claude -p, model {CLI_MODEL})" if BACKEND != "api" else ""))
+    import time
+    t0 = time.time()
+    log.info(f"[showrunner] backend: {BACKEND}" + (f" (claude -p, model {CLI_MODEL})" if BACKEND != "api" else "")
+             + f", quality: {QUALITY}")
     topic = pick_topic(forced_angle=angle)
     facts = research(topic)
     script, review = develop(topic, facts)
+    log.info(f"[showrunner] script written in {(time.time() - t0) / 60:.1f} min")
     film = to_film(script, topic, facts, review)
     os.makedirs(FILMS_DIR, exist_ok=True)
     name = f"{datetime.date.today():%Y%m%d}_{slug(script['title'])}"

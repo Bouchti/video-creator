@@ -57,7 +57,8 @@ toy.add_area("Rim", (-6, 14, 7), (0, 2, 0), energy=300, size=8, color=(1.0, 0.92
 bg = bpy.context.scene.world.node_tree.nodes["Background"].inputs["Strength"]
 
 set_mod = importlib.import_module(f"engine.sets.{film['set']}")
-set_cls = next(v for k, v in vars(set_mod).items() if k.endswith("Set") and isinstance(v, type))
+set_cls = next(v for k, v in vars(set_mod).items()
+               if k.endswith("Set") and isinstance(v, type) and v.__module__ == set_mod.__name__)
 stage = set_cls(scene, sun, fill, bg, total)
 stage.run(beats, spans, EPI)
 
@@ -91,15 +92,22 @@ elif preview:
             scene.render.filepath = os.path.join(out_dir, f"preview_{idx + 1:02d}_{b['action']}_{tag}.png")
             bpy.ops.render.render(write_still=True)
 else:
+    # Parallel workers (make_film) each render a chunk: --range=A:B of the build frames and/or
+    # --hook. Without these flags this process renders everything.
+    rng = next((a.split("=", 1)[1] for a in args if a.startswith("--range=")), None)
+    do_hook = "--hook" in args or rng is None
+    a_, b_ = (int(x) for x in rng.split(":")) if rng else (BUILD_START, total)
     frames_dir = os.path.join(out_dir, "frames")
-    # Hook: render the epilogue range as an animation (one still per call re-syncs the whole
-    # scene, ~3x slower), then rename each frame to its place at the start of the video.
-    scene.frame_start, scene.frame_end = HOOK_B + EPI, HOOK_E + EPI
-    scene.render.filepath = os.path.join(frames_dir, "h_")
-    bpy.ops.render.render(animation=True)
-    for f in range(HOOK_B, HOOK_E + 1):
-        os.replace(os.path.join(frames_dir, f"h_{f + EPI:04d}.png"), os.path.join(frames_dir, f"f_{f:04d}.png"))
-    scene.frame_start, scene.frame_end = BUILD_START, total
-    scene.render.filepath = os.path.join(frames_dir, "f_")
-    bpy.ops.render.render(animation=True)
+    if do_hook:
+        # Hook: render the epilogue range as an animation (one still per call re-syncs the whole
+        # scene, ~3x slower), then rename each frame to its place at the start of the video.
+        scene.frame_start, scene.frame_end = HOOK_B + EPI, HOOK_E + EPI
+        scene.render.filepath = os.path.join(frames_dir, "h_")
+        bpy.ops.render.render(animation=True)
+        for f in range(HOOK_B, HOOK_E + 1):
+            os.replace(os.path.join(frames_dir, f"h_{f + EPI:04d}.png"), os.path.join(frames_dir, f"f_{f:04d}.png"))
+    if a_ <= b_:
+        scene.frame_start, scene.frame_end = a_, b_
+        scene.render.filepath = os.path.join(frames_dir, "f_")
+        bpy.ops.render.render(animation=True)
 print("DONE")

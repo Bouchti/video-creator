@@ -1,0 +1,100 @@
+{
+  "title": "Max builds a pool (four disasters later)",
+  "set": "pool_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 1.5,
+  "beats": [
+    {
+      "id": "float_hook",
+      "action": "float_hook",
+      "video": "epilogue",
+      "text": "This is Max. His brand new pool just floated out of the ground."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's go back to day one."
+    },
+    {
+      "id": "dig",
+      "action": "dig",
+      "text": "Max wants a pool for his kids. Step one: dig a hole. Fifty tons of dirt. Easy.",
+      "overlay": {
+        "type": "stat",
+        "value": "50 tons",
+        "text": "of dirt"
+      }
+    },
+    {
+      "id": "fail_soak",
+      "action": "fail_soak",
+      "text": "Fill it with water and... it's gone. Soil is basically a sponge."
+    },
+    {
+      "id": "plain_shell",
+      "action": "plain_shell",
+      "text": "So, concrete walls. Solid. What could go wrong?"
+    },
+    {
+      "id": "fail_crack",
+      "action": "fail_crack",
+      "text": "Twenty tons of water, that's what. Concrete hates being stretched. It cracks, and it all leaks out."
+    },
+    {
+      "id": "rebar+shotcrete",
+      "action": "rebar",
+      "actions": [
+        "rebar",
+        "shotcrete"
+      ],
+      "text": "Take two: a steel cage, a bar every 25 centimeters, then concrete sprayed on. The steel takes the stretch."
+    },
+    {
+      "id": "cure",
+      "action": "cure",
+      "text": "Then it has to stay damp for four weeks. Max sleeps. The sprinkler doesn't.",
+      "overlay": {
+        "type": "stat",
+        "value": "28 days",
+        "text": "of curing"
+      }
+    },
+    {
+      "id": "finish+fill",
+      "action": "finish",
+      "actions": [
+        "finish",
+        "fill"
+      ],
+      "text": "Plaster, tiles, a ladder. Fill it up. Finally!"
+    },
+    {
+      "id": "fail_float",
+      "action": "fail_float",
+      "text": "Then a storm. Max drains it to clean it, and groundwater lifts the empty pool like a boat."
+    },
+    {
+      "id": "fix_valve",
+      "action": "fix_valve",
+      "text": "The fix: gravel underneath, and a relief valve that lets groundwater in instead of pushing up."
+    },
+    {
+      "id": "fail_green",
+      "action": "fail_green",
+      "text": "Refilled. A week later: soup. Still water plus sunshine equals algae."
+    },
+    {
+      "id": "fix_filter",
+      "action": "fix_filter",
+      "text": "So a pump pushes it all through a sand filter, the whole pool every six hours. Plus one chlorine duck."
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "Four disasters later, it finally works. Kids? Cannonball!"
+    }
+  ]
+}

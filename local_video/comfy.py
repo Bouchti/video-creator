@@ -27,6 +27,18 @@ class ComfyClient:
         response.raise_for_status()
         return response.json()
 
+    def free_memory(self) -> bool:
+        """Best-effort release of cached models between expensive local video jobs."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/free",
+                json={"unload_models": True, "free_memory": True},
+                timeout=30,
+            )
+            return response.ok
+        except requests.RequestException:
+            return False
+
     def has_node(self, class_type: str) -> bool:
         try:
             response = requests.get(f"{self.base_url}/object_info/{class_type}", timeout=5)
@@ -100,7 +112,39 @@ class ComfyClient:
                     queue = {}
                 on_progress(queue)
             time.sleep(self.poll_seconds)
-        raise TimeoutError(f"ComfyUI prompt {prompt_id} timed out after {self.timeout} seconds")
+        self.cancel(prompt_id)
+        raise TimeoutError(f"ComfyUI prompt {prompt_id} timed out after {self.timeout} seconds and was cancelled")
+
+    def cancel(self, prompt_id: str, wait_seconds: float = 30.0) -> bool:
+        """Remove our queued prompt or interrupt it if it is the active ComfyUI job."""
+        try:
+            queue = requests.get(f"{self.base_url}/queue", timeout=10).json()
+            running = queue.get("queue_running") or []
+            pending = queue.get("queue_pending") or []
+            is_running = any(len(item) > 1 and str(item[1]) == prompt_id for item in running)
+            is_pending = any(len(item) > 1 and str(item[1]) == prompt_id for item in pending)
+            if is_pending:
+                response = requests.post(
+                    f"{self.base_url}/queue", json={"delete": [prompt_id]}, timeout=10,
+                )
+                response.raise_for_status()
+            if is_running:
+                response = requests.post(f"{self.base_url}/interrupt", json={}, timeout=10)
+                response.raise_for_status()
+            deadline = time.monotonic() + wait_seconds
+            while time.monotonic() < deadline:
+                queue = requests.get(f"{self.base_url}/queue", timeout=10).json()
+                ids = {
+                    str(item[1]) for key in ("queue_running", "queue_pending")
+                    for item in (queue.get(key) or []) if len(item) > 1
+                }
+                if prompt_id not in ids:
+                    self.free_memory()
+                    return True
+                time.sleep(min(self.poll_seconds, 1.0))
+            return False
+        except (requests.RequestException, ValueError, TypeError):
+            return False
 
     @staticmethod
     def output_item(history: dict[str, Any]) -> dict[str, Any]:

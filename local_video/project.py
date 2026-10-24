@@ -121,7 +121,7 @@ def create_project(
             "services": config.tool_versions(),
             "wan_workflow": str(config.wan_workflow),
             "final": {"width": 1080, "height": 1920, "fps": 30, "video_codec": "h264", "audio_codec": "aac"},
-            "prompt_strategy": "story-bible+previous-current-next",
+            "prompt_strategy": "single-beat+frame-reference",
             "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
             "allow_still_replacement": False,
         },
@@ -166,6 +166,66 @@ def load_project(project: str | Path, config: PipelineConfig | None = None) -> P
 def set_control_state(project: str | Path, state: ProjectState, config: PipelineConfig | None = None) -> ProjectManifest:
     manifest = load_project(project, config)
     manifest.set_state(state, requested_by="user")
+    manifest.save()
+    return manifest
+
+
+def set_reference_image(
+    project: str | Path, image: str | Path, config: PipelineConfig | None = None,
+) -> ProjectManifest:
+    manifest = load_project(project, config)
+    source = validate_input_file(image, IMAGE_EXTENSIONS)
+    target = Path(manifest.project_dir) / "input" / f"reference{source.suffix.lower()}"
+    if source != target.resolve():
+        shutil.copy2(source, target)
+    manifest.reference_image = str(target.relative_to(manifest.project_dir))
+    manifest.record("reference_image_set", path=manifest.reference_image)
+    manifest.save()
+    return manifest
+
+
+def adopt_reviewed_clip(
+    project: str | Path, shot_number: int, clip: str | Path,
+    config: PipelineConfig | None = None,
+) -> ProjectManifest:
+    """Adopt an archived candidate only after it passes current technical and semantic gates."""
+    config = config or PipelineConfig()
+    manifest = load_project(project, config)
+    if not 1 <= shot_number <= len(manifest.shots):
+        raise ValueError(f"shot_number must be between 1 and {len(manifest.shots)}")
+    source = validate_input_file(clip, {".mp4", ".mov", ".mkv", ".webm"}, 2 * 1024 * 1024 * 1024)
+    shot = manifest.shots[shot_number - 1]
+    from .validation import extract_last_frame, validate_clip
+    from .visual_review import review_clip
+    report = validate_clip(
+        source, config, config.minimax_width, config.minimax_height, config.minimax_seconds,
+    )
+    reference = None
+    if shot.index > 0 and manifest.shots[shot.index - 1].last_frame:
+        candidate = resolve_within(manifest.project_dir, manifest.shots[shot.index - 1].last_frame)
+        reference = candidate if candidate.is_file() else None
+    elif manifest.reference_image:
+        candidate = resolve_within(manifest.project_dir, manifest.reference_image)
+        reference = candidate if candidate.is_file() else None
+    semantic = review_clip(source, shot, reference, manifest)
+    report["semantic_review"] = semantic
+    if not semantic.get("valid", False):
+        raise ValueError(f"Clip did not pass semantic review: {semantic.get('problems') or semantic}")
+    target = Path(manifest.project_dir) / "shots" / f"{shot.id}-reviewed.mp4"
+    shutil.copy2(source, target)
+    last_frame = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
+    extract_last_frame(target, last_frame, config)
+    shot.status = "accepted"
+    shot.backend = "minimax-reviewed"
+    shot.output = str(target.relative_to(manifest.project_dir))
+    shot.last_frame = str(last_frame.relative_to(manifest.project_dir))
+    shot.validation = report
+    shot.error = None
+    manifest.active_shot = None
+    manifest.outputs = {}
+    manifest.record("reviewed_clip_adopted", shot=shot.id, source=str(source),
+                    acceptance=semantic.get("acceptance"), average=semantic.get("average_score"))
+    manifest.set_state(ProjectState.QUEUED, reason="reviewed_clip_adopted")
     manifest.save()
     return manifest
 
@@ -224,7 +284,7 @@ def replan_project(project: str | Path, config: PipelineConfig | None = None) ->
     manifest.elapsed_seconds = 0.0
     manifest.error = None
     manifest.settings.update({
-        "prompt_strategy": "story-bible+previous-current-next",
+        "prompt_strategy": "single-beat+frame-reference",
         "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
         "allow_still_replacement": False,
     })
@@ -232,6 +292,64 @@ def replan_project(project: str | Path, config: PipelineConfig | None = None) ->
     manifest.record("project_replanned", archive=str(archive.relative_to(root)), archived_files=archived_files,
                     reason="immersive_local_scene_prompts_and_visual_critique")
     manifest.set_state(ProjectState.QUEUED)
+    manifest.save()
+    return manifest
+
+
+def refresh_project_from_shot(
+    project: str | Path, from_shot: int, config: PipelineConfig | None = None,
+) -> ProjectManifest:
+    """Rebuild future prompts while preserving earlier accepted story continuity."""
+    manifest = load_project(project, config)
+    if not 1 <= from_shot <= len(manifest.shots):
+        raise ValueError(f"from_shot must be between 1 and {len(manifest.shots)}")
+    root = Path(manifest.project_dir)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    archive = root / "superseded" / f"refresh-from-{from_shot:03d}-{stamp}"
+    archive.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(root / "project.json", archive / "project-before-refresh.json")
+    archived: list[str] = []
+    planned, continuity = plan_shots(
+        manifest.script, manifest.concept, manifest.duration_seconds, manifest.visual_style,
+        manifest.preferred_backend, manifest.ambience, manifest.fps,
+    )
+    archive_shots = archive / "shots"
+    for index in range(from_shot - 1, len(manifest.shots)):
+        previous = manifest.shots[index]
+        for relative in (previous.output, previous.last_frame):
+            if not relative:
+                continue
+            source = resolve_within(root, relative)
+            if not source.is_file():
+                continue
+            archive_shots.mkdir(exist_ok=True)
+            destination = archive_shots / source.name
+            if destination.exists():
+                destination = archive_shots / f"{previous.id}-{source.name}"
+            shutil.move(str(source), str(destination))
+            archived.append(str(destination.relative_to(root)))
+        manifest.shots[index] = planned[index]
+    manifest.continuity = continuity
+    manifest.outputs = {}
+    manifest.active_shot = None
+    manifest.completed_at = None
+    manifest.error = None
+    manifest.settings.update({
+        "prompt_strategy": "single-beat+frame-reference+screenplay-camera",
+        "visual_qc": {
+            "local_artifact_detection": True,
+            "semantic_review": True,
+            "minimum_score": 7,
+            "story_progression_required": True,
+        },
+        "allow_still_replacement": False,
+    })
+    export_screenplay(manifest)
+    manifest.record(
+        "future_shots_refreshed", from_shot=from_shot,
+        archive=str(archive.relative_to(root)), archived=archived,
+    )
+    manifest.set_state(ProjectState.PAUSED, reason="quality_fixes_ready_for_review")
     manifest.save()
     return manifest
 

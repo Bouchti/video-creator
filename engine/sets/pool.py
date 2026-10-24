@@ -31,6 +31,8 @@ HOOK_CAM = dict(cam=(0, -6.4, -0.6), aim=(0, 0, -1.05))
 
 
 class PoolSet:
+    ACTIONS = ACTIONS                         # subclasses (story variants) swap in their catalogue
+
     def __init__(self, scene, sun, fill, bg, total):
         self.scene, self.sun, self.fill, self.bg, self.total = scene, sun, fill, bg, total
         self.yard = CutawayYard()
@@ -51,7 +53,7 @@ class PoolSet:
         for i, b in enumerate(beats):
             acts = beat_actions(b)
             s, e = spans[i]
-            weights = [sum(ACTIONS[a].get("seconds", (1, 1))) for a in acts]
+            weights = [sum(self.ACTIONS[a].get("seconds", (1, 1))) for a in acts]
             t = s
             for k, (a, w) in enumerate(zip(acts, weights)):
                 end = e if k == len(acts) - 1 else t + int((e - s + 1) * w / sum(weights)) - 1
@@ -59,7 +61,7 @@ class PoolSet:
                 self.spans.append((t, end))
                 t = end + 1
         for i, a in enumerate(self.acts):
-            if ACTIONS[a]["kind"] in ("hook", "rewind"):
+            if self.ACTIONS[a]["kind"] in ("hook", "rewind"):
                 continue
             getattr(self, f"a_{a}")(i, *self.spans[i])
         hook_b, hook_e = self.spans[0]

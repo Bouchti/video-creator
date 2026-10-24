@@ -66,6 +66,43 @@ def _write_wav(path, x):
     return path
 
 
+def _sticker_job(job):
+    path, overlay, t = job
+    _draw_overlay(Image.open(path).convert("RGB"), overlay, t).save(path)
+
+
+def _render_parallel(cmd, spans, total, n, work, start=None, hook=True):
+    """Render the film with n Blender processes at once, each on a contiguous chunk of frames
+    (worker 0 also renders the hook). A single process leaves the GPU idle while it updates the
+    scene and writes each PNG; parallel workers fill those gaps. Frames are deterministic, so the
+    result is identical to a single-process render."""
+    with_hook = hook
+    hook = (spans[0]["end"] - spans[0]["start"] + 1) if with_hook else 0
+    build0 = start or spans[2]["start"] + 1            # first frame after hook + rewind (1-based)
+    share = (total - build0 + 1 + hook) / n
+    chunks, a = [], build0
+    for k in range(n):
+        size = round(share - (hook if k == 0 else 0))
+        b = total if k == n - 1 else min(total, a + max(0, size) - 1)
+        chunks.append((a, b))
+        a = b + 1
+    procs = []
+    for k, (a, b) in enumerate(chunks):
+        logf = open(os.path.join(work, f"render_worker{k}.log"), "w", encoding="utf-8")
+        extra = [f"--range={a}:{b}"] + (["--hook"] if k == 0 and with_hook else [])
+        procs.append((subprocess.Popen(cmd + extra, stdout=logf, stderr=subprocess.STDOUT, text=True), logf, k))
+        log.info(f"  worker {k}: frames {a}-{b}" + (" + hook" if k == 0 and with_hook else ""))
+    failed = []
+    for p, logf, k in procs:
+        p.wait()
+        logf.close()
+        out = open(logf.name, encoding="utf-8", errors="replace").read()
+        if "DONE" not in out:
+            failed.append(f"worker {k}:\n{out[-2000:]}")
+    if failed:
+        raise RuntimeError("Blender failed:\n" + "\n".join(failed))
+
+
 def _overlay(beat):
     """2D sticker for a beat: `overlay`, or the first 2D-type entry of a structured `callouts`
     list (stat / label). 3D callouts (label3d, dimension) are drawn in the scene instead."""
@@ -154,6 +191,8 @@ def main():
     ap.add_argument("--reuse-voice", action="store_true")
     ap.add_argument("--preview", action="store_true", help="render 3 stills per beat only")
     ap.add_argument("--frames", default="", help="render only these frames as stills, e.g. 450,470")
+    ap.add_argument("--resume", action="store_true",
+                    help="keep already-rendered frames and render only the missing ones")
     ap.add_argument("--remix", action="store_true",
                     help="reuse the rendered video; rebuild only sound + captions (implies --reuse-voice)")
     args = ap.parse_args()
@@ -204,14 +243,28 @@ def produce(args):
         return _finish(args, film, beats, spans, words, total, work, voice_path, video)
 
     # ---- render ----
-    if not (args.preview or args.frames):
+    resume = getattr(args, "resume", False)
+    if not (args.preview or args.frames or resume):
         shutil.rmtree(os.path.join(work, "frames"), ignore_errors=True)
     log.info("Rendering in Blender...")
     cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json, timings_path, work]
     extra = (["--preview"] if args.preview else []) + ([f"--frames={args.frames}"] if args.frames else [])
-    r = subprocess.run(cmd + extra, capture_output=True, text=True)
-    if "DONE" not in r.stdout:
-        raise RuntimeError(f"Blender failed:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}")
+    workers = int(os.getenv("RENDER_WORKERS", "1"))   # measured: 2 = no gain on the laptop GPU
+    if film.get("set") and not (args.preview or args.frames) and (workers > 1 or resume):
+        start, hook = None, True
+        if resume:                                     # keep finished frames, render only the rest
+            have = {int(os.path.basename(p)[2:6]) for p in glob.glob(os.path.join(work, "frames", "f_*.png"))}
+            hook = not all(f in have for f in range(spans[0]["start"] + 1, spans[0]["end"] + 2))
+            build0 = spans[2]["start"] + 1
+            missing = [f for f in range(build0, total_frames + 1) if f not in have]
+            start = max(build0, missing[0] - 1) if missing else total_frames + 1   # redo the last (maybe partial) one
+            log.info(f"  resume: {len(have)} frames kept, rendering from frame {start}" + (" + hook" if hook else ""))
+        if start is None or start <= total_frames or hook:
+            _render_parallel(cmd, spans, total_frames, max(1, workers), work, start=start, hook=hook)
+    else:
+        r = subprocess.run(cmd + extra, capture_output=True, text=True)
+        if "DONE" not in r.stdout:
+            raise RuntimeError(f"Blender failed:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}")
     if args.preview or args.frames:
         log.info(f"Stills in {work}")
         return
@@ -219,12 +272,14 @@ def produce(args):
     frames = sorted(glob.glob(os.path.join(work, "frames", "f_*.png")))
     log.info(f"Rendered {len(frames)} frames")
 
-    # ---- stickers ----
-    for beat, span in zip(beats, spans):
-        if _overlay(beat):
-            for i in range(span["start"], min(span["end"] + 1, len(frames))):
-                img = Image.open(frames[i]).convert("RGB")
-                _draw_overlay(img, _overlay(beat), (i - span["start"]) / FPS).save(frames[i])
+    # ---- stickers (spread over all CPU cores: one PNG load/draw/save per frame adds up) ----
+    jobs = [(frames[i], _overlay(beat), (i - span["start"]) / FPS)
+            for beat, span in zip(beats, spans) if _overlay(beat)
+            for i in range(span["start"], min(span["end"] + 1, len(frames)))]
+    if jobs:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
+            list(pool.map(_sticker_job, jobs, chunksize=16))
 
     subprocess.run([FFMPEG, "-y", "-framerate", str(FPS), "-i", os.path.join(work, "frames", "f_%04d.png"),
                     "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p", video],
@@ -238,7 +293,7 @@ SFX_GAIN, WHOOSH_GAIN = 0.32, 0.45
 
 def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     # ---- sound design ----
-    cuts = [s["start"] / FPS for s in spans[1:]]
+    cuts = []                                          # no whoosh on scene changes (too noisy)
     pops = [s["start"] / FPS + 0.18 for b, s in zip(beats, spans) if _overlay(b)]
     whoosh = _read_wav(build_fx_track(total, cuts, pops, os.path.join(work, "whoosh.wav")))
     events = json.load(open(os.path.join(work, "events.json"), encoding="utf-8"))
