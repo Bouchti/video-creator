@@ -244,8 +244,16 @@ MIX = {"step": 0.35, "hammer": 0.75, "boing": 0.55, "whoosh": 0.55, "kids_cheer"
        "scoop": 0.8, "dump": 0.8, "clink": 0.5, "tile": 0.5, "spray": 0.5, "pour": 0.55, "pump": 0.3,
        "crack": 1.0, "rain": 0.6, "thunder": 0.8, "plane_start": 0.9, "plane_engine": 0.7,
        "plane_flyby": 1.0, "crash_tree": 1.1, "hay_thud": 0.9, "flop": 1.0, "roll": 0.4, "pant": 0.8,
-       "tick": 0.6}
-VARY = {"step", "hammer", "clink", "tile", "pop", "scoop", "dump", "boing", "whoosh", "splash"}
+       "tick": 0.6, "alarm": 0.8, "boil": 0.6, "steam_hiss": 0.8, "turbine": 0.5, "hum": 0.35, "geiger": 0.7,
+       "switch": 1.0, "power_up": 0.8, "rods_slide": 0.8,
+       "weld": 0.5, "bubbles": 0.6, "underwater_thud": 1.0, "creak": 0.9, "rivet_pop": 0.9, "water_rush": 0.6,
+       "boat_motor": 0.5, "paddle_splash": 0.5, "lake": 0.35, "wind": 0.6, "quack": 0.9, "ship_horn": 1.0,
+       "rumble": 0.6, "stone_thud": 0.9, "steel_clank": 0.6, "train_pass": 0.7, "traffic": 0.45,
+       "bridge_groan": 0.9}
+# Events without a library sound (not generated yet) fall back to a close synthesized one.
+FALLBACK = {"rumble": "engine", "stone_thud": "dump", "steel_clank": "clink", "train_pass": "roll",
+            "traffic": "engine", "bridge_groan": "creak", "crack": "dump"}
+VARY = {"step", "hammer", "clink", "tile", "pop", "scoop", "dump", "boing", "whoosh", "splash", "geiger"}
 
 
 def render_events(events: list, fps: int, total_seconds: float, path: str, ambience: bool = True) -> str:
@@ -267,6 +275,8 @@ def render_events(events: list, fps: int, total_seconds: float, path: str, ambie
         dur = ev.get("duration", 0) / fps
         gain = ev.get("gain", 1.0) * MIX.get(kind, 1.0)
         sound = None
+        if lib.load(kind) is None and kind in FALLBACK:
+            kind = FALLBACK[kind]
         if lib.load(kind) is not None:
             if lib.is_loop(kind):
                 sound = lib.tiled(kind, max(dur, 1.0))
@@ -278,15 +288,18 @@ def render_events(events: list, fps: int, total_seconds: float, path: str, ambie
             sound, gain = LOOPS[kind](dur), ev.get("gain", 1.0)
         if sound is not None:
             add(sound, at, gain)
-    if ambience:
+    # A barely-there outdoor bed (birds were far too loud); sets with their own ambience (lake water)
+    # skip the birds entirely.
+    own_bed = any(ev["kind"] in ("lake",) for ev in events)
+    if ambience and not own_bed:
         bed = lib.tiled("birds", total_seconds) if lib.load("birds") is not None else None
         if bed is not None:
-            add(bed, 0, 0.35)
+            add(bed, 0, 0.07)
             wind = lib.tiled("wind", total_seconds)
             if wind is not None:
-                add(wind, 0, 0.25)
+                add(wind, 0, 0.1)
         else:
-            add(birds(total_seconds), 0, 1.0)
+            add(birds(total_seconds), 0, 0.2)
     peak = np.abs(track).max()
     if peak > 0.95:
         track *= 0.95 / peak

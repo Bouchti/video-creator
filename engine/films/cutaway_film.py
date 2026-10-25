@@ -48,8 +48,14 @@ try:                                          # semi-realistic grade: AgX + punc
 except TypeError:
     pass
 scene.eevee.taa_render_samples = int(os.getenv("CUT_SAMPLES", "48"))
+scene.render.resolution_percentage = int(os.getenv("CUT_PCT", "100"))     # QA stills render at 50
 # Ray tracing costs ~12 s/frame for a near-identical image: off unless CUT_RT=1.
 scene.eevee.use_raytracing = bool(os.getenv("CUT_RT"))
+scene.eevee.shadow_ray_count = 1
+for _attr, _val in (("volumetric_tile_size", "4"), ("volumetric_samples", 64), ("volumetric_end", 60.0),
+                    ("use_volumetric_shadows", False)):
+    if hasattr(scene.eevee, _attr):
+        setattr(scene.eevee, _attr, _val)                # 48 TAA samples already average soft shadows: same image, 5% faster
 toy.setup_world(sun_elevation_deg=42, sun_rotation_deg=190, strength=0.22)
 sun = toy.add_sun(rotation_deg=(52, 0, 22), strength=4.2, angle_deg=2)
 fill = toy.add_area("Fill", (0, -12, 4), (0, 0, -1.2), energy=900, size=12)
@@ -61,6 +67,7 @@ set_cls = next(v for k, v in vars(set_mod).items()
                if k.endswith("Set") and isinstance(v, type) and v.__module__ == set_mod.__name__)
 stage = set_cls(scene, sun, fill, bg, total)
 stage.run(beats, spans, EPI)
+print(f"interpolation: {toy.normalize_interpolation()} inherited keys reset to Bezier")
 
 # ---------------- sound events: epilogue → hook; nothing from the build under hook/rewind ----------------
 for ev in events._events:
@@ -77,7 +84,35 @@ def render_frame(f):
 
 
 scene.render.image_settings.file_format = "PNG"
-if only_frames:
+if os.getenv("CUT_PROBE"):                    # debugging: run a script against the staged scene, no render
+    exec(open(os.environ["CUT_PROBE"], encoding="utf-8").read())
+elif "--qa" in args:
+    from engine import qa
+    from engine.character import Character
+    chars = {}
+    for v in vars(stage).values():
+        for c in (v if isinstance(v, list) else [v]):
+            if isinstance(c, Character):
+                chars[c.name] = c.root
+    mover = getattr(getattr(stage, "plane", None), "root", None)
+    labelled = [(f"{idx + 1:02d}_{b['action']}", *spans[idx]) for idx, b in enumerate(beats) if b["action"] != "rewind"]
+    rep = qa.run(scene, chars, mover, labelled, render_frame, step=int(os.getenv("QA_STEP", "3")),
+                 out_path=os.path.join(out_dir, "qa.json"))
+    for beat, items in rep["beats"].items():
+        for it in items:
+            print(f"QA {beat} f{it['frames'][0]}-{it['frames'][1]}: {it['issue']}")
+    allow = getattr(stage, "QA_ALLOW", None)
+    if allow is not None:                       # sets that declare their by-design contacts get the object check
+        chars_re = "|".join(chars) or "^$"
+        ends = sorted({e for _, _, e in labelled})
+        objs = qa.run_objects(scene, ends, allow=allow,
+                              skip=rf"^(field|g_|hill|cloud|label_|lbl|Rig|leaf|trunk|{chars_re})|_p\d+$"
+                                   r"|(bubbles|steam|plume|leak\d*|dust|wash|leaves)_\d+$")
+        for pair, f in sorted(objs.items(), key=lambda kv: kv[1]):
+            print(f"QA object f{f}: {pair}")
+        rep["count"] += len(objs)
+    print(f"QA issues: {rep['count']}")
+elif only_frames:
     for f in only_frames:
         scene.frame_set(render_frame(f))
         scene.render.filepath = os.path.join(out_dir, f"still_{f:04d}.png")
@@ -94,9 +129,13 @@ elif preview:
 else:
     # Parallel workers (make_film) each render a chunk: --range=A:B of the build frames and/or
     # --hook. Without these flags this process renders everything.
+    # --ranges=A:B,C:D re-renders only those frames (make_film --redo); the scene is staged once.
     rng = next((a.split("=", 1)[1] for a in args if a.startswith("--range=")), None)
-    do_hook = "--hook" in args or rng is None
+    many = next((a.split("=", 1)[1] for a in args if a.startswith("--ranges=")), None)
+    do_hook = "--hook" in args or (rng is None and many is None)
     a_, b_ = (int(x) for x in rng.split(":")) if rng else (BUILD_START, total)
+    if many is not None:
+        a_, b_ = 1, 0                                    # handled below
     frames_dir = os.path.join(out_dir, "frames")
     if do_hook:
         # Hook: render the epilogue range as an animation (one still per call re-syncs the whole
@@ -108,6 +147,11 @@ else:
             os.replace(os.path.join(frames_dir, f"h_{f + EPI:04d}.png"), os.path.join(frames_dir, f"f_{f:04d}.png"))
     if a_ <= b_:
         scene.frame_start, scene.frame_end = a_, b_
+        scene.render.filepath = os.path.join(frames_dir, "f_")
+        bpy.ops.render.render(animation=True)
+    for part in (many.split(",") if many else []):
+        a2, b2 = (int(x) for x in part.split(":"))
+        scene.frame_start, scene.frame_end = a2, b2
         scene.render.filepath = os.path.join(frames_dir, "f_")
         bpy.ops.render.render(animation=True)
 print("DONE")

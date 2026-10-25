@@ -91,6 +91,25 @@ def _draw_overlay(frame: Image.Image, overlay: dict, t: float) -> Image.Image:
                 draw.text((W / 2, ly), line, font=lf, anchor="mt", fill=rgba(PALETTE["text"], la),
                           stroke_width=7, stroke_fill=rgba(PALETTE["dark"], la))
                 ly += line_height(lf)
+    elif kind == "question":
+        # End card: the closing question in a white speech bubble (no call to action: the question is enough).
+        p = ease_out_back(progress(t, 0.0, 0.4))
+        a = min(1.0, max(0.0, p))
+        if a > 0:
+            q = str(overlay.get("text") or "").strip()
+            font, lines = fit_text(draw, q, W - 260, 3, 78, 50)
+            lh = line_height(font)
+            top = int(SAFE_TOP - 40 * (1 - p))
+            box = (100, top, W - 100, top + lh * len(lines) + 60)
+            draw.rounded_rectangle(box, radius=48, fill=(255, 255, 255, int(240 * a)),
+                                   outline=rgba(PALETTE["dark"], a), width=6)
+            tail = [(W // 2 - 50, box[3] - 3), (W // 2 + 30, box[3] - 3), (W // 2 - 70, box[3] + 60)]
+            draw.polygon(tail, fill=(255, 255, 255, int(240 * a)))
+            draw.line([tail[0], tail[2], tail[1]], fill=rgba(PALETTE["dark"], a), width=6)
+            y = top + 30
+            for line in lines:
+                draw.text((W / 2, y), line, font=font, anchor="mt", fill=rgba(PALETTE["dark"], a))
+                y += lh
     else:
         return frame
     frame.paste(layer, (0, 0), layer)

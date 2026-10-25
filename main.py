@@ -204,14 +204,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["cutaway", "animated", "pexels", "comfy", "local-ai", "hailuo"],
+    parser.add_argument("--source", choices=["cutaway", "evolution", "animated", "pexels", "comfy", "local-ai", "hailuo"],
                         default=DEFAULT_SOURCE,
                         help="cutaway (3D cross-section explainer: the showrunner picks the best topic our "
                              "Blender sets can film, writes + critiques the script, renders; default), "
+                             "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
+                             "truss -> suspension bridge), "
                              "animated (Pixar-style 3D scenes generated locally), pexels "
                              "(free stock + photos + diagrams), comfy (legacy local AI video), local-ai "
                              "(durable MiniMax/Wan production), or hailuo "
                              "(paid cloud AI video, opt-in)")
+    parser.add_argument("--set", default=None, help="Evolution set for --source evolution (default: the first in "
+                                                    "engine/sets EVOLUTION; new sets: python -m agents.set_builder)")
     parser.add_argument("--tone", default=None, help="Script tone")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help="Voice style")
     parser.add_argument("--duration", type=int, default=75,
@@ -226,11 +230,15 @@ if __name__ == "__main__":
     parser.add_argument("--no-narration", action="store_true", help="Create a music-and-ambience local AI edit")
     args = parser.parse_args()
 
-    if args.source == "cutaway":
-        # Topic → research → competing drafts → editor → render, all in the showrunner.
-        # A positional topic is treated as the angle to develop.
-        from agents.showrunner import run as run_showrunner
-        logging.getLogger("pipeline").info(f"Film: {run_showrunner(angle=args.topic)}")
+    if args.source in ("evolution", "cutaway"):
+        # The 3D pipelines run under the autopilot: script → voice → Blender render (every ~3 s window
+        # validated as it renders) → sound + captions → final check, and every failure is repaired and
+        # redone automatically (agents/autopilot.py). A positional topic is the angle to develop.
+        from agents.autopilot import GiveUp, run as autopilot
+        try:
+            logging.getLogger("pipeline").info(f"Film: {autopilot(args.source, angle=args.topic, set_id=args.set)}")
+        except GiveUp:
+            raise SystemExit(1)
         raise SystemExit(0)
 
     # Pass tone=None if user didn't override, so Leader Agent's choice wins

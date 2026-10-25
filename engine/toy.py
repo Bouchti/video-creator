@@ -261,6 +261,61 @@ def empty(name, location=(0, 0, 0), parent=None, rotation=(0, 0, 0)):
     return obj
 
 
+def _socket(sockets, name, kind):
+    return next(s for s in sockets if s.name == name and s.type == kind and s.enabled)
+
+
+def scatter(name, x0, x1, y0, y1, instance, density, size=1.0, size_random=0.6, z=0.002, seed=0, tilt=0.15):
+    """Scatter `instance` (e.g. a grass tuft) over a rectangle and bake it into ONE static mesh.
+
+    Particle hair re-generates every instance on every frame (CPU-bound renders); a realized
+    Geometry Nodes scatter is evaluated once and applied, so the renderer just reuses the mesh."""
+    bpy.ops.mesh.primitive_plane_add(size=1, location=((x0 + x1) / 2, (y0 + y1) / 2, z))
+    em = bpy.context.active_object
+    em.name = name
+    em.scale = (x1 - x0, y1 - y0, 1)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    ng = bpy.data.node_groups.new(f"{name}_scatter", "GeometryNodeTree")
+    ng.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    ng.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    n, link = ng.nodes, ng.links.new
+    gin, gout = n.new("NodeGroupInput"), n.new("NodeGroupOutput")
+    dist = n.new("GeometryNodeDistributePointsOnFaces")
+    dist.distribute_method = "RANDOM"
+    dist.inputs["Density"].default_value = density
+    dist.inputs["Seed"].default_value = seed
+    info = n.new("GeometryNodeObjectInfo")
+    info.inputs["Object"].default_value = instance
+    rot = n.new("FunctionNodeRandomValue")
+    rot.data_type = "FLOAT_VECTOR"
+    _socket(rot.inputs, "Min", "VECTOR").default_value = (-tilt, -tilt, 0)
+    _socket(rot.inputs, "Max", "VECTOR").default_value = (tilt, tilt, 2 * math.pi)
+    _socket(rot.inputs, "Seed", "INT").default_value = seed + 1
+    scl = n.new("FunctionNodeRandomValue")
+    scl.data_type = "FLOAT"
+    _socket(scl.inputs, "Min", "VALUE").default_value = size * (1 - size_random)
+    _socket(scl.inputs, "Max", "VALUE").default_value = size
+    _socket(scl.inputs, "Seed", "INT").default_value = seed + 2
+    inst = n.new("GeometryNodeInstanceOnPoints")
+    real = n.new("GeometryNodeRealizeInstances")
+    link(gin.outputs[0], dist.inputs["Mesh"])
+    link(dist.outputs["Points"], inst.inputs["Points"])
+    link(info.outputs["Geometry"], inst.inputs["Instance"])
+    link(_socket(rot.outputs, "Value", "VECTOR"), inst.inputs["Rotation"])
+    link(_socket(scl.outputs, "Value", "VALUE"), inst.inputs["Scale"])
+    link(inst.outputs["Instances"], real.inputs["Geometry"])
+    link(real.outputs["Geometry"], gout.inputs[0])
+    mod = em.modifiers.new("scatter", "NODES")
+    mod.node_group = ng
+    with bpy.context.temp_override(object=em, active_object=em, selected_objects=[em]):
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+    for mat in instance.data.materials:
+        if mat and mat.name not in em.data.materials:
+            em.data.materials.append(mat)
+    em.visible_shadow = False            # millions of blades in every shadow map, for shadows nobody sees
+    return em
+
+
 def parent_keep(child, parent):
     """Parent without moving the child in world space."""
     mw = child.matrix_world.copy()
@@ -334,12 +389,45 @@ def key_hold(obj, data_path: str, frame: int, interpolation: str = None):
         set_interpolation(obj, data_path, (frame,), interpolation)
 
 
+# Blender gives a newly inserted key the interpolation of the key before it, so ONE constant
+# hold (a cut) silently turns every later key on that curve into a jump. Every deliberate
+# interpolation is recorded here; normalize_interpolation() resets all other keys to Bezier.
+_explicit = {}
+
+
 def set_interpolation(obj, data_path: str, frames, interpolation: str):
     """Set the interpolation of the segment starting at each given keyframe."""
     targets = set(int(f) for f in frames)
+    for f in targets:
+        _explicit[(obj.as_pointer(), data_path, f)] = interpolation
     for fc in fcurves(obj):
         if fc.data_path != data_path:
             continue
         for kp in fc.keyframe_points:
             if int(round(kp.co.x)) in targets:
                 kp.interpolation = interpolation
+
+
+def set_key_interpolation(owner, fc, kp, interpolation: str):
+    """Deliberately set one keyframe's interpolation (recorded, survives normalize_interpolation)."""
+    _explicit[(owner.as_pointer(), fc.data_path, int(round(kp.co.x)))] = interpolation
+    kp.interpolation = interpolation
+
+
+def normalize_interpolation():
+    """Undo inherited interpolation: every key not set on purpose becomes Bezier (call once after
+    the whole film is staged). Discrete channels (visibility) are left alone."""
+    owners = list(bpy.data.objects) + list(bpy.data.cameras) + list(bpy.data.lights) + \
+        [m.node_tree for m in bpy.data.materials if m.node_tree] + \
+        [w.node_tree for w in bpy.data.worlds if w.node_tree]
+    fixed = 0
+    for owner in owners:
+        for fc in fcurves(owner):
+            if "hide" in fc.data_path:
+                continue
+            for kp in fc.keyframe_points:
+                want = _explicit.get((owner.as_pointer(), fc.data_path, int(round(kp.co.x))), "BEZIER")
+                if kp.interpolation != want:
+                    kp.interpolation = want
+                    fixed += 1
+    return fixed

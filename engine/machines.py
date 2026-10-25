@@ -10,7 +10,7 @@ import random
 import bpy
 from mathutils import Vector
 
-from engine import events, toy
+from engine import events, textures as tx, toy
 
 R = math.radians
 
@@ -69,7 +69,9 @@ class Puffs:
             p.keyframe_insert("scale", frame=f + life)
             p.location = (0, 0, -50)
             p.keyframe_insert("location", frame=f + life + 1)
-            free.append(p)
+            # (no free.append(p) here: a puff is reusable only once its life is over; refilled above
+            # from the parts that are no longer busy. Appending it back made pop() reuse the same
+            # single puff for every emission, so only one ever showed.)
         for p in self.parts:
             _constant_jumps(p)
 
@@ -78,9 +80,9 @@ class Excavator:
     """Faces local +X. Joints: turntable (Z yaw) → boom → stick → bucket (Y pitch)."""
 
     def __init__(self, location=(0, 0, 0), facing_deg=0.0, scale=0.9):
-        yellow = toy.material("cat_yellow", toy.srgb("#FFB400"), roughness=0.3, coat=0.7)
-        dark = toy.material("track_dark", toy.srgb("#2B2B2E"), roughness=0.7)
-        steel = toy.material("bucket_steel", toy.srgb("#55585E"), roughness=0.35, metallic=0.8)
+        yellow = tx.paint("cat_yellow", "#FFB400", 0.3, coat=0.7, seams=0.7, seam_axis="x")
+        dark = tx.rubber("track_dark", "#2B2B2E", 0.7, tread=0)
+        steel = tx.metal("bucket_steel", "#55585E", 0.35, along="x", metallic=0.8)
         glass = toy.material("cab_glass", toy.srgb("#7FC4E8"), roughness=0.05, coat=1.0)
         black = toy.material("decal_black", toy.srgb("#1A1A1A"), roughness=0.4)
 
@@ -345,7 +347,7 @@ def _constant_jumps(obj):
         pts = fc.keyframe_points
         for k in range(len(pts) - 1):
             if pts[k + 1].co.x - pts[k].co.x <= 1.01:
-                pts[k].interpolation = "CONSTANT"
+                toy.set_key_interpolation(obj, fc, pts[k], "CONSTANT")
 
 
 def blueprint(name="blueprint"):
@@ -364,8 +366,8 @@ def nozzle(name="nozzle"):
 
 
 def hammer_prop(name="hammer"):
-    wood = toy.material("hammer_wood", toy.srgb("#C08A50"), roughness=0.6)
-    steel = toy.material("hammer_steel", toy.srgb("#5F6368"), roughness=0.3, metallic=0.9)
+    wood = tx.wood("hammer_wood", "#A8743F", "#C9925A", along="z")
+    steel = tx.metal("hammer_steel", "#5F6368", 0.3, along="x")
     handle = toy.cylinder(name, 0.02, 0.32, (0, 0, -0.12), mat=wood)
     toy.box(f"{name}_head", (0.16, 0.06, 0.06), (0, 0, -0.16), mat=steel, parent=handle, bevel=0.01)
     return handle

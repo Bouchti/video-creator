@@ -11,9 +11,9 @@ import random
 
 import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Euler, Vector
 
-from engine import events, toy
+from engine import events, textures as tx, toy
 from engine.backyard import _appear, _hide, _key
 from engine.camera import CameraRig, facing_to
 from engine.character import Character
@@ -25,10 +25,14 @@ V = Vector
 R = math.radians
 LANE_Y = 1.6                    # the plane's line along the field
 P0 = V((-6.5, LANE_Y, 0))       # in front of the barn (the workshop spot)
+WING_X = -0.9                   # wing chord centre on the body (behind the cockpit at x=0.5)
+SEAT_X = 0.5
+WORK = V((P0.x + 1.2, LANE_Y - 1.5, 0))     # Max's spot beside the nose: clear of wing, prop and camera
+PUSH = V((-4.0, 0, 0))                      # Max's spot (relative to the plane) pushing the tail
 HAY_X = 6.6
 TREE = V((9.6, LANE_Y + 0.2, 0))
 OAK_SCALE = 1.25
-CRASH = TREE + V((-1.5, -0.2, 4.6))           # where the plane sticks in the oak's canopy
+CRASH = V((5.5, LANE_Y - 0.2, 4.6))          # nose buried in the oak's leaves (edge x~7.5), cockpit still clear
 CAM_Y = -10.0
 
 
@@ -127,19 +131,26 @@ class Plane:
     """Procedural ultralight assembled in stages (each part group appears/disappears on cue)."""
 
     def __init__(self):
-        red, cream = _mat("plane_red", "#D8342C", 0.35, coat=0.6), _mat("plane_cream", "#F1E6CF", 0.6)
-        metal, dark = _mat("plane_metal", "#9AA0A6", 0.3, metallic=0.9), _mat("plane_tyre", "#222222", 0.8)
-        wood = toy.noise_material("plank_wood", toy.srgb("#B07A45"), toy.srgb("#C9905A"), scale=8, bump=0.3)
+        red = tx.paint("plane_red", "#D8342C", 0.32, coat=0.6, seams=0.55, seam_axis="x")
+        cream = tx.paint("plane_cream", "#F1E6CF", 0.45, coat=0.4)
+        skin = tx.fabric("wing_fabric", "#F1E6CF", rib=0.4, axis="y")             # doped fabric over ribs
+        fin_skin = tx.fabric("fin_fabric", "#D8342C", rib=0.28, axis="x", coat=0.4)
+        metal = tx.metal("plane_metal", "#9AA0A6", 0.3)
+        cowl_metal = tx.metal("cowl_metal", "#B9BEC4", 0.25, along="x")
+        dark = tx.rubber("plane_tyre", tread=36)
+        seat_mat = tx.cloth("seat_leather", "#5A3A26", rough=0.6)
+        wood = tx.planks("plank_wood", "#B07A45", "#C9905A", width=0.26, across="x", along="y", seam_dark=0.35)
+        prop_wood = tx.wood("prop_wood", "#8A5A32", "#B98250", along="z")
         self.root = toy.empty("plane_root", P0)
         self.body = toy.empty("plane_body", (0, 0, 0), self.root)          # banks/pitches around here
         g = {}
         fus = toy.box("fuselage", (4.4, 0.8, 0.9), (-0.25, 0, 1.02), mat=red, parent=self.body, bevel=0.24)
         glass = _mat("windshield", "#BFE3F5", 0.05, coat=1.0)
-        shield = toy.box("windshield", (0.12, 0.7, 0.45), (0.65, 0, 1.55), mat=glass, parent=self.body, bevel=0.04,
+        shield = toy.box("windshield", (0.12, 0.7, 0.45), (1.05, 0, 1.55), mat=glass, parent=self.body, bevel=0.04,
                          rotation=(0, R(-28), 0))
         stripe = toy.box("fus_stripe", (4.42, 0.735, 0.12), (-0.25, 0, 1.0), mat=cream, parent=self.body, bevel=0.03)
         tailcone = toy.box("tailcone", (1.0, 0.4, 0.4), (-2.6, 0, 1.08), mat=red, parent=self.body, bevel=0.12)
-        seat = toy.box("seat", (0.5, 0.45, 0.12), (0.1, 0, 1.18), mat=dark, parent=self.body, bevel=0.03)
+        seat = toy.box("seat", (0.5, 0.45, 0.12), (SEAT_X, 0, 1.18), mat=seat_mat, parent=self.body, bevel=0.03)
         wheels = []
         for side in (-1, 1):
             wheels.append(toy.cylinder(f"wheel{side}", 0.26, 0.14, (0.6, 0.55 * side, 0.26), rotation=(R(90), 0, 0),
@@ -152,41 +163,43 @@ class Plane:
             [o for o in self.body.children if o.name.startswith("gear")]
         self.wheels = wheels + [tailwheel]
         # flat plank wings (attempt 1)
-        flat = toy.box("flat_wing", (1.3, 8.0, 0.06), (-0.1, 0, 1.62), mat=wood, parent=self.body, bevel=0.01)
+        flat = toy.box("flat_wing", (1.3, 8.0, 0.06), (WING_X, 0, 1.62), mat=wood, parent=self.body, bevel=0.01)
         g["flat"] = [flat]
         # airfoil wings + struts
-        wing, self.profile = airfoil_mesh("wing", 1.45, 8.0, mat=cream)
+        wing, self.profile = airfoil_mesh("wing", 1.45, 8.0, mat=skin)
         wing.parent = self.body
-        wing.location = (-0.1, 0, 1.62)
+        wing.location = (WING_X, 0, 1.62)
         wing.rotation_euler = (0, R(-3), 0)                                 # a little angle of attack
-        struts = [toy.cylinder(f"strut{side}", 0.025, 1.9, (0.0, 1.5 * side, 1.35), rotation=(R(-60 * side), 0, 0),
+        struts = [toy.cylinder(f"strut{side}", 0.025, 1.9, (WING_X, 1.5 * side, 1.35), rotation=(R(-60 * side), 0, 0),
                                mat=metal, parent=self.body) for side in (-1, 1)]
         g["wing"] = [wing] + struts
-        g["struts_flat"] = [toy.cylinder(f"fstrut{side}", 0.025, 1.9, (0.0, 1.5 * side, 1.35),
+        g["struts_flat"] = [toy.cylinder(f"fstrut{side}", 0.025, 1.9, (WING_X, 1.5 * side, 1.35),
                                          rotation=(R(-60 * side), 0, 0), mat=metal, parent=self.body)
                             for side in (-1, 1)]
         g["flat"] += g["struts_flat"]
         # engine + propeller
-        cowl = toy.sphere("cowl", 0.42, (2.05, 0, 1.0), scale=(1.1, 0.85, 0.9), mat=metal, parent=self.body)
+        cowl = toy.sphere("cowl", 0.42, (2.05, 0, 1.0), scale=(1.1, 0.85, 0.9), mat=cowl_metal, parent=self.body)
         self.prop = toy.empty("prop", (2.55, 0, 1.0), self.body)
         hub = toy.sphere("prop_hub", 0.1, (0, 0, 0), scale=(1.6, 1, 1), mat=red, parent=self.prop)
-        blades = [toy.box(f"blade{k}", (0.05, 0.13, 0.85), (0, 0, 0.42 * (1 if k else -1)), mat=wood,
+        blades = [toy.box(f"blade{k}", (0.05, 0.13, 0.85), (0, 0, 0.42 * (1 if k else -1)), mat=prop_wood,
                           parent=self.prop, bevel=0.02) for k in range(2)]
         g["engine"] = [cowl, hub] + blades
         # tail
-        stab, _ = airfoil_mesh("stabilizer", 0.75, 2.8, thickness=0.09, camber=0.0, mat=cream)
+        stab, _ = airfoil_mesh("stabilizer", 0.75, 2.8, thickness=0.09, camber=0.0, mat=skin)
         stab.parent = self.body
         stab.location = (-2.75, 0, 1.12)
-        fin = toy.box("fin", (0.85, 0.06, 0.85), (-2.85, 0, 1.6), mat=red, parent=self.body, bevel=0.06)
+        fin = toy.box("fin", (0.85, 0.06, 0.85), (-2.85, 0, 1.6), mat=fin_skin, parent=self.body, bevel=0.06)
         g["tail"] = [stab, fin]
         # control surfaces (hinged so they can deflect): ailerons, elevator, rudder
         self.hinges = {}
-        for nm, pos, size, axis_rot in (("aileron_L", (-0.9, 2.9, 1.63), (0.35, 1.8, 0.04), (0, 0, 0)),
-                                        ("aileron_R", (-0.9, -2.9, 1.63), (0.35, 1.8, 0.04), (0, 0, 0)),
+        ail_x = WING_X - 0.72                                               # the wing's trailing edge
+        for nm, pos, size, axis_rot in (("aileron_L", (ail_x, 2.9, 1.6), (0.35, 1.8, 0.04), (0, 0, 0)),
+                                        ("aileron_R", (ail_x, -2.9, 1.6), (0.35, 1.8, 0.04), (0, 0, 0)),
                                         ("elevator", (-3.18, 0, 1.12), (0.3, 2.7, 0.04), (0, 0, 0)),
                                         ("rudder", (-3.35, 0, 1.6), (0.3, 0.05, 0.8), (0, 0, 0))):
             hinge = toy.empty(f"hinge_{nm}", pos, self.body)
-            toy.box(nm, size, (-size[0] / 2, 0, 0), mat=_mat("ctrl_yellow", "#F2C230", 0.4), parent=hinge, bevel=0.01)
+            toy.box(nm, size, (-size[0] / 2, 0, 0), mat=tx.fabric("ctrl_yellow", "#F2C230", rib=0.3, axis="y"), parent=hinge,
+                    bevel=0.01)
             self.hinges[nm] = hinge
         g["controls"] = [h.children[0] for h in self.hinges.values()]
         self.groups = g
@@ -260,7 +273,7 @@ class PlaneStorySet:
         self.max = Character("Max", {"hat": "#FF7A00", "iris": "#7A4A1C"})
         self.pilot = Character("MaxPilot", {"hat": "#FF7A00", "iris": "#7A4A1C", "scale": 0.9})
         self.pilot.root.parent = self.plane.body
-        self.pilot.place(1, V((0.15, 0, 0.55)), 90)                           # facing +X (flight direction)
+        self.pilot.place(1, V((SEAT_X + 0.05, 0, 0.55)), 90)                  # facing +X (flight direction)
         self.pilot.sit(1, total + 400, frames=1)
         toy.hide_tree(self.pilot.root, 1, True)
         self.kids = [Character("Kid1", {"hat": None, "mustache": False, "shirt": "#FF5D8F", "overalls": "#3A7BD5",
@@ -273,10 +286,11 @@ class PlaneStorySet:
         self.max.hold(self.hammer, "R")
         self.hammer.rotation_euler = (R(-90), 0, 0)
         toy.hide_tree(self.hammer, 1, True)
-        self.max.place(1, V((-3.9, 0.3, 0)), facing_to((-3.9, 0.3, 0), (-6.0, LANE_Y, 0)))
+        self.max.place(1, WORK, 0)
         for c in (self.max, self.pilot):
             c.auto_blink(1, total + 400, seed=len(c.name))
         self.flying = False
+        self._tracks = []
 
     # ------------------- world -------------------
 
@@ -286,48 +300,70 @@ class PlaneStorySet:
         dirt = toy.noise_material("strip_dirt", toy.srgb("#9C7A52"), toy.srgb("#B8946A"), scale=12, bump=0.5)
         toy.box("airstrip", (40, 2.2, 0.03), (0, LANE_Y, -0.005), mat=dirt, bevel=0)
         tuft = _grass_tuft()
-        for nm, (x0, x1, y0, y1) in (("g_front", (-16, 16, -3, LANE_Y - 1.15)), ("g_back", (-16, 16, LANE_Y + 1.15, 9))):
-            bpy.ops.mesh.primitive_plane_add(size=1, location=((x0 + x1) / 2, (y0 + y1) / 2, 0.002))
-            em = bpy.context.active_object
-            em.name = nm
-            em.scale = (x1 - x0, y1 - y0, 1)
-            bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-            ps = em.modifiers.new(f"{nm}_ps", "PARTICLE_SYSTEM").particle_system.settings
-            ps.type, ps.count, ps.hair_length = "HAIR", int((x1 - x0) * (y1 - y0) * 260), 1.0
-            ps.render_type, ps.instance_object, ps.particle_size, ps.size_random = "OBJECT", tuft, 1.4, 0.6
-            ps.use_rotations, ps.rotation_mode, ps.phase_factor_random, ps.use_advanced_hair = True, "NOR", 2.0, True
-            if hasattr(em, "show_instancer_for_render"):
-                em.show_instancer_for_render = False
+        for k, (nm, (x0, x1, y0, y1), dens, size) in enumerate((
+                ("g_front", (-16, 16, -3, LANE_Y - 1.15), 260, 1.4),
+                ("g_near", (-18, 18, -12, -3), 150, 2.0),                      # sparser, bigger
+                ("g_back", (-16, 16, LANE_Y + 1.15, 9), 260, 1.4))):
+            toy.scatter(nm, x0, x1, y0, y1, tuft, dens, size=size, seed=k)     # one static mesh, no particles
+        tuft.hide_render = True
         # Max's red barn (the workshop)
-        red, white = _mat("barn_red", "#A8322B", 0.7), _mat("barn_white", "#F2EEE6", 0.6)
-        roof = _mat("barn_roof", "#4A4F57", 0.6)
+        red = tx.planks("barn_red", "#A8322B", "#922A24", width=0.28)                 # vertical barn boards
+        white = tx.planks("barn_white", "#F2EEE6", "#E4DED2", width=0.2, seam_dark=0.25)
+        trim = tx.paint("barn_trim", "#F2EEE6", 0.55, coat=0.0)
+        roof = tx.corrugated("barn_roof", "#6E757E", pitch=0.12, axis="x")
         toy.box("barn", (6, 5, 4), (-11.5, 5.5, 2.0), mat=red, bevel=0.05)
         for k, s_ in enumerate((-1, 1)):
             toy.box(f"barn_roof{k}", (6.6, 3.2, 0.2), (-11.5, 5.5 + 1.25 * s_, 4.75), mat=roof, bevel=0.04,
                     rotation=(R(-38 * s_), 0, 0))
         toy.box("barn_door", (2.4, 0.1, 2.8), (-11.5, 2.97, 1.4), mat=white, bevel=0.03)
-        toy.box("barn_x1", (0.12, 0.12, 3.4), (-11.5, 2.9, 1.4), mat=red, rotation=(0, R(40), 0), bevel=0.01)
-        toy.box("barn_x2", (0.12, 0.12, 3.4), (-11.5, 2.9, 1.4), mat=red, rotation=(0, R(-40), 0), bevel=0.01)
+        brace = tx.paint("barn_brace", "#A8322B", 0.6, coat=0.0)
+        toy.box("barn_x1", (0.12, 0.12, 3.4), (-11.5, 2.9, 1.4), mat=brace, rotation=(0, R(40), 0), bevel=0.01)
+        toy.box("barn_x2", (0.12, 0.12, 3.4), (-11.5, 2.9, 1.4), mat=brace, rotation=(0, R(-40), 0), bevel=0.01)
+        for k, (x, w, h, z) in enumerate(((-11.5, 2.7, 0.16, 2.88), (-12.75, 0.16, 2.9, 1.45),
+                                          (-10.25, 0.16, 2.9, 1.45))):
+            toy.box(f"barn_trim{k}", (w, 0.08, h), (x, 2.95, z), mat=trim, bevel=0.01)          # door frame
+        toy.box("barn_loft", (1.4, 0.1, 1.0), (-11.5, 2.97, 3.35), mat=white, bevel=0.03)     # hay-loft door
+        toy.box("barn_loft_trim", (1.6, 0.06, 1.2), (-11.5, 2.99, 3.35), mat=trim, bevel=0.01)
         # house, fence, hills, trees, haystack, windsock
-        toy.box("farmhouse", (8, 5, 4.2), (4.0, 16.0, 2.1), mat=white, bevel=0.05)
-        toy.box("farmhouse_roof", (8.6, 5.6, 0.3), (4.0, 16.0, 4.4), mat=_mat("fh_roof", "#B8532F", 0.6), bevel=0.05)
-        wood = toy.noise_material("fence_wood2", toy.srgb("#8B6A4A"), toy.srgb("#A07E5C"), scale=10, bump=0.2)
+        siding = tx.planks("fh_siding", "#F2EEE6", "#E8E2D6", width=0.22, across="z", along="xy", lap=True,
+                           seam_dark=0.22)
+        toy.box("farmhouse", (8, 5, 4.2), (4.0, 16.0, 2.1), mat=siding, bevel=0.05)
+        shingle = tx.shingles("fh_roof", "#B8532F", "#7E3520")
+        for k, s_ in enumerate((-1, 1)):
+            toy.box(f"farmhouse_roof{k}", (8.8, 3.3, 0.18), (4.0, 16.0 + 1.35 * s_, 5.05), mat=shingle, bevel=0.03,
+                    rotation=(R(-32 * s_), 0, 0))
+        bpy.ops.mesh.primitive_cylinder_add(vertices=3, radius=1.0, depth=7.9, location=(4.0, 16.0, 4.71),
+                                            rotation=(0, R(-90), 0))         # triangular prism, apex up
+        gable = bpy.context.active_object                                     # the gable wall under the roof
+        gable.name = "fh_gable"
+        gable.scale = (1.02, 2.83, 1.0)
+        bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)   # siding runs level
+        toy._finish(gable, siding, subdiv=0, smooth=False)
+        glass = _mat("fh_glass", "#7FA9C4", 0.08, coat=1.0)
+        for k, x in enumerate((1.2, 3.0, 6.8)):
+            toy.box(f"fh_win{k}", (1.1, 0.08, 1.2), (x, 13.47, 2.4), mat=glass, bevel=0.01)
+            toy.box(f"fh_wframe{k}", (1.3, 0.06, 1.4), (x, 13.5, 2.4), mat=trim, bevel=0.01)
+        toy.box("fh_door", (1.0, 0.08, 2.1), (4.9, 13.47, 1.05),
+                mat=tx.planks("fh_door", "#4E6E8E", "#466482", width=0.14), bevel=0.02)
+        post_wood = tx.wood("fence_post", "#7E5E40", "#9C7B58", along="z")
+        rail_wood = tx.wood("fence_rail", "#7E5E40", "#9C7B58", along="x")
         for i in range(40):
-            toy.box(f"fpost{i}", (0.12, 0.12, 1.2), (-20 + i, 11.0, 0.6), mat=wood, bevel=0.01)
-        toy.box("frail", (40, 0.08, 0.1), (0, 11.0, 0.9), mat=wood, bevel=0)
+            toy.box(f"fpost{i}", (0.12, 0.12, 1.2), (-20 + i, 11.0, 0.6), mat=post_wood, bevel=0.01)
+        toy.box("frail", (40, 0.08, 0.1), (0, 11.0, 0.9), mat=rail_wood, bevel=0)
+        toy.box("frail2", (40, 0.08, 0.1), (0, 11.0, 0.45), mat=rail_wood, bevel=0)
         hill = _mat("hill_green", "#5F9B45", 0.9)
         for k, (x, r) in enumerate(((-25, 14), (8, 18), (40, 16))):
             toy.sphere(f"hill{k}", r, (x, 60, -r * 0.6), scale=(1.6, 1.0, 0.7), mat=hill, subdiv=1)
         self._tree(TREE, OAK_SCALE, oak=True)
         for x, y, s in ((-16, 8, 1.1), (14, 9, 1.0), (-2, 12.5, 0.9), (20, 4, 1.2)):
             self._tree(V((x, y, 0)), s)
-        hay = _mat("hay", "#E2C25A", 0.9)
+        hay = tx.straw("hay")
         for k, (dx, dz) in enumerate(((0, 0.45), (0.0, 1.35), (-0.4, 0.45))):
             toy.cylinder(f"hay{k}", 0.55, 1.4, (HAY_X + 0.9 + dx, LANE_Y + (0.6 if k == 2 else 0), dz),
                          rotation=(R(90), 0, 0), mat=hay, bevel=0.08)
-        toy.cylinder("sock_pole", 0.04, 4.0, (15.0, 7.0, 2.0), mat=_mat("pole", "#DDDDDD", 0.4))  # out of camera paths
+        toy.cylinder("sock_pole", 0.04, 4.0, (15.0, 7.0, 2.0), mat=tx.metal("pole", "#DDDDDD", 0.35))  # out of camera paths
         sock = toy.cylinder("windsock", 0.2, 1.0, (14.5, 7.0, 3.8), rotation=(0, R(80), 0),
-                            mat=_mat("sock", "#FF6A13", 0.6))
+                            mat=tx.cloth("sock", "#FF6A13"))
         toy.add_noise(sock, "rotation_euler", 2, strength=0.15, scale=20)
         self._clouds()
 
@@ -402,6 +438,11 @@ class PlaneStorySet:
             getattr(self, f"a_{a}")(i, *self.spans[i])
         hb, he = self.spans[0]
         getattr(self, f"a_{self.acts[0]}")(0, hb + epilogue_offset, he + epilogue_offset)
+        # Tracking shots follow the plane's FINAL motion: normalize interpolation first (it changes
+        # how the plane moves between keys), then sample the path.
+        toy.normalize_interpolation()
+        for t in self._tracks:
+            self._track(**t)
         self.rig.build()
 
     # ------------------- helpers -------------------
@@ -409,6 +450,7 @@ class PlaneStorySet:
     def ground_max(self, f, spot, face_to=None):
         toy.hide_tree(self.pilot.root, f, True)
         toy.hide_tree(self.max.root, f, False)
+        toy.hide_tree(self.hammer, f, True)            # un-hiding Max un-hides his hammer too; beats that use it re-show it
         self.max.cut_place(f, spot, facing_to(spot, face_to) if face_to is not None else 0)
         self.max.pose(f + 6)
 
@@ -426,17 +468,54 @@ class PlaneStorySet:
     def engine_noise(self, f0, f1):
         events.add(f0, "plane_engine", duration=max(1, f1 - f0))
 
-    def track_plane(self, f0, f1, cam_off=(-3.2, -7.5, 1.3), aim_off=(0.6, 0.0, 1.0), lens=26, cut=False, step=4,
-                    hold=None):
-        """Camera that follows the plane along its animated path (keeps it big in frame).
-        `hold`: (frame, cam, aim) to stop tracking and settle on a fixed framing from that frame."""
-        keys = []
+    def plane_center(self, f):
+        """World position of the plane's visual centre at frame f (follows pitch/roll/yaw, so a
+        plane rearing nose-up stays centred, unlike its root at the wheels)."""
+        pl = self.plane
+        loc = V(toy.value_at(pl.root, "location", f))
+        yaw = toy.value_at(pl.root, "rotation_euler", f)[2]
+        body = Euler(toy.value_at(pl.body, "rotation_euler", f))
+        lift = toy.value_at(pl.body, "location", f)
+        return loc + V(lift) + Euler((0, 0, yaw)).to_matrix() @ body.to_matrix() @ V((-0.3, 0, 1.0))
+
+    def track_plane(self, f0, f1, cam_off=(-3.2, -7.5, 1.3), aim_off=(0, 0, 0), lens=26, cut=False, dist=None,
+                    hold=None, cam_z=None, smooth=10):
+        """Camera that follows the plane. Recorded now, built in run() once the motion is final.
+        cam_off: direction from the plane to the camera (length = distance unless `dist`).
+        hold: (frame, cam, aim) to stop tracking and settle on a fixed framing from that frame.
+        cam_z: keep the camera at this height (looks UP at a climbing plane: sky behind it)."""
+        self._tracks.append(dict(f0=f0, f1=f1, cam_off=cam_off, aim_off=aim_off, lens=lens, cut=cut, dist=dist,
+                                 hold=hold, cam_z=cam_z, smooth=smooth))
+
+    def _track(self, f0, f1, cam_off, aim_off, lens, cut, dist, hold, cam_z, smooth):
         last = hold[0] if hold else f1
-        for f in list(range(f0, last, step)) + [last]:
-            pos = V(toy.value_at(self.plane.root, "location", f))
-            keys.append((f, pos + V(cam_off), pos + V(aim_off)))
+        frames = list(range(f0, last + 1))
+        centers = [self.plane_center(f) for f in frames]
+
+        def blur(pts, sigma):                       # gaussian smoothing, edges clamped
+            r = int(sigma * 2.5)
+            w = [math.exp(-0.5 * (k / sigma) ** 2) for k in range(-r, r + 1)]
+            out = []
+            for i in range(len(pts)):
+                acc, tot = V((0, 0, 0)), 0.0
+                for k, wk in zip(range(-r, r + 1), w):
+                    acc += pts[min(len(pts) - 1, max(0, i + k))] * wk
+                    tot += wk
+                out.append(acc / tot)
+            return out
+
+        base = blur(centers, smooth)                # the camera body moves calmly...
+        aims = blur(centers, 2.5)                   # ...while the aim keeps the plane centred
+        off = V(cam_off)
+        if dist:
+            off = off.normalized() * dist
+        keys = []
+        for k in list(range(0, len(frames) - 1, 3)) + [len(frames) - 1]:
+            cam = base[k] + off
+            cam.z = cam_z if cam_z is not None else max(0.6, cam.z)
+            keys.append((frames[k], cam, aims[k] + V(aim_off)))
         if hold:
-            keys.append((max(hold[0] + 1, min(f1, hold[0] + 18)), V(hold[1]), V(hold[2])))
+            keys.append((max(hold[0] + 1, min(f1, hold[0] + 36)), V(hold[1]), V(hold[2])))   # unhurried reframe
             keys.append((f1, V(hold[1]) + V((0.15, 0.25, 0)), V(hold[2])))
         self.rig.track(f0, f1, keys, lens=lens, cut=cut)
 
@@ -460,15 +539,15 @@ class PlaneStorySet:
         pl.key(b, P0, 0, 0, 0)
         pl.show("base", b + 2, pop=True)
         pl.show("flat", b + int((e - b) * 0.45), pop=True)
-        spot = V((-3.9, 0.3, 0))
-        self.ground_max(b, spot, (-6.0, LANE_Y, 0))
+        self.ground_max(b, WORK, WORK + V((0, 1, 0)))                     # faces the fuselage side
         toy.hide_tree(self.hammer, b, False)
         toy.hide_tree(self.hammer, e - 10, True)
         self.max.hammer(b + 6, e - 14, hand="R")
-        self.max.pose(e - 10, shoulderL=(-90, 0, 20))                     # thumbs up
+        self.max.turn(e - 14, facing_to(WORK, (-1.0, -2.6, 0)), frames=8)  # turns to camera...
+        self.max.pose(e - 10, shoulderL=(-90, 0, 20))                     # ...thumbs up
         self.max.smile(e - 10, big=True)
-        self.rig.shot(b, e, cam_from=(-9.6, -5.8, 3.4), cam_to=(-9.0, -5.0, 3.0), aim_from=(-5.8, LANE_Y, 1.1),
-                      aim_to=(-5.8, LANE_Y, 1.1), lens=26, fstop=8.0)
+        self.rig.shot(b, e, cam_from=(-0.6, -3.0, 2.0), cam_to=(-1.0, -2.6, 1.9), aim_from=(-6.4, LANE_Y - 0.3, 1.0),
+                      aim_to=(-6.2, LANE_Y - 0.3, 1.0), lens=24, fstop=8.0)
 
     def a_fail_flat(self, i, b, e):
         pl = self.plane
@@ -485,15 +564,16 @@ class PlaneStorySet:
         pl.key(stop_f + 10, pitch=0)
         events.add(b + 4, "roll", duration=stop_f - b - 4)
         events.add(stop_f, "hay_thud")
-        behind = V((-2.9, -0.55, 0))
-        self.ground_max(b, P0 + behind, (P0.x + 2, P0.y - 0.55, 0))
+        behind = PUSH
+        self.ground_max(b, P0 + behind, P0 + behind + V((1, 0, 0)))
         self.max.walk(b + 4, rel, to=release + behind, facing_deg=facing_to(P0 + behind, release + behind),
                       step_frames=6)
         self.max.pose(b + 6, shoulderL=(-80, 0, 0), shoulderR=(-80, 0, 0), spine=(25, 0, 0))
         self.max.pose(rel + 2)
         self.max.point(rel + 4, stop_f, hand="R", up_deg=40, side_deg=0)   # "go on!"
         self.scratch_head(stop_f + 6, e - 2)
-        self.track_plane(b, e, cam_off=(-2.8, -7.0, 1.2), aim_off=(-0.6, 0, 0.9), lens=26)
+        self.track_plane(b, e, cam_off=(-6.2, -5.4, 1.8), aim_off=(-1.6, 0, -0.1), lens=22, dist=9.0, cut=True,
+                         hold=(rel, (-7.8, -0.4, 2.0), (0.0, LANE_Y, 0.9)))
 
     def a_airfoil(self, i, b, e):
         pl = self.plane
@@ -503,7 +583,7 @@ class PlaneStorySet:
         Puffs("swap_dust", "#C9B79A", count=8, size=0.35, seed=4).emit(range(b + 3, b + 9),
                                                                        lambda f: (P0.x, LANE_Y - 1.5, 1.6), rise=0.6)
         pl.show("wing", b + 6, pop=True)
-        self.ground_max(b, V((-3.9, 0.3, 0)), (-6.0, LANE_Y, 0))
+        self.ground_max(b, WORK, (P0.x + 0.6, LANE_Y - 7.0, 0))           # faces the viewer
         # the cutaway insert: a big wing section with the air streaming over and under it
         d0 = b + int(L * 0.3)
         cx, cy, cz, chord = P0.x + 0.2, LANE_Y - 2.6, 3.4, 2.6
@@ -513,6 +593,13 @@ class PlaneStorySet:
         insert.rotation_euler = (0, R(-4), 0)
         _appear(insert, d0, frames=8)
         _hide(insert, e, True)
+        card_mat = _mat("cutaway_card", "#14324A", 0.6)
+        toy._set(card_mat.node_tree.nodes.get("Principled BSDF"), "Emission Color", (*toy.srgb("#14324A"), 1))
+        toy._set(card_mat.node_tree.nodes.get("Principled BSDF"), "Emission Strength", 0.6)
+        card = toy.box("cutaway_card", (chord * 2.1, 0.04, 3.1), (cx, cy + 0.35, cz + 0.35), mat=card_mat, bevel=0.12)
+        card.visible_shadow = False
+        _appear(card, d0 - 4, frames=8)                                     # the diagram sits on its own card
+        _hide(card, e, True)
         self._temp = []
         top = flow_material("air_fast", 1.0, speed=2.2, base="#9FD8FF", stripe="#FFFFFF")
         bot = flow_material("air_slow", 1.0, speed=0.9, base="#9FD8FF", stripe="#FFFFFF")
@@ -535,11 +622,11 @@ class PlaneStorySet:
                     cyl.visible_shadow = False
                     _appear(cyl, d0 + 4 + s_, frames=4)
                     _hide(cyl, e, True)
-        label("LOW PRESSURE", (cx, cy - 0.1, cz + 1.05), d0 + 10, e, size=0.24, tilt=-4)
-        label("HIGH PRESSURE", (cx, cy - 0.1, cz - 0.9), d0 + 16, e, size=0.24, tilt=4, color="#5EC8FF",
+        label("LOW PRESSURE", (cx - 0.75, cy - 0.1, cz + 1.2), d0 + 10, e, size=0.22, tilt=-4)
+        label("HIGH PRESSURE", (cx - 0.2, cy - 0.1, cz - 0.95), d0 + 16, e, size=0.22, tilt=4, color="#5EC8FF",
               outline="#0A2A3A")
-        arrow("lift_arrow", (cx, cy - 0.05, cz + 0.25), (0, 0, 1.4), d0 + 22, e)
-        label("LIFT", (cx + 0.55, cy - 0.1, cz + 1.75), d0 + 24, e, size=0.3, tilt=6, color="#FFD23F")
+        arrow("lift_arrow", (cx + 0.35, cy - 0.05, cz + 0.3), (0, 0, 1.2), d0 + 22, e)
+        label("LIFT", (cx + 0.95, cy - 0.1, cz + 1.4), d0 + 24, e, size=0.3, tilt=6, color="#FFD23F")
         self.max.point(d0, e - 4, hand="L", up_deg=70, side_deg=10)
         self.rig.shot(b, e, cam_from=(cx + 1.2, cy - 6.2, cz - 0.6), cam_to=(cx + 0.6, cy - 5.2, cz - 0.4),
                       aim_from=(cx, cy, cz - 0.9), aim_to=(cx, cy, cz - 0.6), lens=24, fstop=8.0, cut=True)
@@ -549,24 +636,26 @@ class PlaneStorySet:
         L = e - b
         run_end = b + int(L * 0.6)
         stop = V((P0.x + 4.5, LANE_Y, 0))
+        coast = stop + V((1.3, 0, 0))
         pl.key(b + 4, P0)
         pl.key(run_end, stop)
+        toy.set_interpolation(pl.root, "location", (b + 4,), "LINEAR")     # matches Max's running speed
+        pl.key(run_end + 14, coast)                                         # rolls on as he lets go
         hop = b + int(L * 0.45)
-        pl.key(hop - 6, P0.lerp(stop, 0.62))
-        pl.key(hop, P0.lerp(stop, 0.8) + V((0, 0, 0.18)))                  # a pathetic little hop
-        pl.key(hop + 6, P0.lerp(stop, 0.92))
-        pl.roll_wheels(b + 4, run_end, (stop - P0).length)
-        behind = V((-2.9, -0.55, 0))
-        self.ground_max(b, P0 + behind, (P0.x + 2, P0.y - 0.55, 0))
-        self.max.walk(b + 4, run_end, to=stop + behind, facing_deg=facing_to(P0 + behind, stop + behind),
-                      step_frames=5)
+        for f, z in ((hop - 6, 0.0), (hop, 0.18), (hop + 6, 0.0)):          # a pathetic little hop
+            pl.body.location = (0, 0, z)
+            pl.body.keyframe_insert("location", frame=f)
+        pl.roll_wheels(b + 4, run_end + 14, (coast - P0).length)
+        self.ground_max(b, P0 + PUSH, P0 + PUSH + V((1, 0, 0)))
+        self.max.walk(b + 4, run_end, to=stop + PUSH, facing_deg=90, step_frames=5)
         self.max.pose(b + 6, shoulderL=(-80, 0, 0), shoulderR=(-80, 0, 0), spine=(30, 0, 0))
-        self.max.crouch(run_end + 4, e - 2, frames=6, lean=40)            # out of breath
+        self.max.crouch(run_end + 10, e - 2, frames=6, lean=28)           # out of breath (the plane has rolled on)
         events.add(b + 4, "roll", duration=run_end - b - 4, gain=0.8)
         events.add(hop, "boing", gain=0.4)
         events.add(run_end + 4, "pant")
         self.max.key("mouth", run_end + 6, scale=(1.2, 0.6, 2.2))
-        self.follow(b, e, P0.x + 1.2, stop.x, z=1.1, dist=9.0, cut=True)
+        self.track_plane(b, e, cam_off=(-6.2, -5.4, 1.8), aim_off=(-1.6, 0, -0.1), lens=22, dist=9.0, cut=True,
+                         hold=(run_end, (stop.x - 7.5, -6.0, 2.2), (stop.x - 1.8, LANE_Y, 0.9)))
 
     def a_engine(self, i, b, e):
         pl = self.plane
@@ -581,7 +670,7 @@ class PlaneStorySet:
                                                                         drift=0.8)
         arrow("thrust_arrow", (P0.x + 2.9, LANE_Y - 0.6, 1.0), (1.6, 0, 0), spin0 + 8, e)
         label("THRUST", (P0.x + 3.7, LANE_Y - 0.7, 1.6), spin0 + 10, e, size=0.3, tilt=-5, color="#FFD23F")
-        self.ground_max(b, V((-8.2, -0.4, 0)), (-6.0, LANE_Y, 0))         # by the tail, clear of prop + camera
+        self.ground_max(b, V((P0.x + 1.9, LANE_Y - 1.9, 0)), (-1.0, -5.8, 0))   # beside the nose, clear of the prop
         self.max.cheer(spin0 + 6, e - 2)
         self.rig.shot(b, e, cam_from=(-1.0, -5.8, 2.8), cam_to=(-1.8, -5.0, 2.5), aim_from=(-5.0, LANE_Y, 1.1),
                       aim_to=(-4.6, LANE_Y, 1.1), lens=26, fstop=8.0, cut=True)
@@ -594,8 +683,11 @@ class PlaneStorySet:
                                                       ("f_drag", (-1.4, 0, 0), "#B78CFF", "DRAG", (-2.2, 0, 0.4)))):
             arrow(nm, c + V((0, -1.3, 0)), vec, b + 4 + 6 * k, e, color=col)
             label(txt, c + V((off[0], -1.4, off[2])), b + 6 + 6 * k, e, size=0.28, tilt=(-1) ** k * 5, color=col)
-        self.rig.shot(b, e, cam_from=(P0.x - 2.5, -7.5, 3.0), cam_to=(P0.x - 2.0, -6.8, 2.8),
-                      aim_from=(P0.x, LANE_Y, 1.3), lens=24, fstop=8.0)
+        spot = V((P0.x + 2.6, LANE_Y - 2.2, 0))                            # clear of every arrow, camera side
+        self.ground_max(b, spot, (P0.x - 1.0, -7.5, 0))
+        self.max.point(b + 6, e - 4, hand="R", up_deg=45, side_deg=40)
+        self.rig.shot(b, e, cam_from=(P0.x - 1.0, -7.5, 3.0), cam_to=(P0.x - 0.6, -6.9, 2.8),
+                      aim_from=(P0.x + 0.4, LANE_Y - 0.6, 1.3), lens=22, fstop=8.0)
 
     def a_fail_flip(self, i, b, e):
         pl = self.plane
@@ -607,33 +699,39 @@ class PlaneStorySet:
         pl.key(t_roll, P0, 0)
         pl.key(t_lift, V((lift_x, LANE_Y, 0.1)), -12)
         pl.roll_wheels(t_roll, t_lift, lift_x - P0.x)
-        pl.key(t_top, V((lift_x + 3.0, LANE_Y, 3.6)), -75)                 # rears up...
-        pl.key(t_fall, V((lift_x + 2.4, LANE_Y, 2.4)), -105)               # ...stalls...
-        pl.key(e - 6, V((lift_x + 1.4, LANE_Y, 0.55)), -62)                # ...and flops down tail-first
-        pl.key(e - 2, V((lift_x + 1.4, LANE_Y, 0.6)), -58)
-        events.add(e - 6, "flop")
-        events.add(e - 4, "boing", gain=0.4)
+        t_tail = e - 12
+        pl.key(t_top, V((lift_x + 3.0, LANE_Y, 4.4)), -70)                 # rears up...
+        pl.key(t_fall, V((lift_x + 2.6, LANE_Y, 4.3)), -100)               # ...stalls...
+        pl.key((t_fall + t_tail) // 2, V((lift_x + 2.2, LANE_Y, 3.4)), -75)
+        pl.key(t_tail, V((lift_x + 1.9, LANE_Y, 1.7)), -42)                # ...tail hits the grass...
+        pl.key(e - 6, V((lift_x + 1.5, LANE_Y, 0.0)), -2)                  # ...and it slams onto its wheels
+        pl.key(e - 3, V((lift_x + 1.45, LANE_Y, 0.12)), 2)
+        pl.key(e - 1, V((lift_x + 1.4, LANE_Y, 0.0)), 0)
+        events.add(t_tail, "flop")
+        events.add(e - 6, "hay_thud")
+        events.add(e - 5, "boing", gain=0.4)
         pl.spin(b, t_fall)
         self.engine_noise(b, t_fall)
         self.pilot.brows(t_top - 4, 1.0)
         self.pilot.key("mouth", t_top, scale=(1.2, 0.6, 2.4))
-        self.track_plane(b, e, cam_off=(-4.5, -9.0, 0.8), aim_off=(0.4, 0, 1.0), lens=24, cut=True)
+        self.track_plane(b, e, cam_off=(4.0, -9.0, 0.4), lens=24, dist=11.0, cut=True)
 
     def a_tail(self, i, b, e):
         pl = self.plane
         pl.teleport(b, P0)
         pl.show("tail", b + 4, pop=True)
         mid = b + int((e - b) * 0.5)
-        arrow("cg_weight", (P0.x + 0.3, LANE_Y - 0.7, 1.2), (0, 0, -1.0), mid, e, color="#FF7A1A")
-        label("WEIGHT", (P0.x + 0.9, LANE_Y - 0.8, 0.35), mid + 2, e, size=0.24, tilt=5, color="#FF7A1A")
-        arrow("cg_lift", (P0.x - 0.1, LANE_Y - 0.7, 1.8), (0, 0, 1.1), mid + 6, e)
-        label("LIFT", (P0.x - 0.7, LANE_Y - 0.8, 3.05), mid + 8, e, size=0.24, tilt=-5, color="#FFD23F")
-        self.ground_max(b, V((-4.9, -0.2, 0)), (-6.8, LANE_Y, 0))
+        arrow("cg_weight", (P0.x - 0.4, LANE_Y - 1.3, 1.0), (0, 0, -0.9), mid, e, color="#FF7A1A")
+        label("WEIGHT", (P0.x - 0.6, LANE_Y - 1.4, 0.3), mid + 2, e, size=0.24, tilt=5, color="#FF7A1A")
+        arrow("cg_lift", (P0.x + WING_X, LANE_Y - 1.3, 1.9), (0, 0, 1.0), mid + 6, e)
+        label("LIFT", (P0.x + WING_X - 0.6, LANE_Y - 1.4, 3.0), mid + 8, e, size=0.24, tilt=-5, color="#FFD23F")
+        tail_spot = V((P0.x - 4.6, LANE_Y - 0.9, 0))                       # just behind the elevator tip
+        self.ground_max(b, tail_spot, (P0.x - 3.0, LANE_Y - 0.4, 0))
         toy.hide_tree(self.hammer, b, False)
         toy.hide_tree(self.hammer, e - 4, True)
         self.max.hammer(b + 6, e - 6, hand="R")
-        self.rig.shot(b, e, cam_from=(-11.0, -5.6, 3.2), cam_to=(-10.4, -5.0, 3.0), aim_from=(-7.4, LANE_Y, 1.2),
-                      aim_to=(-7.0, LANE_Y, 1.2), lens=26, fstop=8.0, cut=True)
+        self.rig.shot(b, e, cam_from=(-12.2, -5.0, 2.6), cam_to=(-11.6, -4.6, 2.5), aim_from=(-9.4, LANE_Y - 0.6, 1.1),
+                      aim_to=(-9.0, LANE_Y - 0.6, 1.1), lens=22, fstop=8.0, cut=True)
 
     def a_fail_turn(self, i, b, e):
         pl = self.plane
@@ -654,13 +752,13 @@ class PlaneStorySet:
         events.add(t_hit - 2, "crash_tree")
         leaves = Spray("leaf_burst", toy.noise_material("foliage2", toy.srgb("#3D6B2A"), toy.srgb("#5E8C38"), scale=6),
                        count=36, radius=0.07, seed=5)
-        leaves.run(t_hit, e, source=crash + V((0.4, 0, 0.4)), target=crash + V((0.4, 0, -3.0)), spread=1.4, arc=0.8,
+        leaves.run(t_hit, e, source=crash + V((2.4, 0, 0.6)), target=crash + V((2.0, 0, -3.0)), spread=1.4, arc=0.8,
                    period=26)
         self.pilot.brows(t_hit, 1.0)
         self.pilot.key("mouth", t_hit + 2, scale=(1.1, 0.6, 2.4))
-        self.track_plane(b, e, cam_off=(-4.0, -8.5, 0.6), aim_off=(0.8, 0, 0.9), lens=24, cut=True,
-                         hold=(t_hit - 10, (crash.x - 2.6, LANE_Y - 7.6, crash.z - 0.6),
-                               (crash.x + 0.6, LANE_Y, crash.z - 0.2)))
+        self.track_plane(b, e, cam_off=(3.5, -8.5, 0.3), lens=24, dist=10.0, cut=True,
+                         hold=(t_hit - 14, (crash.x - 2.2, LANE_Y - 11.0, crash.z - 1.6),
+                               (crash.x + 1.6, LANE_Y, crash.z - 0.4)))
 
     def a_controls(self, i, b, e):
         pl = self.plane
@@ -668,17 +766,17 @@ class PlaneStorySet:
         pl.show("controls", b + 4, pop=True)
         w0 = b + int((e - b) * 0.3)
         pl.wiggle(w0, e - 4)
-        label("AILERONS", (P0.x - 0.9, LANE_Y - 3.4, 2.25), w0 + 2, e, size=0.24, tilt=-5)
-        label("ELEVATOR", (P0.x - 3.2, LANE_Y - 1.6, 1.85), w0 + 8, e, size=0.22, tilt=5)
-        label("RUDDER", (P0.x - 3.4, LANE_Y - 0.4, 2.4), w0 + 14, e, size=0.22, tilt=-5)
-        self.ground_max(b, V((-3.6, -0.1, 0)), (-6.0, LANE_Y, 0))
-        self.max.point(w0, e - 4, hand="L", up_deg=55, side_deg=10)
-        self.rig.shot(b, e, cam_from=(-10.0, -6.4, 4.0), cam_to=(-9.4, -5.6, 3.6), aim_from=(-6.4, LANE_Y - 0.4, 1.3),
-                      aim_to=(-6.6, LANE_Y - 0.4, 1.3), lens=24, fstop=8.0, cut=True)
+        label("AILERONS", (P0.x + WING_X - 0.9, LANE_Y - 3.2, 2.35), w0 + 2, e, size=0.36, tilt=-5)
+        label("ELEVATOR", (P0.x - 3.4, LANE_Y - 1.9, 0.75), w0 + 8, e, size=0.32, tilt=5)
+        label("RUDDER", (P0.x - 3.5, LANE_Y - 0.6, 2.75), w0 + 14, e, size=0.32, tilt=-5)
+        self.ground_max(b, WORK, (-3.0, -7.5, 0))
+        self.max.point(w0, e - 4, hand="R", up_deg=55, side_deg=30)
+        self.rig.shot(b, e, cam_from=(-3.4, -6.4, 3.8), cam_to=(-3.8, -5.9, 3.5), aim_from=(-7.6, LANE_Y - 0.6, 1.2),
+                      aim_to=(-7.6, LANE_Y - 0.6, 1.2), lens=22, fstop=8.0, cut=True)
 
     def _kids_cheer(self, f0, f1):
         for k, kid in enumerate(self.kids):
-            spot = V((-1.8 + 0.9 * k, -0.4 - 0.3 * k, 0))
+            spot = V((-0.6 + 0.9 * k, -0.6 - 0.3 * k, 0))
             toy.hide_tree(kid.root, f0, False)
             kid.cut_place(f0, spot, 0)
             kid.pose(f0 + 4)
@@ -702,8 +800,8 @@ class PlaneStorySet:
             pl.key(f0 + int(L * 0.88), V((-0.5, LANE_Y - 0.6, 2.6)), 2, 0, 180)       # low pass over the kids
             pl.key(f1, V((-6.0, LANE_Y - 1.0, 3.2)), -4, 0, 180)
         else:
-            pl.teleport(f0, V((8.0, LANE_Y - 0.4, 3.0)), 2, 0, 180)
-            pl.key(f1, V((-4.5, LANE_Y - 0.8, 2.4)), 0, 0, 180)
+            pl.teleport(f0, V((4.5, LANE_Y - 0.6, 3.0)), 2, 8, 180)
+            pl.key(f1, V((-6.0, LANE_Y - 1.0, 2.6)), 0, -6, 180)
         self.pilot_on(f0)
         self.pilot.wave(f1 - int(L * 0.25), f1, hand="R")
         self.pilot.smile(f0 + 4, big=True)
@@ -716,15 +814,15 @@ class PlaneStorySet:
         pl = self.plane
         L = e - b
         self.light(b)
-        t_lift, t_land, t_stop = b + int(L * 0.16), b + int(L * 0.66), b + int(L * 0.76)
+        t_lift, t_land, t_stop = b + int(L * 0.14), b + int(L * 0.58), b + int(L * 0.66)   # a third left for the reunion
         pl.teleport(b, P0)
         pl.key(b + 4, P0, 0, 0, 0)
         pl.key(t_lift, V((P0.x + 5.5, LANE_Y, 0.25)), -10, 0, 0)
         pl.roll_wheels(b + 4, t_lift, 5.5)
-        pl.key(b + int(L * 0.27), V((2.5, LANE_Y + 0.8, 3.2)), -6, -20, 20)        # climbs, banks left
-        pl.key(b + int(L * 0.38), V((7.5, LANE_Y + 6.0, 4.0)), 0, -35, 95)
-        pl.key(b + int(L * 0.48), V((3.0, LANE_Y + 9.0, 3.8)), 0, -30, 170)
-        pl.key(b + int(L * 0.57), V((5.0, LANE_Y, 1.8)), 3, -10, 180)              # lines up with the strip
+        pl.key(b + int(L * 0.24), V((2.5, LANE_Y + 0.8, 3.2)), -6, -20, 20)        # climbs, banks left
+        pl.key(b + int(L * 0.33), V((7.5, LANE_Y + 6.0, 4.0)), 0, -35, 95)
+        pl.key(b + int(L * 0.42), V((3.0, LANE_Y + 9.0, 3.8)), 0, -30, 170)
+        pl.key(b + int(L * 0.50), V((5.0, LANE_Y, 1.8)), 3, -10, 180)              # lines up with the strip
         pl.key(t_land, V((1.5, LANE_Y, 0.02)), -4, 0, 180)                        # touchdown
         pl.key(t_stop, V((-1.2, LANE_Y, 0)), 0, 0, 180)                           # rolls to a stop
         pl.roll_wheels(t_land, t_stop, 2.7)
@@ -734,23 +832,25 @@ class PlaneStorySet:
         self.pilot.pose(t_stop + 6, shoulderL=(-150, 0, 0))                      # thumbs up / wave
         self.pilot.wave(t_stop + 8, e, hand="L")
         self.engine_noise(b, t_stop + 20)
-        events.add(b + int(L * 0.5), "plane_flyby")
+        events.add(b + int(L * 0.42), "plane_flyby")
         # the kids watch, then run to the plane
         for k, kid in enumerate(self.kids):
-            spot = V((-3.3 + 0.8 * k, -0.6 - 0.2 * k, 0))
+            spot = V((-3.0 + 0.8 * k, -2.9 - 0.2 * k, 0))
             toy.hide_tree(kid.root, b, False)
             kid.cut_place(b, spot, 0)
             kid.pose(b + 4)
             kid.cheer(b + 6, t_land)
             kid.auto_blink(b, e + 400, seed=k + 3)
-            dest = V((-1.6 + 0.9 * k, LANE_Y - 1.1, 0))
-            kid.walk(t_stop + 4 + 4 * k, t_stop + 28 + 4 * k, to=dest, facing_deg=facing_to(spot, dest), step_frames=5)
-            kid.cheer(t_stop + 30 + 4 * k, e)
-            kid.smile(t_stop + 30, big=True)
+            dest = V((-1.9 - 0.7 * k, 0.5 - 0.3 * k, 0))                       # by the cockpit, ahead of the wing
+            arrive = t_stop + 20 + 3 * k
+            kid.walk(t_stop + 2 + 3 * k, arrive, to=dest, facing_deg=facing_to(spot, dest), step_frames=4)  # they RUN
+            kid.turn(arrive + 1, facing_to(dest, (0.6, LANE_Y - 6.6, 0)), frames=6)   # turn to the viewer
+            kid.cheer(arrive + 6, e)
+            kid.smile(arrive + 2, big=True)
         events.add(t_land, "kids_cheer")
         events.add(t_stop + 24, "kids_cheer", gain=0.8)
-        self.track_plane(b, e, cam_off=(-3.0, -9.5, 1.4), aim_off=(0.4, 0, 1.0), lens=24, cut=True,
-                         hold=(t_land - 6, (-0.4, LANE_Y - 6.2, 1.9), (-1.6, LANE_Y - 0.4, 1.2)))
+        self.track_plane(b, e, cam_off=(-3.0, -9.5, 0.0), lens=24, dist=12.0, cut=True, cam_z=1.4, smooth=14,
+                         hold=(t_land - 6, (0.6, LANE_Y - 6.6, 1.3), (-2.0, LANE_Y - 0.8, 1.15)))
 
     # ------------------- hooks (epilogue) -------------------
 
@@ -764,19 +864,19 @@ class PlaneStorySet:
             toy.hide_tree(kid.root, h0, True)
         leaves = Spray("hook_leaves", toy.noise_material("foliage2", toy.srgb("#3D6B2A"), toy.srgb("#5E8C38"), scale=6),
                        count=24, radius=0.07, seed=9)
-        leaves.run(h0, h1, source=crash + V((0.6, 0, 0.6)), target=crash + V((0.6, 0, -3.4)), spread=1.6, arc=0.2,
+        leaves.run(h0, h1, source=crash + V((2.4, 0, 0.8)), target=crash + V((2.0, 0, -3.4)), spread=1.6, arc=0.2,
                    period=40)
         self.pilot.blink([h0 + 12, h0 + 30, h0 + 44])
         self.pilot.brows(h0 + 4, 1.0)
         events.add(h0, "crash_tree", gain=0.6)
         events.add(h0 + 14, "boing", gain=0.4)
-        self.rig.shot(h0, h1, cam_from=(crash.x - 3.4, LANE_Y - 7.8, crash.z - 0.7),
-                      cam_to=(crash.x - 2.4, LANE_Y - 6.2, crash.z - 0.5), aim_from=(crash.x + 0.6, LANE_Y, crash.z - 0.4),
-                      aim_to=(crash.x + 0.6, LANE_Y, crash.z - 0.2), lens=26, fstop=8.0, cut=True)
+        self.rig.shot(h0, h1, cam_from=(crash.x - 1.6, LANE_Y - 7.8, crash.z - 0.7),
+                      cam_to=(crash.x - 0.8, LANE_Y - 6.2, crash.z - 0.5), aim_from=(crash.x + 1.4, LANE_Y, crash.z + 0.1),
+                      aim_to=(crash.x + 1.2, LANE_Y, crash.z + 0.2), lens=26, fstop=8.0, cut=True)
 
     def a_fly_hook(self, i, h0, h1):
         self.light(h0)
         self._flyover(h0, h1, takeoff=False)
         self._kids_cheer(h0, h1)
-        self.rig.shot(h0, h1, cam_from=(-2.4, -8.0, 1.2), cam_to=(-2.0, -7.6, 1.4), aim_from=(2.0, LANE_Y, 2.6),
-                      aim_to=(-3.0, LANE_Y, 2.2), lens=22, fstop=8.0, cut=True)
+        self.rig.shot(h0, h1, cam_from=(-0.4, -4.6, 0.7), cam_to=(-0.9, -4.4, 0.8), aim_from=(1.2, LANE_Y - 0.6, 2.0),
+                      aim_to=(-0.8, LANE_Y - 0.8, 1.8), lens=20, fstop=8.0, cut=True)

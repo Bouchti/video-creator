@@ -20,7 +20,7 @@ import random
 import bpy
 from mathutils import Vector
 
-from engine import events, toy
+from engine import events, textures as tx, toy
 from engine.backyard import _appear, _hide, _key
 
 R = math.radians
@@ -251,7 +251,7 @@ def flow_material(name, direction=1.0, speed=0.9, base="#2F8FE0", stripe="#BFE9F
     loc.keyframe_insert("default_value", frame=6001)
     for fc in _node_curves(mat):
         for kp in fc.keyframe_points:
-            kp.interpolation = "LINEAR"
+            toy.set_key_interpolation(mat.node_tree, fc, kp, "LINEAR")
     return mat
 
 
@@ -313,7 +313,7 @@ def caustics_plaster_material(fps=30):
     nt.links.new(tint.outputs["Result"], bsdf.inputs["Base Color"])
     for fc in _node_curves(mat):
         for kp in fc.keyframe_points:
-            kp.interpolation = "LINEAR"
+            toy.set_key_interpolation(mat.node_tree, fc, kp, "LINEAR")
     return mat
 
 
@@ -412,7 +412,7 @@ def key_node_value(mat, node_name, frame, value, interpolation=None):
         for fc in _node_curves(mat):
             for kp in fc.keyframe_points:
                 if int(round(kp.co.x)) == frame:
-                    kp.interpolation = interpolation
+                    toy.set_key_interpolation(mat.node_tree, fc, kp, interpolation)
 
 
 def _block(name, x0, x1, y0, y1, z0, z1, mat, bevel=0):
@@ -432,13 +432,15 @@ class CutawayYard:
             "concrete": toy.noise_material("shell_concrete", toy.srgb("#9A9893"), toy.srgb("#B8B6B0"),
                                            scale=60, roughness=0.9, bump=0.25),
             "plaster": caustics_plaster_material(),
-            "tile": toy.material("pool_tile", toy.srgb("#1F6FB8"), roughness=0.15, coat=0.6),
+            "tile": tx.tiles("pool_tile", "#1F6FB8", size=0.15),
             "coping": toy.noise_material("coping_stone", toy.srgb("#D9D0BE"), toy.srgb("#EDE6D6"),
                                          scale=18, roughness=0.6, bump=0.2),
-            "steel": toy.material("rebar_steel", toy.srgb("#7A3B22"), roughness=0.55, metallic=0.6),
+            "steel": tx.metal("rebar_steel", "#7A3B22", 0.55, metallic=0.6),
             "pipe": self._pipe_material(),
             "wood": toy.noise_material("fence_wood", toy.srgb("#8B6A4A"), toy.srgb("#A07E5C"), scale=10, bump=0.2),
-            "white": toy.material("house_white", toy.srgb("#EFEDE6"), roughness=0.7),
+            "white": tx.paint("house_white", "#EFEDE6", 0.6, coat=0.0),
+            "siding": tx.planks("house_siding", "#EFEDE6", "#E4DED2", width=0.22, across="z", along="xy", lap=True,
+                                seam_dark=0.22),
             "roof": roof_tile_material(),
             "window": toy.material("glass_win", toy.srgb("#8FB9D4"), roughness=0.05, coat=1.0),
             "leaf": toy.noise_material("foliage", toy.srgb("#3D6B2A"), toy.srgb("#5E8C38"), scale=6, bump=0.6),
@@ -548,7 +550,7 @@ class CutawayYard:
     def _yard(self):
         m = self.m
         hx, hy = 0.5, 13.0
-        toy.box("house", (11, 6, 4.4), (hx, hy, 2.2), mat=m["white"], bevel=0.05)
+        toy.box("house", (11, 6, 4.4), (hx, hy, 2.2), mat=m["siding"], bevel=0.05)
         for i, ry in enumerate((-1, 1)):
             toy.box(f"roof{i}", (11.8, 3.9, 0.25), (hx, hy + 1.5 * ry, 5.25), mat=m["roof"], bevel=0.04,
                     rotation=(R(-28 * ry), 0, 0))
@@ -556,7 +558,7 @@ class CutawayYard:
             toy.box(f"window{i}", (1.2, 0.1, 1.3), (hx + wx, hy - 3.02, 2.5), mat=m["window"], bevel=0.02)
             toy.box(f"wframe{i}", (1.4, 0.08, 1.5), (hx + wx, hy - 2.99, 2.5), mat=m["white"], bevel=0.02)
         toy.box("door", (1.1, 0.1, 2.2), (hx + 0.5, hy - 3.02, 1.1),
-                mat=toy.material("door_wood", toy.srgb("#6B4A30"), roughness=0.5), bevel=0.03)
+                mat=tx.planks("door_wood", "#6B4A30", "#5E412A", width=0.14), bevel=0.03)
         trim = toy.material("trim_grey", toy.srgb("#6C6F73"), roughness=0.5)
         for i, wx in enumerate((-4.0, -1.6, 2.6, 4.6)):
             toy.box(f"sill{i}", (1.55, 0.22, 0.07), (hx + wx, hy - 3.1, 1.78), mat=trim, bevel=0.01)
@@ -618,26 +620,9 @@ class CutawayYard:
         density = density or float(os.getenv("CUT_GRASS", "650"))
         if not hasattr(self, "_tuft"):
             self._tuft = _grass_tuft()
-        bpy.ops.mesh.primitive_plane_add(size=1, location=((x0 + x1) / 2, (y0 + y1) / 2, z + 0.002))
-        em = bpy.context.active_object
-        em.name = name
-        em.scale = (x1 - x0, y1 - y0, 1)
-        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-        ps = em.modifiers.new(f"{name}_ps", "PARTICLE_SYSTEM").particle_system.settings
-        ps.type = "HAIR"
-        ps.count = int((x1 - x0) * (y1 - y0) * density)
-        ps.hair_length = 1.0
-        ps.render_type = "OBJECT"
-        ps.instance_object = self._tuft
-        ps.particle_size = 1.0
-        ps.size_random = 0.6
-        ps.use_rotations = True
-        ps.rotation_mode = "NOR"
-        ps.phase_factor_random = 2.0
-        ps.use_advanced_hair = True
-        if hasattr(em, "show_instancer_for_render"):
-            em.show_instancer_for_render = False
-        em.particle_systems[0].seed = len(name) * 11
+        em = toy.scatter(name, x0, x1, y0, y1, self._tuft, density, size=1.0, z=z + 0.002,
+                         seed=len(name))                                       # one static mesh, no particles
+        self._tuft.hide_render = True
         return em
 
     def _grass(self):
@@ -743,7 +728,8 @@ class CutawayYard:
             for fc in toy.fcurves(drop):
                 pts = fc.keyframe_points
                 for k in range(len(pts) - 1):
-                    pts[k].interpolation = "CONSTANT" if pts[k + 1].co.x - pts[k].co.x <= 1.01 else "LINEAR"
+                    toy.set_key_interpolation(drop, fc, pts[k], "CONSTANT" if pts[k + 1].co.x - pts[k].co.x <= 1.01
+                                              else "LINEAR")
         events.add(start, "pour", duration=end - start, gain=0.5)
 
     # ------------------- pool layers (built in section) -------------------
@@ -965,7 +951,7 @@ class CutawayYard:
     def relief_valve(self, x, start):
         """Hydrostatic relief valve: a capped tube through the floor into the gravel."""
         y = CUT - 0.07
-        brass = toy.material("valve_brass", toy.srgb("#C9A24A"), roughness=0.3, metallic=0.9)
+        brass = tx.metal("valve_brass", "#C9A24A", 0.3)
         body = toy.cylinder("relief_valve", 0.06, SHELL + GRAVEL + 0.06, (x, y, -HOLE + (SHELL + GRAVEL) / 2 + 0.03),
                             mat=brass, bevel=0.01)
         toy.cylinder("relief_cap", 0.09, 0.025, (x, y, FLOOR_TOP + 0.02), mat=brass, bevel=0.008)
@@ -980,8 +966,8 @@ class CutawayYard:
     def equipment_pad(self, x=5.6):
         """Pump + sand filter on a concrete pad beside the pool (just behind the cut)."""
         conc = self.m["concrete"]
-        blue = toy.material("pump_blue", toy.srgb("#2B6CB0"), roughness=0.35, coat=0.4)
-        grey = toy.material("filter_grey", toy.srgb("#C9CDD2"), roughness=0.35, coat=0.3)
+        blue = tx.paint("pump_blue", "#2B6CB0", 0.35, coat=0.4)
+        grey = tx.paint("filter_grey", "#C9CDD2", 0.35, coat=0.3)
         pad = _block("equip_pad", x - 1.0, x + 1.0, CUT + 0.05, CUT + 1.1, 0.0, 0.12, conc, bevel=0.02)
         tank = toy.cylinder("filter_tank", 0.33, 0.95, (x + 0.45, CUT + 0.5, 0.6), mat=grey, bevel=0.05)
         toy.sphere("filter_dome", 0.33, (x + 0.45, CUT + 0.5, 1.07), scale=(1, 1, 0.45), mat=grey)

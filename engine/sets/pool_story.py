@@ -24,6 +24,8 @@ V = Vector
 EAST = V((HL + 0.42, CUT + 0.4, 0))           # Max's spot on the lawn, right at the cut edge
 EAST_FAR = V((HL + 1.5, CUT + 0.9, 0))         # out of the way of close-ups
 WEST = V((-HL - 0.42, CUT + 0.4, 0))
+DIG_SPOT = V((HL + 1.3, CUT + 0.3, 0))         # clear of the excavator's swing
+OFFSTAGE = V((HL + 4.2, CUT + 1.2, 0))         # fully out of the close-ups (never half-cropped)
 CAM_Y = -6.5
 POOL_FLOOR = FLOOR_TOP + PLASTER
 
@@ -160,9 +162,9 @@ class PoolStorySet(PoolSet):
     def a_dig(self, i, b, e):
         super().a_dig(i, b, e)
         self.rig.shots.pop()                                     # re-frame with Max in shot
-        self.rig.shot(b, e, cam_from=(0.6, -7.4, 0.6), cam_to=(1.2, -7.0, 0.4), aim_from=(0.9, 1.4, -0.8),
-                      aim_to=(1.0, 1.2, -1.0), lens=20, fstop=8.0)
-        self.at(b, EAST, _face_pool(EAST))
+        self.rig.shot(b, e, cam_from=(1.2, -7.4, 0.6), cam_to=(1.8, -7.0, 0.4), aim_from=(1.7, 1.4, -0.8),
+                      aim_to=(1.8, 1.2, -1.0), lens=20, fstop=8.0)
+        self.at(b, DIG_SPOT, _face_pool(DIG_SPOT))
         self.proud(b + 20, e - 20)
         self.max.cheer(e - 18, e - 2)
 
@@ -211,8 +213,8 @@ class PoolStorySet(PoolSet):
         self.hose_on(b + 2, e - 8, V((HL - 0.35, CUT + 0.8, -0.9)), "plain_spray",
                      mat=toy.material("wet_concrete", toy.srgb("#6E6D69"), roughness=0.3))
         self.max.smile(e - 8, big=True)
-        self.rig.shot(b, e, cam_from=(2.6, -4.6, -0.3), cam_to=(2.0, -4.0, -0.5), aim_from=(1.6, 0.4, -1.0),
-                      aim_to=(1.4, 0.4, -1.1), lens=24, fstop=8.0)
+        self.rig.shot(b, e, cam_from=(3.0, -4.9, -0.3), cam_to=(2.5, -4.4, -0.5), aim_from=(2.1, 0.4, -0.9),
+                      aim_to=(1.9, 0.4, -1.0), lens=22, fstop=8.0)
 
     def a_fail_crack(self, i, b, e):
         L = e - b
@@ -268,12 +270,12 @@ class PoolStorySet(PoolSet):
         super().a_rebar(i, b + 10, e)
         # 2. close-up: Max steps back out of the camera's way while the steel goes in
         self.at(b, EAST, _face_pool(EAST))
-        self.walk_to(b + 2, b + 22, EAST_FAR, _face_pool(EAST_FAR))
+        self.walk_to(b + 2, b + 40, OFFSTAGE, _face_pool(OFFSTAGE))
         self.max.hammer(b + 30, e - 6, hand="R")
 
     def a_shotcrete(self, i, b, e):
         super().a_shotcrete(i, b, e)
-        self.at(b, EAST_FAR, _face_pool(EAST_FAR))
+        self.at(b, OFFSTAGE, _face_pool(OFFSTAGE))                # the close-up is on the nozzle, not on Max
         self.max.pose(b + 4, shoulderR=(-60, 0, 10), spine=(10, 0, 0))
         self.max.pose(e - 4, shoulderR=(-60, 0, 4), spine=(10, 0, 0))
         self.max.smile(e - 10, big=True)
@@ -300,8 +302,8 @@ class PoolStorySet(PoolSet):
     def a_finish(self, i, b, e):
         super().a_finish(i, b, e)
         self.rig.shots.pop()
-        self.rig.shot(b, e, cam_from=(2.4, -4.6, -0.1), cam_to=(1.6, -4.0, -0.35), aim_from=(1.2, 0.5, -0.8),
-                      aim_to=(1.0, 0.5, -0.95), lens=22, fstop=8.0)
+        self.rig.shot(b, e, cam_from=(2.6, -5.9, 0.0), cam_to=(2.2, -5.5, -0.2), aim_from=(1.3, 0.5, -0.8),
+                      aim_to=(1.2, 0.5, -0.9), lens=20, fstop=8.0)       # wide: PLASTER label (x -1.2) + Max (x 3.4)
         self.at(b, EAST, _face_pool(EAST))
         self.proud(b + int((e - b) * 0.5), e - 2)
 
@@ -369,7 +371,7 @@ class PoolStorySet(PoolSet):
         self.yard.water_table(e, WATER_TABLE)
         self.light(settle, 2.0, 0.09, 520)
         self.light(e - 4, 4.2, 0.22, 900, color=(1.0, 0.95, 0.86))
-        self.at(b, EAST, _face_cam(EAST))
+        self.at(b, EAST + V((0.3, 0.15, 0)), _face_cam(EAST))
         self.max.pose(e - 14, shoulderR=(-120, 30, 0), head=(-6, 0, 0))   # wipes his brow
         self.max.pose(e - 2)
         self.rig.shot(b, e, cam_from=(VALVE_X + 0.8, -3.8, -1.2), cam_to=(VALVE_X + 0.5, -3.3, -1.4),
@@ -401,8 +403,8 @@ class PoolStorySet(PoolSet):
             self.algae.append(blob)
         self.at(b, EAST, _face_cam(EAST))
         self.hold_nose(full + int((e - full) * 0.45), e - 2)
-        self.rig.shot(b, e, cam_from=(1.2, -5.8, -0.2), cam_to=(1.2, -5.2, -0.3), aim_from=(1.1, 0.6, -0.8),
-                      aim_to=(1.1, 0.6, -0.85), lens=20, fstop=8.0)
+        self.rig.shot(b, e, cam_from=(1.6, -5.8, -0.2), cam_to=(1.6, -5.2, -0.3), aim_from=(1.5, 0.6, -0.8),
+                      aim_to=(1.5, 0.6, -0.85), lens=20, fstop=8.0)
 
     def a_fix_filter(self, i, b, e):
         L = e - b
@@ -430,19 +432,20 @@ class PoolStorySet(PoolSet):
         self.at(b, EAST, _face_cam(EAST))
         self.max.point(mid + 4, e - 2, hand="L", up_deg=60, side_deg=0)
         self.max.smile(mid + 10, big=True)
-        self.rig.shot(mid, e, cam_from=(4.4, -7.2, 0.0), cam_to=(1.0, -6.6, -0.3), aim_from=(PAD_X - 1.0, 0, -0.3),
-                      aim_to=(1.0, 0.6, -0.9), lens=22, fstop=8.0)
+        self.rig.shot(mid, e, cam_from=(4.4, -7.2, 0.0), cam_to=(2.6, -8.6, 0.2), aim_from=(PAD_X - 1.0, 0, -0.3),
+                      aim_to=(2.8, 0.6, -0.6), lens=20, fstop=8.0)
 
-    def _cannonball(self, who, f0, start_spot, entry_x, stand_z, sound=True):
-        """Run to the edge, leap into a tuck, splash down at entry_x, end standing/floating."""
-        face = facing_to(start_spot, (entry_x, start_spot.y, 0))
+    def _cannonball(self, who, f0, start_spot, entry_x, stand_z, sound=True, lane_y=None):
+        """Run to the edge (along `lane_y`), leap into a tuck, splash down at entry_x."""
+        lane_y = start_spot.y if lane_y is None else lane_y
+        edge = V((HL + 0.15, lane_y, 0))
+        face = facing_to(start_spot, edge)
         who.cut_place(f0, start_spot, face)
         who.pose(f0)
-        edge = V((HL + 0.15, start_spot.y, 0))
         t_jump = f0 + 12
         who.walk(f0 + 1, t_jump, to=edge, facing_deg=face, step_frames=5)
-        apex = V(((edge.x + entry_x) / 2, start_spot.y + 0.1, 1.0))
-        land = V((entry_x, start_spot.y + 0.15, stand_z))
+        apex = V(((edge.x + entry_x) / 2, lane_y + 0.1, 1.0))
+        land = V((entry_x, lane_y + 0.15, stand_z))
         who.move(t_jump, t_jump + 8, apex)
         tuck = dict(shoulderL=(-70, 0, -35), shoulderR=(-70, 0, 35), legL=(-85, 0, 0), legR=(-85, 0, 0))
         who.pose(t_jump + 4, **tuck)
@@ -459,18 +462,22 @@ class PoolStorySet(PoolSet):
 
     def _jumpers(self, f0, f1, cheer=True):
         """Max and the kids cannonball in one after another."""
-        crew = [(self.kids[0], V((HL + 0.85, CUT + 0.5, 0)), HL - 1.0, WATER_TOP - 0.95),
-                (self.kids[1], V((HL + 1.25, CUT + 0.32, 0)), HL - 1.9, WATER_TOP - 0.92),
-                (self.max, V((HL + 0.42, CUT + 0.4, 0)), HL - 2.9, POOL_FLOOR)]
+        crew = [(self.kids[0], V((HL + 0.85, CUT + 0.3, 0)), HL - 1.0, WATER_TOP - 0.5, 0.3),     # treading water
+                (self.kids[1], V((HL + 1.3, CUT + 0.6, 0)), HL - 1.9, WATER_TOP - 0.48, 0.6),
+                (self.max, V((HL + 1.1, CUT + 1.2, 0)), HL - 2.9, POOL_FLOOR, 0.45)]   # waits behind them
         gap = max(14, (f1 - f0 - 40) // 3)
         last = f0
-        for k, (who, spot, x, z) in enumerate(crew):
+        for k, (who, spot, x, z, lane) in enumerate(crew):
             if who is not self.max:
                 toy.hide_tree(who.root, f0, False)
                 who.cut_place(f0, spot, _face_cam(spot))
                 who.pose(f0)
                 who.cheer(f0 + 2, f0 + 2 + gap * k)
-            last = self._cannonball(who, f0 + 4 + gap * k, spot, x, z)
+            if who is self.max:
+                who.cut_place(f0, spot, _face_cam(spot))
+                who.pose(f0)
+                who.cheer(f0 + 2, f0 + 2 + gap * k)
+            last = self._cannonball(who, f0 + 4 + gap * k, spot, x, z, lane_y=lane)
         if cheer:
             for who, *_ in crew:
                 who.cheer(last + 2, f1)

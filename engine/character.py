@@ -14,7 +14,7 @@ import bmesh
 import bpy
 from mathutils import Vector
 
-from engine import events, toy
+from engine import events, textures as tx, toy
 
 DEFAULT_LOOK = {
     "skin": "#F2B48C",
@@ -67,8 +67,8 @@ class Character:
     def _build(self):
         L = self.look
         skin = self._mat("skin", L["skin"], roughness=0.5, subsurface=0.15)
-        shirt = self._mat("shirt", L["shirt"], roughness=0.75)
-        overalls = self._mat("overalls", L["overalls"], roughness=0.7)
+        shirt = tx.cloth(f"{self.name}_shirt", L["shirt"], rough=0.78)
+        overalls = tx.cloth(f"{self.name}_overalls", L["overalls"], rough=0.72)
         shoes = self._mat("shoes", L["shoes"], roughness=0.5, coat=0.3)
         hair = self._mat("hair", L["hair"], roughness=0.6)
         dark = toy.material("eye_dark", toy.srgb(L["eyes"]), roughness=0.15, coat=1.0)

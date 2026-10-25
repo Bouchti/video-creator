@@ -224,7 +224,8 @@ def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple:
             "stability": 0.4,
             "similarity_boost": 0.75,
             "style": 0.6,
-            "use_speaker_boost": True
+            "use_speaker_boost": True,
+            "speed": float(os.getenv("VOICE_SPEED", "0.92")),   # a touch slower: easier to follow
         }
     }
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"

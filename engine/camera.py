@@ -66,7 +66,7 @@ def _linear(obj):
                   for bag in strip.channelbags for fc in bag.fcurves]
     for fc in curves:
         for kp in fc.keyframe_points:
-            kp.interpolation = "LINEAR"
+            toy.set_key_interpolation(obj, fc, kp, "LINEAR")
 
 
 def facing_to(src, dst) -> float:
@@ -129,7 +129,7 @@ class CameraRig:
             for fc in _data_curves(self.data):
                 for kp in fc.keyframe_points:
                     if int(round(kp.co.x)) == frame:
-                        kp.interpolation = "CONSTANT"
+                        toy.set_key_interpolation(self.data, fc, kp, "CONSTANT")
 
     def build(self, handheld: float = 0.012):
         shots = sorted(self.shots, key=lambda s: s["start"])

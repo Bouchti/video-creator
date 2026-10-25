@@ -33,7 +33,7 @@ log = logging.getLogger("pipeline")
 
 MODEL = os.getenv("SHOWRUNNER_MODEL", "claude-opus-5-5")
 WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 words → 82.8 s (pauses)
-TARGET_WORDS = (140, 185)              # ≈ 60–78 s with this voice
+TARGET_WORDS = (140, 192)              # ≈ 60–80 s with this voice (incl. the closing question)
 HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # every rubric score must reach this to ship
 MAX_REVISIONS = 1                      # a 2nd round rarely raised the score; it doubled the wait
@@ -81,6 +81,11 @@ What makes these videos great:
   is visible). Never narrate something the viewer can't see then.
 - PAYOFF: the last beat closes the loop: it answers the hook and ties it to everyday life (what
   the viewer will notice or should never do), so the video invites a rewatch.
+- COMMENT QUESTION: the very last sentence of the last beat is a short question to the viewer
+  (at most 12 words, ends with "?") that people will want to answer: a guess, an
+  opinion or their own experience, tied to this story ("Which fix would you have tried first?",
+  "Would you ride in Max's boat?"). Just the question: never mention comments, likes or
+  subscribing, and never a yes/no that kills the thread.
 - Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
 
 
@@ -104,15 +109,32 @@ The format is TRIAL AND ERROR:
   and a callback at the end. Short punchy sentences, contractions, fragments, timing.
 - CONCRETE: real numbers people can picture (tons, metres, litres, hours), only from the model
   facts or the fact sheet.
+- EVERY LINE INFORMS: each sentence either moves the story or explains something real. No score,
+  counter or tally gags ("Physics 1", "Fail #2", "Round 3", scoreboards), no catchphrase that carries
+  no information. The hook must make complete sense to someone who has seen nothing else.
 - STORYTELLING, NOT TELEGRAMS: write like a great narrator telling a funny story out loud: full,
   natural sentences that flow into each other, with rhythm and a clear subject in each one. Fragments
   only as a deliberate punchline, never as the default ("Rewind. One field. Big idea." is wrong;
   "Let's rewind to the day Max had a big idea." is right). No repeated catchphrase in every beat.
 - CLARITY: a viewer who sees the video once must always know what Max is trying, what went wrong and
   why, and what he changes. Never cryptic, never an inside joke the viewer can't follow.
+- COMEDY CRAFT: every failure beat is built as SETUP then PUNCHLINE, and the punchline is the last
+  words of the beat. Use the visible gags as punchlines (whatever the action shows: a deadpan salute,
+  a fish on his hat, a duck overtaking him). One running gag set up early and paid off in the finale.
+  Max is confident, the narrator is dry: understatement beats exclamation marks.
+- THE AHA: the viewer must finish thinking "I didn't know that!". Each fix states its principle in
+  ONE memorable, quotable sentence with a concrete number or comparison taken from the facts (the
+  on-screen arrows, markers and numbers: name what the viewer SEES). The finale lands the most
+  jaw-dropping real-world link from the facts (the giant version of the same trick) right before
+  the closing question. Funny AND impressive: the laugh opens the door, the fact is the reward.
 - PAYOFF: the last beat is a clear, satisfying happy ending: say plainly what finally works and show
   the family enjoying it (it must feel finished), then call back the hook.
 - SYNC: each beat's words match what that beat's action shows on screen.
+- COMMENT QUESTION: the very last sentence of the last beat is a short question to the viewer
+  (at most 12 words, ends with "?") that people will want to answer: a guess, an
+  opinion or their own experience, tied to this story ("Which fix would you have tried first?",
+  "Would you ride in Max's boat?"). Just the question: never mention comments, likes or
+  subscribing, and never a yes/no that kills the thread.
 - Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
 
 
@@ -135,10 +157,42 @@ _API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "
 _notional = [0.0]
 
 
-def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
+def _call_once(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
     if BACKEND == "api":
         return _call_api(system, prompt, schema, effort, tools, max_tokens)
     return _call_cli(system, prompt, schema, effort, web=bool(tools))
+
+
+class UsageLimit(RuntimeError):
+    """The Claude subscription hit its session/usage limit; `reset` is Claude's own reset text."""
+
+    def __init__(self, msg):
+        super().__init__(msg)
+        import re as _re
+        m = _re.search(r"resets\s+([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)", msg, _re.I)
+        self.reset = None
+        if m:
+            import datetime as _dt
+            h, mi = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0), int(m.group(2) or 0)
+            now = _dt.datetime.now()
+            t = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+            self.reset = t if t > now else t + _dt.timedelta(days=1)
+
+
+def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
+    """Calls Claude; on a subscription usage limit, waits for the reset (up to SHOWRUNNER_MAX_WAIT
+    minutes) and retries once, so an unattended run finishes instead of dying."""
+    import time as _t
+    try:
+        return _call_once(system, prompt, schema, effort, tools, max_tokens)
+    except UsageLimit as e:
+        wait = (e.reset - __import__("datetime").datetime.now()).total_seconds() + 60 if e.reset else None
+        max_wait = float(os.getenv("SHOWRUNNER_MAX_WAIT", "65")) * 60
+        if wait is None or wait > max_wait:
+            raise
+        log.warning(f"[showrunner] Claude usage limit hit; waiting {wait / 60:.0f} min for the reset, then continuing")
+        _t.sleep(max(0, wait))
+        return _call_once(system, prompt, schema, effort, tools, max_tokens)
 
 
 def _call_cli(system, prompt, schema=None, effort="high", web=False):
@@ -173,6 +227,9 @@ def _call_cli(system, prompt, schema=None, effort="high", web=False):
         data = json.loads(r.stdout)
     except json.JSONDecodeError:
         raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
+    result_text = str(data.get("result") or "")
+    if data.get("is_error") and ("limit" in result_text.lower() and "reset" in result_text.lower()):
+        raise UsageLimit(result_text[:200])
     if data.get("is_error") or data.get("subtype") != "success":
         raise RuntimeError(f"claude -p error ({data.get('subtype')}): {str(data.get('result'))[:300]}")
     _notional[0] += float(data.get("total_cost_usd") or 0)
@@ -272,11 +329,18 @@ the set to build."""
         prompt += """
 
 For hero (story) sets, an ANGLE is a fresh telling of the hero's trial-and-error story: what he is
-building it for, the running gag, which disaster becomes the hook, the comic voice, the payoff."""
+building it for, the running gag, which disaster becomes the hook, the comic voice, the payoff.
+Never frame it as a score or contest ("Physics 1, Max 0", "rounds", "fail #2"): a counter tells the
+viewer nothing. The hook line must make sense on its own to someone who has seen nothing else."""
     out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium")
     _save_wishlist(out.get("wishlist", []))
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
+    if GAG_RE.search(best["hook_line"] + " " + best["title"]):            # no "Physics won round 3" hooks
+        clean = [c for c in cands if not GAG_RE.search(c["hook_line"] + " " + c["title"])]
+        if clean:
+            best = max(clean, key=lambda c: 2 * c["hook_strength"] + 2 * c["visual_fit"] + c["curiosity"]
+                       + c["novelty"] + c["shareability"])
     if best["set"] not in set_ids:
         best["set"] = set_ids[0]
     log.info(f"[showrunner] topic: {best['title']} | hook: {best['hook_line']}")
@@ -351,7 +415,7 @@ SCRIPT_SCHEMA = _obj({
 
 CRITIQUE_SCHEMA = _obj({
     "scores": _obj({"hook": I, "clarity": I, "story_flow": I, "problem_solution": I, "fun": I, "accuracy": I,
-                    "pacing": I, "visual_sync": I}),
+                    "pacing": I, "visual_sync": I, "learn": I}),
     "problems": {"type": "array", "items": S},
     "line_edits": {"type": "array", "items": S},
     "verdict": {"type": "string", "enum": ["ship", "revise"]},
@@ -367,8 +431,8 @@ def _rules(set_id):
     fails = [k for k, v in sp.ACTIONS.items() if v["kind"] == "fail"]
     max_group = 3 if fails else 4
     ladder = (f"\n- The fail_* actions are the hero's failures ({', '.join(fails)}): give each its own beat, name the"
-              f"\n  real cause, and make the NEXT beat the fix that answers it. Never use 'Fail #' or 'Attempt #'"
-              f"\n  stickers.") if fails else ""
+              f"\n  real cause, and make the NEXT beat the fix that answers it. Never use stickers for fail counts,"
+              f"\n  scores or attempts (no 'Fail #', no scoreboards).") if fails else ""
     return f"""STRUCTURE RULES (the renderer enforces them):
 - Beat 1 = a hook action ({hooks}): pick the one whose VISUAL matches your hook line (the viewer must
   see what the first words say); beat 2 = rewind.
@@ -380,7 +444,8 @@ def _rules(set_id):
   {WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. 10-17 beats in total.
 - Word budget: {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{WORDS_PER_SECOND} words/s). Hook <= {HOOK_MAX_WORDS} words.
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
-  "50 tons", text like "of dirt"); "label" = a short badge (text only). Use "none" on most beats,
+  "50 tons", text like "of dirt": a REAL measurement only); "label" = a short badge naming a real
+  part or idea, no numbers (e.g. "Planes turn by banking"). Use "none" on most beats,
   at most 6 stickers in total, never on the hook.
 - Numbers must match the model facts: what is ON SCREEN is the model."""
 
@@ -404,7 +469,7 @@ DIRECTIONS = {
 }
 
 
-def write_script(topic, facts, previous=None, critique=None, direction=None):
+def write_script(topic, facts, previous=None, critique=None, direction=None, effort="high"):
     set_id = topic["set"]
     prompt = f"""{_set_brief(set_id)}
 
@@ -435,7 +500,7 @@ Write the improved script."""
             prompt += ("\nTONE EXAMPLE: another writer's script for this same set. Do NOT reuse its jokes, lines "
                        f"or hook; beat it.\n{example}\n")
         prompt += "\nWrite the script. Make the hook impossible to scroll past and every beat earn its place."
-    return _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort="high")
+    return _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort=effort)
 
 
 def _directions(set_id):
@@ -483,7 +548,8 @@ telegraphic fragments), problem_solution (every problem/failure has its REAL cau
 named, and the next beat's fix clearly answers it and says why it works), fun (genuinely funny:
 character, comic timing, escalation, callbacks; no filler, nothing cringe), accuracy (every claim
 matches the fact sheet or the model facts), pacing (no beat too long or rushed, total length
-right), visual_sync (each beat's words match what that action shows).
+right), visual_sync (each beat's words match what that action shows), learn (would a curious adult
+say "I didn't know that!": surprising, concrete, memorable facts, a jaw-dropping finale link).
 
 {_set_brief(topic['set'])}
 
@@ -500,11 +566,28 @@ only if every score is {PASS_SCORE}+ and there are no factual errors or rule bre
     return _call(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
+def closing_question(text):
+    """The final sentence of `text` if it is a question to the viewer, else None."""
+    t = text.strip()
+    if not t.endswith("?"):
+        return None
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    return parts[-1].strip() if parts else None
+
+
+GAG_RE = re.compile(r"\b(physics|fail(ure)?|round|attempt|score|plane|max|take)\s*#?\s*(\d+|zero|one|two|"
+                    r"three|four|five)\b|\bscoreboard\b|\b\d+\s*-\s*\d+\b|\brounds\b|"
+                    r"\b(physics|gravity)\s+(wins|won|leads|led|scores?|scored)\b", re.I)
+
+
 def hard_checks(script, set_id):
     sp = sets.spec(set_id)
     beats = script["beats"]
     problems = list(sp.validate(beats))
     for k, b in enumerate(beats):
+        if GAG_RE.search(b["text"]):
+            problems.append(f"beat {k + 1}: score/counter gag ('{GAG_RE.search(b['text']).group(0)}') carries no "
+                            "information; replace it with story or explanation")
         n = len(b["text"].split())
         need = int(sp.min_seconds(b) * WORDS_PER_SECOND * 0.75)
         if k > 1 and n < need:
@@ -521,6 +604,14 @@ def hard_checks(script, set_id):
         problems.append(f"{stickers} stickers; max 6")
     if beats and beats[0].get("overlay", {}).get("type", "none") != "none":
         problems.append("no sticker on the hook beat")
+    if beats:
+        q = closing_question(beats[-1]["text"])
+        if not q:
+            problems.append("the last beat must END with a short question to the viewer that invites comments")
+        elif re.search(r"(comment|comments|like|subscribe|follow)", q, re.I):
+            problems.append("the closing question must not mention comments, likes, subscribing or following")
+        elif len(q.split()) > 14:
+            problems.append(f"the closing question has {len(q.split())} words; keep it under 13")
     for b in beats:
         if not b["text"].strip():
             problems.append(f"beat {sp.beat_actions(b)} has no narration")
@@ -544,7 +635,7 @@ def develop(topic, facts):
     from concurrent.futures import ThreadPoolExecutor
 
     def draft_and_review(direction):
-        script = write_script(topic, facts, direction=direction)
+        script = write_script(topic, facts, direction=direction, effort="high")
         problems = hard_checks(script, topic["set"])
         return script, problems, critique_script(script, topic, facts, problems), direction
 
@@ -559,28 +650,55 @@ def develop(topic, facts):
     log.info(f"[showrunner] best draft: '{direction}'")
     best = (script, problems, review)
     revised = False
-    for round_ in range(MAX_REVISIONS):
-        if _ships(review, problems):
-            break
-        script = write_script(topic, facts, previous=script, critique={
-            "automatic_checks": problems, **review,
-            "also": "read it aloud as a voice actor and polish rhythm and awkward phrases while you fix it"})
-        revised = True
-        problems = hard_checks(script, topic["set"])
-        review = critique_script(script, topic, facts, problems)
-        log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(review['scores'])} | hard problems: {len(problems)}")
-        if _rank(review, problems) > _rank(best[2], best[1]):
-            best = (script, problems, review)
+    try:
+        best, revised = _revise(topic, facts, script, problems, review, best)
+    except UsageLimit as e:
+        log.warning(f"[showrunner] {e}; shipping the best draft without revision")
     script, problems, review = best
     if problems:
         raise RuntimeError(f"no renderable script: {problems}")
     if not revised:                                     # a revision already polished it
-        polished = polish(script, topic, facts)
-        if not hard_checks(polished, topic["set"]):
-            script = polished
+        try:
+            polished = polish(script, topic, facts)
+            if not hard_checks(polished, topic["set"]):
+                script = polished
+        except UsageLimit as e:
+            log.warning(f"[showrunner] {e}; skipping the polish pass")
     if not _ships(review, problems):
         log.warning(f"[showrunner] best script scores {json.dumps(review['scores'])}: below the bar, shipping anyway")
     return script, review
+
+
+WEAK_SCORE = 4                         # any score this low earns a re-graded second revision
+
+
+def _revise(topic, facts, script, problems, review, best):
+    """Apply the editor's notes. Normally once, without re-grading (that doubled the wait). If any
+    score is very weak (fun 3/10...), the fix is re-graded and revised once more, and the best
+    graded version ships. The hard checks guard every version."""
+    revised = False
+    rounds = 2 if min(review["scores"].values()) <= WEAK_SCORE else MAX_REVISIONS
+    for round_ in range(rounds):
+        if _ships(review, problems):
+            break
+        fixed = write_script(topic, facts, previous=script, critique={
+            "automatic_checks": problems, **review,
+            "also": "read it aloud as a voice actor: full, flowing, funny sentences with punchlines; polish rhythm"},
+            effort="high")
+        fixed_problems = hard_checks(fixed, topic["set"])
+        if rounds > 1:                                 # weak draft: grade the fix so the next round has fresh notes
+            new_review = critique_script(fixed, topic, facts, fixed_problems)
+            log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(new_review['scores'])} | "
+                     f"hard problems: {fixed_problems or 0}")
+            if not fixed_problems and _rank(new_review, fixed_problems) > _rank(best[2], best[1]):
+                best, revised = (fixed, fixed_problems, new_review), True
+            script, problems, review = fixed, fixed_problems, new_review
+        else:
+            log.info(f"[showrunner] revision {round_ + 1}: editor notes applied | hard problems: {fixed_problems or 0}")
+            if not fixed_problems:
+                best, revised = (fixed, fixed_problems, review), True
+            script, problems = fixed, fixed_problems
+    return best, revised
 
 
 # ------------------- 5. film JSON + run -------------------
@@ -598,15 +716,17 @@ def to_film(script, topic, facts, review=None):
         elif sp.ACTIONS[acts[0]]["kind"] == "hook":
             beat["video"] = "epilogue"
         ov = b.get("overlay") or {}
-        if re.match(r"\s*(fail|attempt)\s*#?\s*\d", str(ov.get("text", "")), re.I):
-            ov = {}                                     # no "Fail #N" stickers (they read as noise)
+        if ov.get("type") == "label" and re.search(r"\d", str(ov.get("text", ""))):
+            ov = {}                     # no counters/scores/"Fail #N" labels; numbers belong in real stats
         if ov.get("type") == "stat" and ov.get("value"):
             beat["overlay"] = {"type": "stat", "value": ov["value"], "text": ov.get("text", "")}
         elif ov.get("type") == "label" and ov.get("text"):
             beat["overlay"] = {"type": "label", "text": ov["text"]}
         beats.append(beat)
     return {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
-            "music": "synth", "tail": 1.2, "beats": beats,
+            "music": "synth", "beats": beats, "cta": closing_question(beats[-1]["text"]) if beats else None,
+            # story sets end on a reunion: hold the payoff after the last word so it can land
+            "tail": 2.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2,
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"), "model": MODEL}}

@@ -83,7 +83,7 @@ ACTIONS = {
 }
 
 OVERLAY_TYPES = {"stat": "a number that counts up, e.g. {'type':'stat','value':'50 tons','text':'of soil'}",
-                 "label": "a short badge, e.g. {'type':'label','text':'Fail #2'}"}
+                 "label": "a short badge, e.g. {'type':'label','text':'Steel rebar'} (names a part, never a number)"}
 WORDS_PER_SECOND = 2.4
 
 

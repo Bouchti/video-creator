@@ -62,6 +62,120 @@ on-topic period footage over generic stock, e.g.
 > Publishing to social platforms is not implemented. The pipeline creates the
 > final video and metadata locally.
 
+## Evolution videos (`--source evolution`)
+
+The escalating **problem → solution** format: one continuous 3D world from drone height, and
+every time the world raises the bar the thing gets smarter. The first set,
+`bridge_evolution`, tells the story of the bridge:
+
+plank beam → *river widens* → stone arch → *wider still* → steel truss (triangle vs square
+drawing) → *120 m* → suspension bridge → *summer heat buckles the deck* → expansion joint →
+*wind twists it* → stiffening truss → finale.
+
+```powershell
+# write a new script (angle → research → draft → editor → revision) and render it
+.\venv\Scripts\python.exe main.py --source evolution
+.\venv\Scripts\python.exe main.py --source evolution "why every bridge looks different"
+.\venv\Scripts\python.exe main.py --source evolution --set ship_evolution      # another (built) set
+.\venv\Scripts\python.exe -m agents.evolution_writer --no-render     # script only, review first
+
+# render the hand-written reference script (engine/films/bridge_evolution.json)
+.\venv\Scripts\python.exe -m engine.make_film bridge_evolution --preview   # 3 stills per beat
+.\venv\Scripts\python.exe -m engine.make_film bridge_evolution             # the full film
+```
+
+How it fits together:
+
+| File | Role |
+| --- | --- |
+| `engine/sets/bridge_evolution_spec.py` | Action catalogue, model facts, order rules (pure data) |
+| `engine/sets/bridge_evolution.py` | Blender builder: river valley, sliding banks, 4 bridges, line drawings, traffic, ship |
+| `engine/films/evolution_film.py` | Blender runner for `"format": "evolution"` films (no hook/rewind) |
+| `engine/films/bridge_evolution.json` | Reference script (also the writer's tone example) |
+| `agents/evolution_writer.py` | Script writer + editor for evolution sets (reuses the showrunner backend) |
+| `engine/evo_kit.py` | Reusable kit + `EvolutionSet` base class every evolution set is built on |
+| `agents/scene_validator.py` | Accept/reject every ~3 s window while Blender renders |
+| `agents/set_builder.py` | Claude builds, renders, reviews and fixes a whole new set |
+| `agents/autopilot.py` | Runs everything unattended and repairs failures automatically |
+
+The white "pen" drawings (load arrows, triangle vs square, the box round the expansion joint,
+wind streaks) are emissive curves in the 3D scene, so they stay locked to the bridge. New
+evolution topics (boats, castles, engines...) are new sets: add `<set>_spec.py` with
+`FORMAT = "evolution"` and a `STAGE_ORDER`, a builder with one `a_<action>` method per action,
+and the set name to `EVOLUTION` in `engine/sets/__init__.py`.
+
+### Autopilot: fully automatic, self-repairing
+
+`python main.py --source evolution` (and `--source cutaway`) run under `agents/autopilot.py`:
+script → voice → Blender render (validated every ~3 s) → sound + captions → final check → upload
+notes, with every failure repaired and the stage redone, never starting over:
+
+| What goes wrong | What the autopilot does |
+| --- | --- |
+| script fails the rules / Claude error | retries; from the 3rd try picks a fresh angle |
+| Claude usage limit | waits for the reset, continues |
+| a rendered scene is rejected | Claude fixes the set's code, the render resumes from that beat |
+| Blender crashes with a Python error | Claude fixes the set's code, the render resumes |
+| Blender dies (GPU / memory) | resumes from the last frame |
+| ElevenLabs / network error | waits 2 min, retries (out of credits: stops with a clear message) |
+| final MP4 wrong (size, no audio, length) | rebuilds sound + captions, re-checks |
+| still rejected after every round | finishes the video as `<name>_NEEDS_REVIEW.mp4` (`AUTOPILOT_ON_GIVE_UP=fail` to stop instead) and restores the set's last working code if the fixes broke it |
+
+Each run is logged step by step in `output/autopilot/<run>.json`; an interrupted run (PC off,
+crash) continues with `python -m agents.autopilot --resume output/autopilot/<run>.json`. The
+finished video comes with `<name>.txt` (title, caption, hashtags). Budget:
+`AUTOPILOT_MAX_ATTEMPTS` (6 render attempts), `AUTOPILOT_MAX_HOURS` (10).
+
+### Scene validator (every ~3 s, while Blender renders)
+
+Every render of a set film is checked window by window **as soon as each window's frames are on
+disk**, not after the video is finished (the Blender version of the local-ai per-shot review):
+
+1. technical QC: no black / white / flat frames, no Blender magenta (missing texture), not frozen;
+2. Claude vision: start, middle and end frame of the window vs. what the beat's action must show
+   and what the narration says → scores for visual match, readability, image quality and
+   continuity, fatal problems, and a concrete fix. Accepted = no fatal problem and every score
+   ≥ `SCENE_MIN_SCORE` (default 6).
+
+Verdicts are logged live (`[scenes] window 07 21.0-24.0s [truss 1/2] ACCEPTED`) and saved to
+`output/<film>_work/scene_review.json`, with the judged frames in `output/<film>_work/review/`.
+
+| `SCENE_POLICY` | On a rejected window |
+| --- | --- |
+| `stop` (default) | Blender is stopped immediately; the error lists the rejected windows |
+| `fix` | Blender is stopped, Claude fixes the set's code, the render resumes from that beat (`SCENE_FIX_ATTEMPTS`, default 2) |
+| `report` | render everything, then fail with the list |
+| `warn` | log it and assemble the video anyway |
+
+`SCENE_VALIDATE=0` turns it off (it is on by default for evolution films and off for the Max
+cutaway films; `SCENE_VALIDATE=1` enables it there too). `SCENE_WINDOW_SECONDS` (3),
+`SCENE_REVIEW_BACKEND` (`subscription` = `claude -p`, or `api`), `SCENE_VISION=0` (technical QC
+only). Re-check an existing render without rendering: `python -m agents.scene_validator <film>`.
+
+### Auto set builder: Claude builds a new 3D subject
+
+```powershell
+python -m agents.set_builder "from a raft to a container ship"
+python -m agents.set_builder "how castles evolved" --id castle_evolution --rounds 5
+```
+
+Claude (Claude Code headless, on your subscription) reads the kit (`engine/evo_kit.py`) and the
+bridge set, designs the ladder of stages and problems, and writes
+`engine/sets/<id>_spec.py`, `engine/sets/<id>.py` and `engine/films/<id>.json`. The pipeline then
+checks them, renders 3 preview stills per beat, runs every beat through the scene validator and
+sends rejections (with the images and the reviewer's fix) back to Claude, up to `--rounds` times.
+Only when **every beat is accepted** is the set registered in `EVOLUTION`
+(`engine/sets/__init__.py`); then `python main.py --source evolution --set <id>` makes videos.
+Contact sheets of each round are saved in `output/sets/<id>/`. Claude can only write the set's own
+three files; anything else it touches is restored. Fix an existing set from a render's review:
+`python -m agents.set_builder --fix bridge_evolution --report output/bridge_evolution_work/scene_review.json`.
+
+Render settings: `EVO_SAMPLES` (Eevee TAA samples, default 48), `EVO_PCT` (resolution %),
+`EVO_RT=0` (no screen-space reflections, faster), `EVO_ENGINE=CYCLES` (CPU fallback), and
+`RENDER_WORKERS` / `--resume` / `--redo` work as for cutaway films. New sound effects
+(`rumble`, `stone_thud`, `steel_clank`, `train_pass`, `traffic`, `bridge_groan`) are generated
+once with `python -m agents.sfx_library`; until then close synthesized sounds stand in.
+
 ## Pipeline
 
 1. Select a trending topic with Tavily and Claude, or use a topic supplied on

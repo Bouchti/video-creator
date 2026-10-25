@@ -9,8 +9,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _beats(actions, words=12):
-    return [{"action": a, "text": " ".join(["word"] * words), "overlay": {"type": "none", "value": "", "text": ""}}
-            for a in actions]
+    beats = [{"action": a, "text": " ".join(["word"] * words), "overlay": {"type": "none", "value": "", "text": ""}}
+             for a in actions]
+    if beats:                                          # every script ends with a question to the viewer
+        beats[-1]["text"] = " ".join(["word"] * (words - 4)) + ". Would you try it?"
+    return beats
 
 
 GOOD = ["float_hook", "rewind", "dig", "layers", "gravel", "valve", "pipes", "rebar", "shotcrete", "cure",
@@ -72,6 +75,16 @@ class HardCheckTests(unittest.TestCase):
         self.assertTrue(any("stickers" in p for p in problems))
         self.assertTrue(any("hook" in p for p in problems))
 
+    def test_counter_gags_rejected(self):
+        for gag in ("Flat boards barely deflect air. Physics 1.", "Score: 3-0 to the ground.", "Fail #2 begins."):
+            script = {"beats": _beats(GOOD, words=11)}
+            script["beats"][3]["text"] = gag
+            self.assertTrue(any("counter gag" in p for p in showrunner.hard_checks(script, "pool")), gag)
+
+    def test_real_numbers_allowed(self):
+        for line in ("It needs 60 kilometres an hour.", "A bar every 25 centimetres.", "Double speed, four times lift."):
+            self.assertIsNone(showrunner.GAG_RE.search(line), line)
+
 
 class ToFilmTests(unittest.TestCase):
     def test_roles_and_overlays(self):
@@ -123,3 +136,23 @@ class MontageTests(unittest.TestCase):
         film = showrunner.to_film(script, {"set": "pool", "angle": "a"}, "f")
         self.assertEqual(film["beats"][2]["id"], "dig+gravel")
         self.assertEqual(film["beats"][2]["actions"], ["dig", "gravel"])
+
+
+class NuclearSetTests(unittest.TestCase):
+    def test_reference_film_is_valid(self):
+        film = json.load(open(os.path.join(ROOT, "engine", "films", "max_nuclear.json"), encoding="utf-8"))
+        self.assertEqual(spec("nuclear_story").validate(film["beats"]), [])
+        self.assertEqual(showrunner.hard_checks({"beats": film["beats"]}, "nuclear_story"), [])
+
+    def test_story_order_enforced(self):
+        film = json.load(open(os.path.join(ROOT, "engine", "films", "max_nuclear.json"), encoding="utf-8"))
+        beats = film["beats"]
+        beats[4], beats[5] = beats[5], beats[4]            # control rods before the runaway
+        self.assertTrue(any("story actions" in e for e in spec("nuclear_story").validate(beats)))
+
+
+class BoatSetTests(unittest.TestCase):
+    def test_reference_film_is_valid(self):
+        film = json.load(open(os.path.join(ROOT, "engine", "films", "max_boat.json"), encoding="utf-8"))
+        self.assertEqual(spec("boat_story").validate(film["beats"]), [])
+        self.assertEqual(showrunner.hard_checks({"beats": film["beats"]}, "boat_story"), [])

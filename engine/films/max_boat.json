@@ -1,0 +1,82 @@
+{
+  "title": "Max builds a steel boat (it sank first)",
+  "set": "boat_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "sink_hook",
+      "action": "sink_hook",
+      "video": "epilogue",
+      "text": "Max built a boat out of solid steel. It went straight down."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's see where it went wrong."
+    },
+    {
+      "id": "build_slab",
+      "action": "build_slab",
+      "text": "Max wants to take his kids across the lake, so he welds a big solid slab of steel."
+    },
+    {
+      "id": "fail_sink",
+      "action": "fail_sink",
+      "text": "Straight to the bottom. Steel is about eight times denser than water.",
+      "overlay": {
+        "type": "stat",
+        "value": "8x",
+        "text": "denser than water"
+      }
+    },
+    {
+      "id": "hull",
+      "action": "hull",
+      "text": "Same steel, shaped into a hollow hull. Now it pushes aside its own weight in water, and floats.",
+      "overlay": {
+        "type": "label",
+        "text": "Buoyancy"
+      }
+    },
+    {
+      "id": "fail_capsize",
+      "action": "fail_capsize",
+      "text": "Max adds a tall cabin and a mast, climbs to the top, and the whole thing rolls over."
+    },
+    {
+      "id": "keel",
+      "action": "keel",
+      "text": "A heavy keel down low keeps the weight at the bottom, so it swings back upright."
+    },
+    {
+      "id": "fail_leak",
+      "action": "fail_leak",
+      "text": "Then one rivet pops. Water floods the whole hull, and Max bails as fast as he can."
+    },
+    {
+      "id": "bulkheads",
+      "action": "bulkheads",
+      "text": "Watertight walls split the hull into rooms, so a leak fills just one. A pump spits it back out."
+    },
+    {
+      "id": "fail_drift",
+      "action": "fail_drift",
+      "text": "But with no engine, the wind decides where they go. Into the reeds."
+    },
+    {
+      "id": "propeller",
+      "action": "propeller",
+      "text": "A propeller throws water backwards, which pushes the boat forwards, and the rudder steers."
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "Kids aboard, and across the lake they go. It floats, stays upright, and stays dry. Would you ride in Max's boat?"
+    }
+  ],
+  "cta": "Would you ride in Max's boat?"
+}

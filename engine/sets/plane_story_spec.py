@@ -68,7 +68,7 @@ ACTIONS = {
 }
 
 OVERLAY_TYPES = {"stat": "a number that counts up, e.g. {'type':'stat','value':'60 km/h','text':'to take off'}",
-                 "label": "a short badge, e.g. {'type':'label','text':'Fail #1'}"}
+                 "label": "a short badge, e.g. {'type':'label','text':'Airfoil'} (names a part, never a number)"}
 WORDS_PER_SECOND = 2.4
 
 

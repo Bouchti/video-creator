@@ -16,6 +16,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import wave
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,11 +69,81 @@ def _write_wav(path, x):
 
 
 def _sticker_job(job):
-    path, overlay, t = job
-    _draw_overlay(Image.open(path).convert("RGB"), overlay, t).save(path)
+    """Draw a sticker on a COPY of a raw frame (raw renders stay clean, so they can be re-used by
+    --redo / --resume without stickers piling up)."""
+    src, overlay, t, dst = job
+    _draw_overlay(Image.open(src).convert("RGB"), overlay, t).save(dst)
 
 
-def _render_parallel(cmd, spans, total, n, work, start=None, hook=True):
+def _parse_redo(spec, film, beats, spans):
+    """'keel,bulkheads' (beat ids/actions) | '7' (beat number) | '42-46s' / '42.5-46' (seconds)
+    → sorted list of 1-based render frames."""
+    frames = set()
+    for part in [p.strip() for p in spec.split(",") if p.strip()]:
+        if any(c.isdigit() for c in part) and ("-" in part or part.endswith("s")) and not part.isdigit():
+            a, b = part.rstrip("s").split("-")
+            frames.update(range(int(float(a) * FPS) + 1, int(float(b) * FPS) + 2))
+            continue
+        hit = [k for k, b in enumerate(beats)
+               if part.isdigit() and k + 1 == int(part) or part in (b.get("id"), b.get("action"))
+               or part in (b.get("actions") or [])]
+        if not hit:
+            raise SystemExit(f"--redo: no beat or time range matches '{part}' (see --list)")
+        for k in hit:
+            frames.update(range(spans[k]["start"] + 1, spans[k]["end"] + 2))
+    total = spans[-1]["end"] + 1
+    return sorted(f for f in frames if 1 <= f <= total)
+
+
+def _ranges(frames):
+    out, start, prev = [], None, None
+    for f in frames:
+        if start is None:
+            start = prev = f
+        elif f == prev + 1:
+            prev = f
+        else:
+            out.append((start, prev))
+            start = prev = f
+    if start is not None:
+        out.append((start, prev))
+    return out
+
+
+class BlenderFailed(RuntimeError):
+    """Blender exited without finishing; .log holds its output (a Python traceback when the set's
+    code is at fault, nothing useful when the process itself died: GPU, memory, killed)."""
+
+    def __init__(self, log_text):
+        self.log = log_text
+        super().__init__(f"Blender failed:\n{log_text[-4000:]}")
+
+    @property
+    def is_code_error(self):
+        return "Traceback (most recent call last)" in self.log
+
+
+def _run_blender(cmd, watcher=None):
+    """Run one Blender process. With a scene watcher, poll it while Blender renders and stop
+    Blender as soon as a window is rejected (returns "aborted")."""
+    logf = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    p = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, text=True)
+    while p.poll() is None:
+        if watcher is not None and watcher.should_abort():
+            p.terminate()
+            p.wait()
+            log.warning("Blender stopped: a rendered scene was rejected")
+            return "aborted"
+        time.sleep(1.0)
+    logf.seek(0)
+    out = logf.read()
+    logf.close()
+    if "DONE" not in out:
+        raise BlenderFailed(out)
+    return out
+
+
+def _render_parallel(cmd, spans, total, n, work, start=None, hook=True, watcher=None):
     """Render the film with n Blender processes at once, each on a contiguous chunk of frames
     (worker 0 also renders the hook). A single process leaves the GPU idle while it updates the
     scene and writes each PNG; parallel workers fill those gaps. Frames are deterministic, so the
@@ -92,6 +164,17 @@ def _render_parallel(cmd, spans, total, n, work, start=None, hook=True):
         extra = [f"--range={a}:{b}"] + (["--hook"] if k == 0 and with_hook else [])
         procs.append((subprocess.Popen(cmd + extra, stdout=logf, stderr=subprocess.STDOUT, text=True), logf, k))
         log.info(f"  worker {k}: frames {a}-{b}" + (" + hook" if k == 0 and with_hook else ""))
+    while watcher is not None and any(p.poll() is None for p, _, _ in procs):
+        if watcher.should_abort():
+            for p, _, _ in procs:
+                if p.poll() is None:
+                    p.terminate()
+            for p, logf, _ in procs:
+                p.wait()
+                logf.close()
+            log.warning("Blender stopped: a rendered scene was rejected")
+            return "aborted"
+        time.sleep(1.0)
     failed = []
     for p, logf, k in procs:
         p.wait()
@@ -100,7 +183,35 @@ def _render_parallel(cmd, spans, total, n, work, start=None, hook=True):
         if "DONE" not in out:
             failed.append(f"worker {k}:\n{out[-2000:]}")
     if failed:
-        raise RuntimeError("Blender failed:\n" + "\n".join(failed))
+        raise BlenderFailed("\n".join(failed))
+
+
+def _scene_verdict(args, film, watcher, spans, work):
+    """After the render: every window accepted → None (carry on to post-production). Otherwise act on
+    SCENE_POLICY: warn → carry on; fix → let Claude fix the set's code, delete the rejected beats'
+    frames and resume the render (up to SCENE_FIX_ATTEMPTS rounds); stop/report → raise."""
+    from agents import scene_validator as sv
+    rep = watcher.finish()
+    log.info(f"Scene review: {rep['accepted']}/{rep['planned']} windows accepted ({watcher.report_path})")
+    if not rep["rejected"]:
+        return None
+    if watcher.policy == "warn":
+        log.warning(f"{len(rep['rejected'])} scene window(s) rejected; assembling anyway (SCENE_POLICY=warn)")
+        return None
+    attempt = getattr(args, "_scene_attempt", 0)
+    if watcher.policy == "fix" and attempt < int(os.getenv("SCENE_FIX_ATTEMPTS") or "2"):
+        from agents.set_builder import fix_scenes
+        log.info(f"Auto-fix round {attempt + 1}: asking Claude to fix {len(rep['rejected'])} rejected window(s)")
+        fix_scenes(film["set"], rep["rejected"])
+        first = min(r["beat"] for r in rep["rejected"]) - 1    # re-render from the first rejected beat on
+        frames_dir = os.path.join(work, "frames")
+        for p in glob.glob(os.path.join(frames_dir, "f_*.png")):
+            if int(os.path.basename(p)[2:6]) >= spans[first]["start"] + 1:
+                os.remove(p)
+        args._scene_attempt = attempt + 1
+        args.resume, args.reuse_voice, args.redo = True, True, ""
+        return produce(args)
+    raise sv.SceneRejected(rep["rejected"], watcher.report_path)
 
 
 def _overlay(beat):
@@ -112,6 +223,17 @@ def _overlay(beat):
         if c.get("type") in ("stat", "label"):
             return c
     return None
+
+
+def _cta_start(film, words, n_frames):
+    """Frame where the closing question starts being spoken (it stays on screen until the end)."""
+    q = [w.strip(".,!?;:\"'").lower() for w in film["cta"].split()]
+    spoken = [str(w.get("word", w.get("text", ""))).strip(".,!?;:\"' ").lower() for w in words]
+    for k in range(len(spoken) - len(q), -1, -1):
+        if spoken[k:k + 2] == q[:2]:
+            start = words[k].get("start", 0.0)
+            return max(0, min(n_frames - 1, int(start * FPS)))
+    return max(0, n_frames - int(3.5 * FPS))
 
 
 def _frame(frames_dir, i):
@@ -195,6 +317,10 @@ def main():
                     help="keep already-rendered frames and render only the missing ones")
     ap.add_argument("--remix", action="store_true",
                     help="reuse the rendered video; rebuild only sound + captions (implies --reuse-voice)")
+    ap.add_argument("--redo", default="",
+                    help="re-render ONLY these scenes, keep every other frame and the voice: beat ids/actions "
+                         "('keel,bulkheads'), beat numbers ('7') or time ranges ('42-46s')")
+    ap.add_argument("--list", action="store_true", help="print the scenes with their start/end times")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     return produce(args)
@@ -210,16 +336,27 @@ def produce(args):
     else:
         film_json = os.path.join(films, f"{args.film}.json")
     film = json.load(open(film_json, encoding="utf-8"))
-    # Data-driven films (a 3D set + one action per beat) all render through the generic runner.
-    film_py = os.path.join(films, "cutaway_film.py" if film.get("set") else f"{args.film}_film.py")
+    # Data-driven films (a 3D set + one action per beat) all render through a generic runner:
+    # "evolution" films (no hook/rewind, e.g. bridge_evolution) through evolution_film.py.
+    evolution = film.get("format") == "evolution"
+    film_py = os.path.join(films, "evolution_film.py" if evolution else
+                           "cutaway_film.py" if film.get("set") else f"{args.film}_film.py")
     beats = film["beats"]
     work = os.path.join(PROJECT_ROOT, "output", f"{args.film}_work")
     os.makedirs(work, exist_ok=True)
 
     # ---- voice + timing ----
     voice_path = os.path.join(work, "voice.mp3")
+    redo = getattr(args, "redo", "") or ""
+    if redo or getattr(args, "list", False):
+        args.reuse_voice = True                        # same voice → same timings → frames line up
+        if not os.path.exists(voice_path):
+            raise SystemExit("--redo/--list need a previous full render (work/voice.mp3)")
     if not ((args.reuse_voice or args.remix) and os.path.exists(voice_path)):
-        tmp, _ = generate_voiceover(" ".join(b["text"] for b in beats), voice=film.get("voice", "energetic"))
+        # a short pause between beats lets each gag / explanation land (ElevenLabs <break> tags)
+        gap = film.get("beat_pause", 0.55)
+        text = f' <break time="{gap:.2f}s" /> '.join(b["text"] for b in beats) if gap else " ".join(b["text"] for b in beats)
+        tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
         shutil.move(tmp, voice_path)
     duration = get_duration(voice_path)
     words = transcribe_with_whisper(voice_path)
@@ -235,6 +372,11 @@ def produce(args):
     timings_path = os.path.join(work, "timings.json")
     json.dump(timings, open(timings_path, "w", encoding="utf-8"))
     log.info(f"Voice {duration:.1f}s → {total_frames} frames, {len(beats)} beats")
+    if getattr(args, "list", False):
+        for k, (b, s) in enumerate(zip(beats, spans)):
+            print(f"{k + 1:2d}  {s['start'] / FPS:5.1f}s - {(s['end'] + 1) / FPS:5.1f}s  "
+                  f"{b.get('id') or b.get('action'):<16} {b['text'][:70]}")
+        return None
 
     video = os.path.join(work, "video.mp4")
     if args.remix:
@@ -244,15 +386,63 @@ def produce(args):
 
     # ---- render ----
     resume = getattr(args, "resume", False)
-    if not (args.preview or args.frames or resume):
+    baked_frames = None                                # (older renders: stickers baked into the kept frames)
+    from agents import scene_validator as sv
+    validate = sv.enabled(film) and not (args.preview or args.frames)
+    watcher = None
+    if validate:
+        from engine import sets as _sets
+        spec = _sets.spec(film["set"])
+    if redo:                                           # only the requested scenes are re-rendered
+        targets = _parse_redo(redo, film, beats, spans)
+        ids = _beat_ids(beats)
+        hook = spans[ids.index("hook")] if "hook" in ids else None
+        rew = spans[ids.index("rewind")] if "rewind" in ids else None
+        in_hook = hook and any(hook["start"] + 1 <= f <= hook["end"] + 1 for f in targets)
+        build = [f for f in targets if not (hook and hook["start"] + 1 <= f <= hook["end"] + 1)
+                 and not (rew and rew["start"] + 1 <= f <= rew["end"] + 1)]   # the rewind is rebuilt from the build
+        for f in targets:
+            p = os.path.join(work, "frames", f"f_{f:04d}.png")
+            if os.path.exists(p):
+                os.remove(p)
+        rr = _ranges(build)
+        log.info(f"Redo: {len(targets)} frames ({len(targets) / FPS:.1f}s) in {len(rr)} range(s)"
+                 + (" + hook" if in_hook else "") + f"; keeping the other {total_frames - len(targets)} frames")
+        baked_frames = None if os.path.exists(os.path.join(work, "frames", ".clean")) else set(targets)
+        if rr or in_hook:                              # (a rewind-only redo needs no Blender run)
+            cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json, timings_path,
+                   work]
+            extra = ([f"--ranges={','.join(f'{a}:{b}' for a, b in rr)}"] if rr else ["--range=1:0"]) + \
+                (["--hook"] if in_hook else [])
+            if validate:                               # re-check only the redone windows
+                watcher = sv.SceneWatcher(film, spans, work, spec=spec, only_frames=targets).start()
+            _run_blender(cmd + extra, watcher)
+        missing = [f for f in range(1, total_frames + 1) if not os.path.exists(os.path.join(work, "frames", f"f_{f:04d}.png"))
+                   and not (rew and rew["start"] + 1 <= f <= rew["end"] + 1)]
+        if missing and not (watcher and watcher.should_abort()):
+            raise RuntimeError(f"--redo: {len(missing)} frames are missing (first {missing[0]}); run a full render")
+        args.preview = args.frames = None
+    elif not (args.preview or args.frames or resume):
         shutil.rmtree(os.path.join(work, "frames"), ignore_errors=True)
-    log.info("Rendering in Blender...")
+    if not redo:
+        log.info("Rendering in Blender...")
     cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json, timings_path, work]
     extra = (["--preview"] if args.preview else []) + ([f"--frames={args.frames}"] if args.frames else [])
     workers = int(os.getenv("RENDER_WORKERS", "1"))   # measured: 2 = no gain on the laptop GPU
-    if film.get("set") and not (args.preview or args.frames) and (workers > 1 or resume):
+    if validate and not redo:                          # every ~3 s window is judged as soon as it is rendered
+        watcher = sv.SceneWatcher(film, spans, work, spec=spec, keep_previous=resume).start()
+    if redo:
+        pass
+    elif film.get("set") and not (args.preview or args.frames) and (workers > 1 or resume):
         start, hook = None, True
-        if resume:                                     # keep finished frames, render only the rest
+        if evolution:                                  # no hook staged in an epilogue: frames 1..N
+            hook, start = False, 1
+            if resume:
+                have = {int(os.path.basename(p)[2:6]) for p in glob.glob(os.path.join(work, "frames", "f_*.png"))}
+                missing = [f for f in range(1, total_frames + 1) if f not in have]
+                start = max(1, missing[0] - 1) if missing else total_frames + 1
+                log.info(f"  resume: {len(have)} frames kept, rendering from frame {start}")
+        elif resume:                                   # keep finished frames, render only the rest
             have = {int(os.path.basename(p)[2:6]) for p in glob.glob(os.path.join(work, "frames", "f_*.png"))}
             hook = not all(f in have for f in range(spans[0]["start"] + 1, spans[0]["end"] + 2))
             build0 = spans[2]["start"] + 1
@@ -260,29 +450,51 @@ def produce(args):
             start = max(build0, missing[0] - 1) if missing else total_frames + 1   # redo the last (maybe partial) one
             log.info(f"  resume: {len(have)} frames kept, rendering from frame {start}" + (" + hook" if hook else ""))
         if start is None or start <= total_frames or hook:
-            _render_parallel(cmd, spans, total_frames, max(1, workers), work, start=start, hook=hook)
+            _render_parallel(cmd, spans, total_frames, max(1, workers), work, start=start, hook=hook, watcher=watcher)
     else:
-        r = subprocess.run(cmd + extra, capture_output=True, text=True)
-        if "DONE" not in r.stdout:
-            raise RuntimeError(f"Blender failed:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}")
+        _run_blender(cmd + extra, watcher)
+    if watcher is not None:
+        verdict = _scene_verdict(args, film, watcher, spans, work)
+        if verdict is not None:                        # auto-fixed and re-rendered: that run produced the film
+            return verdict
     if args.preview or args.frames:
         log.info(f"Stills in {work}")
         return
     _rewind_montage(film, beats, spans, os.path.join(work, "frames"))
     frames = sorted(glob.glob(os.path.join(work, "frames", "f_*.png")))
     log.info(f"Rendered {len(frames)} frames")
+    if not redo:                                       # raw frames carry no stickers from now on
+        open(os.path.join(work, "frames", ".clean"), "w").close()
 
     # ---- stickers (spread over all CPU cores: one PNG load/draw/save per frame adds up) ----
-    jobs = [(frames[i], _overlay(beat), (i - span["start"]) / FPS)
+    cta = film.get("cta")
+    cta_from = _cta_start(film, words, len(frames)) if cta else len(frames)
+    comp = os.path.join(work, "comp")                  # final frames = raw render + stickers
+    shutil.rmtree(comp, ignore_errors=True)
+    os.makedirs(comp)
+    dst = lambda i: os.path.join(comp, os.path.basename(frames[i]))      # noqa: E731
+    jobs = [(frames[i], _overlay(beat), (i - span["start"]) / FPS, dst(i))
             for beat, span in zip(beats, spans) if _overlay(beat)
-            for i in range(span["start"], min(span["end"] + 1, len(frames)))]
+            for i in range(span["start"], min(span["end"] + 1, len(frames), cta_from))]
+    if cta:                                            # end card: the closing question, until the last frame
+        jobs += [(frames[i], {"type": "question", "text": cta}, (i - cta_from) / FPS, dst(i))
+                 for i in range(cta_from, len(frames))]
+    if baked_frames is not None:                       # old render: kept frames already carry their stickers
+        jobs = [j for j in jobs if int(os.path.basename(j[0])[2:6]) in baked_frames]
+    stickered = {j[3] for j in jobs}
+    for i in range(len(frames)):                       # frames without a sticker: a hard link, no copy
+        if dst(i) not in stickered:
+            try:
+                os.link(frames[i], dst(i))
+            except OSError:
+                shutil.copyfile(frames[i], dst(i))
     if jobs:
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
             list(pool.map(_sticker_job, jobs, chunksize=16))
 
-    subprocess.run([FFMPEG, "-y", "-framerate", str(FPS), "-i", os.path.join(work, "frames", "f_%04d.png"),
-                    "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p", video],
+    subprocess.run([FFMPEG, "-y", "-framerate", str(FPS), "-i", os.path.join(comp, "f_%04d.png"),
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-pix_fmt", "yuv420p", video],
                    check=True, capture_output=True)
     return _finish(args, film, beats, spans, words, total, work, voice_path, video)
 
@@ -295,6 +507,8 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     # ---- sound design ----
     cuts = []                                          # no whoosh on scene changes (too noisy)
     pops = [s["start"] / FPS + 0.18 for b, s in zip(beats, spans) if _overlay(b)]
+    if film.get("cta"):
+        pops.append(_cta_start(film, words, int(total * FPS)) / FPS + 0.1)
     whoosh = _read_wav(build_fx_track(total, cuts, pops, os.path.join(work, "whoosh.wav")))
     events = json.load(open(os.path.join(work, "events.json"), encoding="utf-8"))
     ids = _beat_ids(beats)

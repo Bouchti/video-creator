@@ -1,0 +1,91 @@
+{
+  "title": "Max builds a power station (it fought back)",
+  "set": "nuclear_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "boil_hook",
+      "action": "boil_hook",
+      "video": "epilogue",
+      "text": "Max wanted free electricity for his town. His reactor had other plans."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's see how he got here."
+    },
+    {
+      "id": "build_core",
+      "action": "build_core",
+      "text": "Uranium fuel rods in a tank of water. Every splitting atom gives off heat, and the water glows blue.",
+      "overlay": {
+        "type": "stat",
+        "value": "1 tonne",
+        "text": "of coal per fuel pellet"
+      }
+    },
+    {
+      "id": "chain",
+      "action": "chain",
+      "text": "Each split fires neutrons that split more atoms: a chain reaction."
+    },
+    {
+      "id": "fail_runaway",
+      "action": "fail_runaway",
+      "text": "Great, until nothing stops it. More splits, more heat, and the tank boils over."
+    },
+    {
+      "id": "control_rods",
+      "action": "control_rods",
+      "text": "The fix: control rods. They soak up spare neutrons, so pushing them in slows everything down.",
+      "overlay": {
+        "type": "label",
+        "text": "Control rods"
+      }
+    },
+    {
+      "id": "fail_no_power",
+      "action": "fail_no_power",
+      "text": "Calm, hot water. Max holds up a light bulb. Nothing. Heat isn't electricity."
+    },
+    {
+      "id": "turbine",
+      "action": "turbine",
+      "text": "So the steam spins a turbine, which spins magnets inside copper coils. That's electricity."
+    },
+    {
+      "id": "fail_pressure",
+      "action": "fail_pressure",
+      "text": "But the used steam has nowhere to go. Pressure climbs and the turbine chokes to a stop."
+    },
+    {
+      "id": "cooling",
+      "action": "cooling",
+      "text": "A condenser turns it back into water, and the cooling tower dumps the heat. That cloud is just vapour."
+    },
+    {
+      "id": "fail_geiger",
+      "action": "fail_geiger",
+      "text": "One problem left. Max walks up with a Geiger counter, and it starts screaming."
+    },
+    {
+      "id": "containment",
+      "action": "containment",
+      "text": "So it goes inside a steel-lined dome of concrete about a metre thick. Silence.",
+      "overlay": {
+        "type": "label",
+        "text": "Containment"
+      }
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "Night falls, Max pulls the lever, and the whole town lights up. Safely. Which disaster would you have fixed first?"
+    }
+  ],
+  "cta": "Which disaster would you have fixed first?"
+}

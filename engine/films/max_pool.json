@@ -50,7 +50,7 @@
         "rebar",
         "shotcrete"
       ],
-      "text": "Take two: a steel cage, a bar every 25 centimeters, then concrete sprayed on. The steel takes the stretch."
+      "text": "The real fix: a steel cage, a bar every 25 centimeters, then concrete sprayed on. The steel takes the stretch."
     },
     {
       "id": "cure",
@@ -94,7 +94,8 @@
     {
       "id": "finale",
       "action": "finale",
-      "text": "Four disasters later, it finally works. Kids? Cannonball!"
+      "text": "Four disasters later, it finally works. Kids? Cannonball! Which disaster would you have seen coming?"
     }
-  ]
+  ],
+  "cta": "Which disaster would you have seen coming?"
 }

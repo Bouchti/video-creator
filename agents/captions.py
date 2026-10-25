@@ -62,7 +62,7 @@ def chunk_words(words: list) -> list:
     return chunks
 
 
-WORD_Y = 905          # just above the middle: the eye's resting point on a 9:16 frame
+WORD_Y = 1390         # lower third: under the action, above the TikTok caption / button area
 
 
 def _word_text(word: str) -> str:
