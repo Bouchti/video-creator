@@ -4,7 +4,7 @@ Film production driver (runs in the project venv):
   python -m engine.make_film pool [--reuse-voice] [--preview | --frames=450,470]
 
 voiceover → word timings + lip-sync envelope → Blender render timed to the words
-→ overlay stickers → sound design (cut whooshes, synced SFX, ambience, music)
+→ overlay stickers → restrained sound design (authored SFX, ambience, music)
 → TikTok captions → output/<film>.mp4 (AAC, for TikTok) + <film>_preview.mp4
 (Opus audio, which also plays inside VS Code's built-in player).
 """
@@ -27,8 +27,9 @@ from PIL import Image, ImageDraw  # noqa: E402
 
 from config.paths import PROJECT_ROOT, get_output_dir  # noqa: E402
 from agents.beats import align_beats, script_word_timings, FPS  # noqa: E402
-from agents.editor_hailuo import (FFMPEG, generate_voiceover, get_duration,  # noqa: E402
-                                  transcribe_with_whisper, merge_audio_video, burn_subtitles)
+from agents.media import FFMPEG, get_duration, merge_audio_video, burn_subtitles  # noqa: E402
+from agents.transcription import transcribe_with_whisper  # noqa: E402
+from agents.voice import generate_voiceover  # noqa: E402
 from agents.audio_fx import build_fx_track, mix_audio, SR  # noqa: E402
 from agents.captions import words_to_ass  # noqa: E402
 from agents.animate import _draw_overlay  # noqa: E402
@@ -540,6 +541,9 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     subprocess.run([FFMPEG, "-v", "error", "-y", "-i", out, "-c:v", "copy", "-c:a", "libopus", "-b:a", "128k",
                     preview], check=True)
     log.info(f"\nFILM: {out} ({get_duration(out):.1f}s)\nVS Code preview: {preview}")
+    if os.getenv("POST_TEXT", "1") != "0":             # ready-to-post TikTok + YouTube text next to the video
+        from agents import post_text
+        post_text.write(film, out)
     return out
 
 

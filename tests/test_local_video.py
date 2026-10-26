@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -16,13 +17,15 @@ from local_video.assembly import (
 from local_video.backends import BackendAdapter, GenerationResult, _remove_generated_audio
 from local_video.config import PipelineConfig, resolve_within
 from local_video.models import ProjectManifest, Shot
-from local_video.planner import QUALITY_BAN, allocate_frames, plan_shots, shot_count_for_duration
+from local_video.planner import QUALITY_BAN, allocate_frames, allocate_story_frames, plan_shots, shot_count_for_duration
 from local_video.project import create_project, refresh_project_from_shot, replan_project
+from local_video.preflight import run_preflight
 from local_video.queue import FileLock, QueueBusyError, QueueRunner, _retake_prompt
-from local_video.validation import ffprobe, media_metadata, validate_clip
+from local_video.validation import ffprobe, media_metadata, validate_clip, validate_final
+from local_video.visual_review import review_clip, review_final_video
 
 
-def test_config(root, **values):
+def make_test_config(root, **values):
     defaults = dict(
         discover_services=False,
         output_root=Path(root),
@@ -60,7 +63,13 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(sum(allocate_frames(60, 20)), 1800)
         self.assertEqual(sum(allocate_frames(90, 30)), 2700)
         with self.assertRaises(ValueError):
-            shot_count_for_duration(59)
+            shot_count_for_duration(29)
+
+    def test_story_frame_allocation_is_dynamic_and_exact(self):
+        frames = allocate_story_frames(30, ["tiny hook"] + ["a much longer narrated story beat here"] * 8 + ["payoff"])
+        self.assertEqual(sum(frames), 900)
+        self.assertTrue(all(75 <= value <= 120 for value in frames))
+        self.assertGreater(len(set(frames)), 1)
 
     def test_shot_plan_is_exact_and_self_contained(self):
         shots, continuity = plan_shots(sample_script(), "desert city", 60, "35mm nocturne", "auto")
@@ -75,7 +84,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("SINGLE-SHOT CONTINUITY LOCK", shots[0].prompt)
         self.assertIn("CURRENT SHOT (the only event to render)", shots[0].prompt)
         self.assertNotIn("NEXT SHOT", shots[0].prompt)
-        self.assertNotIn("Final payoff", shots[0].prompt)
+        self.assertIn("WHOLE-STORY CONTRACT", shots[0].prompt)
         self.assertNotIn("FULL VISUAL SCREENPLAY", shots[0].prompt)
         self.assertNotIn("Beat 20", shots[0].prompt)
         self.assertLess(len(shots[0].prompt), 6000)
@@ -164,6 +173,10 @@ def fake_extractor(path, target, config):
     return Path(target)
 
 
+def fake_visual_reviewer(*args, **kwargs):
+    return {"valid": True, "problems": [], "fatal_problems": [], "revision_prompt": ""}
+
+
 class QueueTests(unittest.TestCase):
     def _project(self, folder, config):
         project = create_project(
@@ -185,12 +198,12 @@ class QueueTests(unittest.TestCase):
 
     def test_backend_fallback_is_recorded(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder, retry_limit=1, fallback_failures=1)
+            config = make_test_config(folder, retry_limit=1, fallback_failures=1)
             project = self._project(folder, config)
             minimax = FakeBackend(config, "minimax", ["h3 failed"])
             wan = FakeBackend(config, "wan", ["ok"])
             runner = QueueRunner(config, {"minimax": minimax, "wan": wan}, validator=fake_validator,
-                                 extractor=fake_extractor)
+                                 extractor=fake_extractor, visual_reviewer=fake_visual_reviewer)
             result = runner.run(project, shots={1})
             self.assertEqual(result.shots[0].status, "accepted")
             self.assertEqual(result.shots[0].backend, "wan")
@@ -200,7 +213,7 @@ class QueueTests(unittest.TestCase):
 
     def test_retry_limit_is_finite(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder, retry_limit=2, fallback_failures=9)
+            config = make_test_config(folder, retry_limit=2, fallback_failures=9)
             project = self._project(folder, config)
             minimax = FakeBackend(config, "minimax", ["bad", "bad", "bad", "bad"])
             wan = FakeBackend(config, "wan", [])
@@ -212,13 +225,13 @@ class QueueTests(unittest.TestCase):
 
     def test_cuda_failure_does_not_consume_creative_retry(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder, retry_limit=0, fallback_failures=1)
+            config = make_test_config(folder, retry_limit=0, fallback_failures=1)
             project = self._project(folder, config)
             minimax = FakeBackend(config, "minimax", ["CUDA error: unspecified launch failure"])
             wan = FakeBackend(config, "wan", ["ok"])
             result = QueueRunner(
                 config, {"minimax": minimax, "wan": wan}, validator=fake_validator,
-                extractor=fake_extractor,
+                extractor=fake_extractor, visual_reviewer=fake_visual_reviewer,
             ).run(project, shots={1})
             self.assertEqual(result.shots[0].status, "accepted")
             self.assertEqual(minimax.calls, 1)
@@ -227,7 +240,7 @@ class QueueTests(unittest.TestCase):
 
     def test_resume_skips_successful_shots(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder, retry_limit=0)
+            config = make_test_config(folder, retry_limit=0)
             project = self._project(folder, config)
             first = Path(project.project_dir) / "shots" / "shot-001.mp4"
             first.write_bytes(b"already-done")
@@ -237,7 +250,7 @@ class QueueTests(unittest.TestCase):
             minimax = FakeBackend(config, "minimax", ["ok"])
             wan = FakeBackend(config, "wan", [])
             result = QueueRunner(config, {"minimax": minimax, "wan": wan}, validator=fake_validator,
-                                 extractor=fake_extractor).run(
+                                 extractor=fake_extractor, visual_reviewer=fake_visual_reviewer).run(
                 project, shots={1, 2}
             )
             self.assertEqual(minimax.calls, 1)
@@ -246,7 +259,7 @@ class QueueTests(unittest.TestCase):
 
     def test_visual_rejection_revises_retry_prompt(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder, retry_limit=1, fallback_failures=9)
+            config = make_test_config(folder, retry_limit=1, fallback_failures=9)
             project = self._project(folder, config)
             minimax = FakeBackend(config, "minimax", ["ok", "ok"])
             wan = FakeBackend(config, "wan", [])
@@ -281,7 +294,7 @@ class QueueTests(unittest.TestCase):
 
     def test_replan_archives_old_clips_and_keeps_full_screenplay(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             project = self._project(folder, config)
             old_clip = Path(project.project_dir) / "shots" / "shot-001-old.mp4"
             old_clip.write_bytes(b"old")
@@ -302,7 +315,7 @@ class QueueTests(unittest.TestCase):
 
     def test_refresh_from_shot_preserves_earlier_acceptance(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             project = self._project(folder, config)
             kept = Path(project.project_dir) / "shots" / "shot-001.mp4"
             replaced = Path(project.project_dir) / "shots" / "shot-004.mp4"
@@ -325,9 +338,41 @@ class QueueTests(unittest.TestCase):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_visual_review_is_fail_closed_unless_explicitly_overridden(self):
+        manifest = ProjectManifest(
+            id="test", concept="test", duration_seconds=60, visual_style="film",
+            preferred_backend="auto", project_dir=".", script={},
+        )
+        shot = Shot(id="shot-001", index=0, duration_frames=90, prompt="p",
+                    negative_prompt="n", seed=1)
+        with patch.dict(os.environ, {"LOCAL_VIDEO_VISION_QC": "0", "LOCAL_VIDEO_ALLOW_QC_SKIP": "0"}):
+            self.assertFalse(review_clip("missing.mp4", shot, None, manifest)["valid"])
+            self.assertFalse(review_final_video("missing.mp4", manifest)["valid"])
+        with patch.dict(os.environ, {"LOCAL_VIDEO_VISION_QC": "0", "LOCAL_VIDEO_ALLOW_QC_SKIP": "1"}):
+            self.assertTrue(review_clip("missing.mp4", shot, None, manifest)["valid"])
+
+    def test_preflight_rejects_when_no_video_backend_is_available(self):
+        class MissingBackend:
+            @staticmethod
+            def available():
+                return False, "offline"
+
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            manifest = ProjectManifest(
+                id="test", concept="test", duration_seconds=60, visual_style="film",
+                preferred_backend="auto", project_dir=folder, narration_enabled=False,
+            )
+            with patch("local_video.preflight._tool_ok", return_value=True):
+                with self.assertRaisesRegex(RuntimeError, "No configured video backend"):
+                    run_preflight(
+                        manifest, config, {"minimax": MissingBackend(), "wan": MissingBackend()},
+                        require_visual_qc=False,
+                    )
+
     def test_minimax_output_audio_is_physically_removed(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             source = Path(folder) / "generated-with-audio.mp4"
             subprocess.run([
                 config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
@@ -341,7 +386,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_ffprobe_rejects_corrupt_media(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             source = Path(folder) / "bad.mp4"
             source.write_bytes(b"not-a-video")
             completed = subprocess.CompletedProcess([], 1, "", "invalid data")
@@ -358,7 +403,7 @@ class ValidationTests(unittest.TestCase):
             "format": {"duration": "3.0"},
         }
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             source = Path(folder) / "clip.mp4"
             source.write_bytes(b"video")
             with patch("local_video.validation.ffprobe", return_value=probe), patch(
@@ -369,6 +414,24 @@ class ValidationTests(unittest.TestCase):
                 self.assertTrue(report["valid"])
                 with self.assertRaisesRegex(ValueError, "wrong size"):
                     validate_clip(source, config, 320, 576, 3.0)
+
+    def test_final_rejects_multiple_audio_streams(self):
+        probe = {
+            "streams": [
+                {"codec_type": "video", "width": 1080, "height": 1920, "avg_frame_rate": "30/1",
+                 "nb_read_frames": "1800", "codec_name": "h264", "duration": "60"},
+                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "audio", "codec_name": "aac"},
+            ],
+            "format": {"duration": "60"},
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            video = Path(folder) / "final.mp4"
+            video.write_bytes(b"video")
+            with patch("local_video.validation.ffprobe", return_value=probe):
+                with self.assertRaisesRegex(ValueError, "exactly 1 / 1"):
+                    validate_final(video, config, 60)
 
 
 class AssemblyTests(unittest.TestCase):
@@ -387,7 +450,7 @@ class AssemblyTests(unittest.TestCase):
 
     def test_generated_clip_audio_is_never_used_as_ambience(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             shot = Shot(
                 id="shot-001", index=0, duration_frames=1800, prompt="p",
                 negative_prompt="n", seed=1, status="accepted",
@@ -404,7 +467,7 @@ class AssemblyTests(unittest.TestCase):
 
     def test_mix_does_not_create_unconnected_sidechain_without_music(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             manifest = ProjectManifest(
                 id="test", concept="test", duration_seconds=60, visual_style="film",
                 preferred_backend="auto", project_dir=folder,
@@ -424,7 +487,7 @@ class AssemblyTests(unittest.TestCase):
 
     def test_mix_creates_sidechain_when_music_is_present(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             manifest = ProjectManifest(
                 id="test", concept="test", duration_seconds=60, visual_style="film",
                 preferred_backend="auto", project_dir=folder,
@@ -444,7 +507,7 @@ class AssemblyTests(unittest.TestCase):
 
     def test_ffmpeg_command_has_exact_timeline_and_delivery_settings(self):
         with tempfile.TemporaryDirectory() as folder:
-            config = test_config(folder)
+            config = make_test_config(folder)
             frames = allocate_frames(60, 20)
             shots = []
             for index, duration_frames in enumerate(frames):

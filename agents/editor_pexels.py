@@ -1,7 +1,7 @@
 """
 Stock-footage editor: free real video from MULTIPLE free sources instead of
 AI-generated video. Reuses voice generation, subtitle burn, and stitching from
-editor_hailuo. Only the clip-fetching step differs.
+the shared media helpers. Only the clip-fetching step is stock-specific.
 
 Sources (queried in priority order; key-gated ones auto-skip if their key is
 missing, keyless ones always run):
@@ -48,17 +48,11 @@ DEFAULT_SOURCES = ["pexels", "pixabay", "coverr", "nasa", "archive", "wikimedia"
 # comes up short, so we don't hammer them for every clip slot.
 FAST_SOURCES = {"pexels", "pixabay", "coverr"}
 
-# Reuse all the helpers from editor_hailuo
-from agents.editor_hailuo import (
-    _remove_files,
-    get_duration,
-    generate_voiceover,
-    stitch_clips_to_duration,
-    merge_audio_video,
-    transcribe_with_whisper,
-    words_to_srt,
-    burn_subtitles,
+from agents.media import (
+    _remove_files, get_duration, stitch_clips_to_duration, merge_audio_video, burn_subtitles,
 )
+from agents.transcription import transcribe_with_whisper, words_to_srt
+from agents.voice import generate_voiceover
 
 
 def _duration_ok(dur, min_duration: int) -> bool:

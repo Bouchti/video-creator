@@ -48,13 +48,13 @@ def _camera_plan(subject: str, index: int) -> tuple[str, str]:
 
 
 def validate_duration(seconds: int) -> int:
-    if not 60 <= int(seconds) <= 90:
-        raise ValueError("TikTok project duration must be between 60 and 90 seconds")
+    if not 30 <= int(seconds) <= 90:
+        raise ValueError("Short-form project duration must be between 30 and 90 seconds")
     return int(seconds)
 
 
 def shot_count_for_duration(seconds: int) -> int:
-    return max(20, min(30, round(validate_duration(seconds) / 3.0)))
+    return max(10, min(30, round(validate_duration(seconds) / 3.0)))
 
 
 def allocate_frames(total_seconds: int, shot_count: int, fps: int = 30) -> list[int]:
@@ -65,6 +65,40 @@ def allocate_frames(total_seconds: int, shot_count: int, fps: int = 30) -> list[
     frames = [base + (1 if i < remainder else 0) for i in range(shot_count)]
     if any(not 75 <= value <= 120 for value in frames):
         raise ValueError("Shot plan must average 2.5 to 4 seconds per shot")
+    return frames
+
+
+def allocate_story_frames(total_seconds: int, beat_texts: list[str], fps: int = 30) -> list[int]:
+    """Allocate 2.5-4 second shots by narration density and story position."""
+    if not beat_texts:
+        return allocate_frames(total_seconds, shot_count_for_duration(total_seconds), fps)
+    total = validate_duration(total_seconds) * fps
+    count = len(beat_texts)
+    if not count * 75 <= total <= count * 120:
+        return allocate_frames(total_seconds, count, fps)
+    weights: list[float] = []
+    for index, text in enumerate(beat_texts):
+        words = max(1, len(str(text).split()))
+        position = index / max(1, count - 1)
+        story_emphasis = 0.9 if index == 0 else 1.12 if position >= 0.8 else 1.0
+        weights.append(max(0.75, min(1.35, words / 7.0)) * story_emphasis)
+    raw = [total * weight / sum(weights) for weight in weights]
+    frames = [max(75, min(120, round(value))) for value in raw]
+    delta = total - sum(frames)
+    while delta:
+        direction = 1 if delta > 0 else -1
+        candidates = [
+            index for index, value in enumerate(frames)
+            if (direction > 0 and value < 120) or (direction < 0 and value > 75)
+        ]
+        if not candidates:
+            raise ValueError("Could not allocate exact dynamic shot durations")
+        candidates.sort(key=lambda index: raw[index] - frames[index], reverse=direction > 0)
+        for index in candidates:
+            if not delta:
+                break
+            frames[index] += direction
+            delta -= direction
     return frames
 
 
@@ -251,6 +285,9 @@ def build_generation_context(
     _, inherit, handoff, _ = beat_data(index)
     lines = [
         "SINGLE-SHOT CONTINUITY LOCK",
+        "WHOLE-STORY CONTRACT: "
+        f"{script.get('story_premise') or concept} Goal: {script.get('protagonist_goal', '')} "
+        f"Final payoff: {script.get('ending_payoff', '')}",
         f"Required starting state: {inherit or 'begin exactly where the previous shot ended'}",
         f"Required ending state: {handoff or 'finish with a clear visual handoff to the next action'}",
         f"Character identity lock: {continuity.get('characters')}",
@@ -275,9 +312,10 @@ def plan_shots(
     ambience: str = "natural scene ambience",
     fps: int = 30,
 ) -> tuple[list[Shot], dict[str, Any]]:
-    count = shot_count_for_duration(duration_seconds)
-    frames = allocate_frames(duration_seconds, count, fps)
     beats = script.get("beats") if isinstance(script.get("beats"), list) else []
+    count = len(beats) or shot_count_for_duration(duration_seconds)
+    beat_texts = [str(beat.get("text") or "") for beat in beats] if beats else [""] * count
+    frames = allocate_story_frames(duration_seconds, beat_texts, fps)
     narration = script.get("spoken_script") or " ".join(str(b.get("text") or "") for b in beats)
     segments = _split_text(narration, count)
     descriptions = _physical_descriptions(beats, concept)
@@ -296,6 +334,11 @@ def plan_shots(
             story_link = f"Continue directly from {previous}; resolve the action in this final shot"
         else:
             story_link = f"Continue directly from {previous}; end with a visual motivation toward {following}"
+        beat = beats[index] if index < len(beats) and isinstance(beats[index], dict) else {}
+        visual = beat.get("visual") if isinstance(beat.get("visual"), dict) else {}
+        transition = str(visual.get("transition") or "cut")
+        if index == 0 or transition not in {"cut", "match_cut", "crossfade"}:
+            transition = "cut"
         shots.append(Shot(
             id=f"shot-{index + 1:03d}",
             index=index,
@@ -323,7 +366,7 @@ def plan_shots(
             seed=_seed(script.get("video_title") or concept, index),
             narration=segments[index],
             ambience=scene_ambience,
-            transition="match_cut" if index and index % 6 == 0 else "crossfade" if index and index % 5 == 0 else "cut",
+            transition=transition,
             continuity=dict(continuity),
             subject_action=subject,
             camera_action=camera,

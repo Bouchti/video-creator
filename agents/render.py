@@ -9,7 +9,7 @@ import tempfile
 
 from PIL import Image, ImageDraw, ImageFont
 
-from agents.editor_hailuo import FFMPEG
+from agents.media import FFMPEG
 
 W, H, FPS = 1080, 1920, 30
 

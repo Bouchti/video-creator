@@ -64,7 +64,7 @@ def search_trending_subjects() -> list:
     # Multiple search angles to find variety
     queries = [
         "fascinating untold history stories trending",
-        "surprising science discoveries 2026",
+        f"surprising science discoveries {datetime.now().year}",
         "weird historical facts going viral",
         "mysterious unexplained phenomena recent",
         "incredible animal behaviors discovered",
@@ -72,9 +72,9 @@ def search_trending_subjects() -> list:
     ]
 
     all_results = []
-    for q in queries[:3]:  # Use 3 queries to balance variety vs cost
+    for q in queries:
         try:
-            r = tavily.search(query=q, search_depth="basic", max_results=5)
+            r = tavily.search(query=q, search_depth="advanced", max_results=5, time_range="week")
             for item in r.get("results", []):
                 all_results.append({
                     "title": item.get("title", ""),
@@ -86,6 +86,35 @@ def search_trending_subjects() -> list:
 
     log.info(f"  Found {len(all_results)} candidate subjects")
     return all_results
+
+
+def research_topic(topic: str) -> list[dict]:
+    """Build a fresh evidence pack that the writer and critic must stay inside."""
+    response = tavily.search(
+        query=f'fact check authoritative sources "{topic}"',
+        search_depth="advanced", max_results=6, time_range="month",
+    )
+    results = list(response.get("results", []))
+    if len(results) < 2:
+        corroboration = tavily.search(
+            query=f'authoritative evidence "{topic}"', search_depth="advanced", max_results=6,
+        )
+        results.extend(corroboration.get("results", []))
+    sources, seen = [], set()
+    for item in results:
+        if not item.get("url") or not item.get("content"):
+            continue
+        if item["url"] in seen:
+            continue
+        seen.add(item["url"])
+        sources.append({
+            "title": item.get("title", ""),
+            "url": item["url"],
+            "evidence": item["content"][:1200],
+        })
+    if len(sources) < 2:
+        raise RuntimeError(f"Research returned only {len(sources)} usable source(s); need at least 2")
+    return sources
 
 
 # ------------------- TOPIC SELECTION -------------------
@@ -206,15 +235,7 @@ def find_todays_topic() -> dict:
     # Get candidates
     candidates = search_trending_subjects()
     if not candidates:
-        log.warning("  No candidates from search. Using fallback topics.")
-        candidates = [
-            {"title": "The bizarre way octopuses solve puzzles using individual arms",
-             "snippet": "", "url": ""},
-            {"title": "Why the world's oldest living tree has been alive for 5000 years",
-             "snippet": "", "url": ""},
-            {"title": "The ancient Roman concrete that gets STRONGER underwater",
-             "snippet": "", "url": ""},
-        ]
+        raise RuntimeError("Fresh trend research returned no candidates; refusing to use stale fallback topics")
 
     # Filter out recently used
     recently_used = load_used_topics()
@@ -222,9 +243,7 @@ def find_todays_topic() -> dict:
 
     # Let Claude pick
     selection = pick_topic(candidates, recently_used)
-
-    # Save for dedup
-    save_used_topic(selection["topic"])
+    selection["research"] = research_topic(selection["topic"])
 
     log.info(f"  Topic: {selection['topic']}")
     log.info(f"  Angle: {selection['angle']}")

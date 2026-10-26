@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agents import editor_hailuo as h
+from agents import voice as h
 
 
 class _Resp:

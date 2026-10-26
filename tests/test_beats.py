@@ -11,7 +11,7 @@ from agents.beats import (
 from agents import evaluator
 from agents.script import beat_word_range, plan_for_duration
 from agents.diagram import TEMPLATES, render_frame, stat_text_at
-from agents.editor_hailuo import get_scenes
+from agents.scene_utils import get_scenes
 from agents.photos import is_free_license, parse_imageinfo_pages
 
 

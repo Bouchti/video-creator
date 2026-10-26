@@ -42,10 +42,12 @@ def _ratio(value: str | None) -> float:
 
 def media_metadata(value: dict[str, Any]) -> dict[str, Any]:
     streams = value.get("streams") or []
-    video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+    video = video_streams[0] if video_streams else None
     if not video:
         raise ValueError("No video stream was found")
-    audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+    audio = audio_streams[0] if audio_streams else None
     duration = float(video.get("duration") or (value.get("format") or {}).get("duration") or 0.0)
     fps = _ratio(video.get("avg_frame_rate") or video.get("r_frame_rate"))
     frames = video.get("nb_read_frames") or video.get("nb_frames")
@@ -60,8 +62,10 @@ def media_metadata(value: dict[str, Any]) -> dict[str, Any]:
         "fps": fps,
         "frame_count": frame_count,
         "video_codec": video.get("codec_name"),
+        "video_stream_count": len(video_streams),
         "has_audio": audio is not None,
         "audio_codec": audio.get("codec_name") if audio else None,
+        "audio_stream_count": len(audio_streams),
     }
 
 
@@ -189,6 +193,11 @@ def validate_final(path: str | Path, config: PipelineConfig, duration: float) ->
         problems.append(f"final video codec is {metadata['video_codec']}, expected h264")
     if not metadata["has_audio"] or metadata["audio_codec"] != "aac":
         problems.append(f"final audio codec is {metadata['audio_codec']}, expected aac")
+    if metadata["video_stream_count"] != 1 or metadata["audio_stream_count"] != 1:
+        problems.append(
+            f"final stream layout is {metadata['video_stream_count']} video / "
+            f"{metadata['audio_stream_count']} audio; expected exactly 1 / 1"
+        )
     metadata.update(valid=not problems, problems=problems)
     if problems:
         raise ValueError("; ".join(problems))

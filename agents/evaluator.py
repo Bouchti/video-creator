@@ -23,7 +23,7 @@ RUBRIC:
    depict the words FAILS. Numbers, dates, and names in diagrams/overlays must equal the narration.
    Name the exact beat number in feedback.
 6. VISUAL KIND:
-   - `scene` beats (animated videos): one clear, concrete moment that depicts the words, recurring
+   - `scene` beats (local AI video): one clear, concrete moment that depicts the words, recurring
      characters referred to by name, no text/numbers requested inside the picture (those belong in
      the overlay). Scenes must form one chronological causal sequence, preserve character/world
      continuity, and end with a visible payoff using elements established earlier. A flashback after
@@ -35,7 +35,7 @@ RUBRIC:
 7. CONTENT SAFETY: Narration and visuals MUST NOT contain ANY of these phrases or concepts:
    - "pain", "agony", "suffering", "screaming in distress", "writhing", "contorted"
    - "blood", "wound", "burned", "injured", "bleeding"
-   - "weapon", "gun", "knife", "blade"
+   - gratuitous or graphic use of weapons, guns, knives, or blades
    - "violent", "attack", any depiction of harm to a person's body
    - Anything showing a person suffering or being hurt
    If a beat depicts drama through suffering/pain instead of through environment/action, FAIL it.
@@ -70,22 +70,20 @@ VERDICT_TOOL = {
 
 
 def evaluate_script(
-    script: dict, min_words: int = 55, max_words: int = 220, source: str = "hailuo"
+    script: dict, min_words: int = 55, max_words: int = 220, source: str = "pexels",
+    research: list[dict] | None = None,
 ) -> dict:
     wc = len(script.get("spoken_script", "").split())
-    comfy_check = ""
-    if source == "comfy":
-        comfy_check = """
-8. LOCAL AI LITERALNESS: Every scene must show a specific visible subject/action from the
-   topic — not generic stock-style b-roll. A silent viewer should follow the story. If scenes
-   are vague, abstract, or could fit any topic, FAIL with feedback naming which scene lacks
-   concrete story visuals.
-"""
+    content_mode = script.get("content_mode", "documentary")
     prompt = f"""Evaluate this video script:
 {json.dumps(script, indent=2)}
 
 (Length already verified: {wc} words, target {min_words}–{max_words}. Do not judge length.)
 Check facts strictly. Check for forbidden pain/harm/weapon language in EVERY beat.
+CONTENT MODE: {content_mode}. If documentary, FAIL any invented event, discovery, person, quotation,
+place, artifact, or scientific claim. If fiction, require the title, narration and description to label it.
+SOURCE EVIDENCE: {json.dumps(research or script.get('research_sources', []), indent=2)}
+For documentary content, every specific claim must be supported by this evidence. Unsupported claims FAIL.
 Confirm each beat's visual shows exactly what that beat's words say.
 Be lenient on cinematic style. Submit your verdict with the submit_verdict tool."""
 
@@ -146,7 +144,8 @@ def length_feedback(wc: int, min_words: int, max_words: int, num_beats: int, gra
 
 
 def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int = 3, target_seconds: int = 75,
-                        mode: str = "footage", source: str = "hailuo") -> dict:
+                        mode: str = "footage", source: str = "pexels", angle: str | None = None,
+                        content_mode: str = "documentary", research: list[dict] | None = None) -> dict:
     from agents.script import generate_script, plan_for_duration
 
     num_beats, min_words, max_words = plan_for_duration(target_seconds)
@@ -158,7 +157,8 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
         try:
             # After a failure, the model revises its own draft to fix the exact issue.
             script = generate_script(topic, tone, target_seconds=target_seconds,
-                                     previous=previous, feedback=last_feedback, mode=mode)
+                                     previous=previous, feedback=last_feedback, mode=mode,
+                                     angle=angle, content_mode=content_mode, research=research)
         except Exception as e:
             log.error(f"Script generation crashed: {e}")
             if final:
@@ -194,7 +194,7 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
 
         try:
             result = evaluate_script(
-                script, min_words=min_words, max_words=max_words, source=source
+                script, min_words=min_words, max_words=max_words, source=source, research=research
             )
         except Exception as e:
             log.error(f"Script evaluation crashed: {e}")

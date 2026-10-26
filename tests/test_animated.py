@@ -5,7 +5,6 @@ import wave
 
 import numpy as np
 
-from agents import image_gen
 from agents.animate import CAMERA_MOVES, _camera
 from agents.audio_fx import SR, build_fx_track
 from agents.beats import repair_beats, validate_beats
@@ -46,26 +45,6 @@ class SceneSchemaTests(unittest.TestCase):
         self.assertEqual(["scene"], visual["properties"]["kind"]["enum"])
         self.assertIn("Pixar", system_prompt("animated"))
         self.assertNotIn("Pixar", system_prompt("footage"))
-
-
-class ImageGenTests(unittest.TestCase):
-    def test_prompt_injects_named_character_looks_and_style(self):
-        chars = [{"name": "Max", "look": "a chubby builder in an orange hard hat"},
-                 {"name": "Lily", "look": "a girl with red pigtails"}]
-        prompt = image_gen.styled_prompt("Wide shot: Max waves from the pit.", chars)
-        self.assertIn("Max is a chubby builder in an orange hard hat", prompt)
-        self.assertNotIn("Lily", prompt)
-        self.assertTrue(prompt.endswith(image_gen.STYLE))
-
-    def test_workflow_is_a_connected_flux_graph(self):
-        wf = image_gen.build_workflow("a cat", seed=42)
-        self.assertEqual("a cat", wf["4"]["inputs"]["text"])
-        self.assertEqual(42, wf["7"]["inputs"]["seed"])
-        self.assertEqual("UnetLoaderGGUF", wf["1"]["class_type"])
-        for node in wf.values():  # every link points at an existing node
-            for value in node["inputs"].values():
-                if isinstance(value, list):
-                    self.assertIn(value[0], wf)
 
 
 class CameraTests(unittest.TestCase):

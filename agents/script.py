@@ -8,7 +8,7 @@ from agents.animate import CAMERA_MOVES
 from agents.beats import DIAGRAM_TEMPLATES, OVERLAY_TYPES, narration_from_beats, repair_beats
 
 # "animated": every beat is a generated Pixar-style 3D scene, animated in 2.5D.
-# "footage":  stock/AI footage, real photos, and diagrams (the --source pexels/comfy/hailuo path).
+# "footage": stock footage, real photos, and diagrams (the --source pexels path).
 SCRIPT_MODES = ("animated", "footage", "local-ai")
 
 load_dotenv(get_env_path())
@@ -139,8 +139,13 @@ LOCAL_AI_VISUAL_SCHEMA = {
             "enum": list(CAMERA_MOVES),
             "description": "One motivated camera move that reveals or follows the current action.",
         },
+        "transition": {
+            "type": "string",
+            "enum": ["cut", "match_cut", "crossfade"],
+            "description": "Story-motivated edit into this shot. Use cut by default, match_cut only for matching shape/action, and crossfade only for a real passage of time.",
+        },
     },
-    "required": ["kind", "continuity_in", "description", "continuity_out", "camera"],
+    "required": ["kind", "continuity_in", "description", "continuity_out", "camera", "transition"],
 }
 
 
@@ -359,6 +364,8 @@ The video generator must never create narration, dialogue, subtitles, cards, dia
 2. Every visual is kind `scene` and describes ONE filmable physical moment. It names the recurring
    character, their current action, the same location, relevant recurring props, and a clear framing.
    Write exact `continuity_in` and `continuity_out` states so adjacent shots join without a reset.
+   Choose a motivated transition into each shot: usually `cut`; `match_cut` only when motion or shape
+   truly matches; `crossfade` only when the story visibly advances through time. Never use a pattern.
 3. Define 1-3 recurring `characters` with exact immutable appearance, clothing, colors, and equipment.
    Refer to them by name in every scene where they appear. Never swap or redesign a character.
 4. Define one `location`, `time_of_day`, and `color_palette`. Preserve geography, architecture,
@@ -370,8 +377,12 @@ The video generator must never create narration, dialogue, subtitles, cards, dia
 7. End with a visible consequence or resolution that explains and pays off the opening hook. For this
    mode, do not end on a generic cliffhanger. Never introduce a new person, creature, object, or threat
    in the final beats merely as a twist; the payoff must come from elements established earlier.
-8. Avoid unsupported scientific absolutes and invented factual claims. Fictional mystery is allowed,
-   but its internal cause and effect must remain clear to the viewer.
+8. This pipeline defaults to DOCUMENTARY mode. Never invent a discovery, person, place, quotation,
+   artifact, scientific mechanism, or historical event. Fiction is allowed only when the request is
+   explicitly marked [FICTION]; the title, narration and description must clearly label it as fiction.
+   A recurring visual-only guide or demonstrator may connect the shots, but the narration must not
+   present that guide as a real discoverer or witness, and the guide must never perform an invented
+   historical event. Use them to observe or demonstrate only source-supported facts.
 9. Write the complete production bible: `story_premise`, one concrete `protagonist_goal`, specific
    `stakes`, a causal `ending_payoff`, and immutable `recurring_objects`. These fields plus every beat
    form the full screenplay sent to the video generator for context on every shot.
@@ -400,18 +411,25 @@ SYSTEM_PROMPT = system_prompt("footage")
 
 
 def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 75,
-                    previous: dict = None, feedback: str = None, mode: str = "footage") -> dict:
+                    previous: dict = None, feedback: str = None, mode: str = "footage",
+                    angle: str | None = None, content_mode: str = "documentary",
+                    research: list[dict] | None = None) -> dict:
     """Generate a beat-structured, target-length video script via Claude tool_use.
 
     With `previous` + `feedback`, the model REVISES its earlier draft to fix the
     reported problems instead of starting over (a rewrite tends to repeat or
     trade one problem for another).
     """
+    if topic.lstrip().upper().startswith("[FICTION]"):
+        content_mode = "fiction"
+    if content_mode not in {"documentary", "fiction"}:
+        raise ValueError("content_mode must be 'documentary' or 'fiction'")
     num_beats, min_words, max_words = plan_for_duration(target_seconds)
     lo, hi = beat_word_range(num_beats, min_words, max_words)
     tool = build_script_tool(num_beats, min_words, max_words, mode)
     limits = (f"LIMITS: {min_words}-{max_words} words TOTAL across all beat texts, "
               f"about {num_beats} beats of {lo}-{hi} words each.")
+    evidence = json.dumps(research or [], ensure_ascii=False, indent=2)
 
     if previous and feedback:
         draft = {k: v for k, v in previous.items() if k not in ("spoken_script", "credits")}
@@ -423,8 +441,12 @@ def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 
 Fix exactly those problems. Keep the story, facts, and visuals otherwise as close as possible —
 shorten or merge beats if the narration is too long.
 TOPIC: {topic}
+FRAMING ANGLE: {angle or 'choose the strongest truthful framing'}
+CONTENT MODE: {content_mode}
 TONE: {tone}
 {limits}
+SOURCE EVIDENCE (use only supported claims; never invent missing details):
+{evidence}
 
 PREVIOUS DRAFT:
 {json.dumps(draft, ensure_ascii=False)}
@@ -441,7 +463,11 @@ Submit the corrected FULL script with the submit_video_script tool."""
         prompt = f"""Create a viral {target_seconds}-second video about:
 
 TOPIC: {topic}
+FRAMING ANGLE: {angle or 'choose the strongest truthful framing'}
+CONTENT MODE: {content_mode}. In documentary mode, do not invent events or discoveries.
 TONE: {tone}
+SOURCE EVIDENCE (use only supported claims; never invent missing details):
+{evidence}
 
 Write ONE continuous story as beats. {limits}
 {visual_hint}
@@ -464,6 +490,10 @@ Submit with the submit_video_script tool."""
                 repair_beats(beats, scene_mode=mode in {"animated", "local-ai"})
                 # The voiceover IS the beats — derived, so words and visuals can't drift.
                 script["spoken_script"] = narration_from_beats(beats)
+            script["content_mode"] = content_mode
+            script["research_sources"] = research or []
+            if angle:
+                script["framing_angle"] = angle
             return script
 
     raise Exception("Claude did not call the submit_video_script tool")

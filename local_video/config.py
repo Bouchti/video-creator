@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import Iterable
 
 import requests
+from dotenv import load_dotenv
 
-from config.paths import PROJECT_ROOT, get_comfy_workflow_path
-from agents.editor_hailuo import FFMPEG, FFPROBE
+from config.paths import PROJECT_ROOT, get_comfy_workflow_path, get_env_path
+from agents.media import FFMPEG, FFPROBE
+
+load_dotenv(get_env_path())
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}

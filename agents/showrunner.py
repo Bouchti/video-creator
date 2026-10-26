@@ -665,7 +665,9 @@ def develop(topic, facts):
         except UsageLimit as e:
             log.warning(f"[showrunner] {e}; skipping the polish pass")
     if not _ships(review, problems):
-        log.warning(f"[showrunner] best script scores {json.dumps(review['scores'])}: below the bar, shipping anyway")
+        raise RuntimeError(
+            f"best script remained below the publication bar after revision: {json.dumps(review['scores'])}"
+        )
     return script, review
 
 

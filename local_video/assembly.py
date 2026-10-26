@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from agents.audio_fx import build_fx_track
+from agents.beats import script_word_timings
 from agents.captions import words_to_ass
-from agents.editor_hailuo import transcribe_with_whisper, words_to_srt
+from agents.transcription import transcribe_with_whisper, words_to_srt
 
 from .config import PipelineConfig, resolve_within
 from .models import ProjectManifest
@@ -181,8 +182,14 @@ def create_captions(
     output_dir: Path,
     export_srt: bool = True,
     word_highlight: bool = True,
+    beats: list[dict[str, Any]] | None = None,
+    total_duration: float | None = None,
 ) -> tuple[Path | None, Path | None, list[dict[str, Any]]]:
-    words = transcribe_with_whisper(str(narration))
+    heard_words = transcribe_with_whisper(str(narration))
+    words = (
+        script_word_timings(beats, heard_words, float(total_duration))
+        if beats and total_duration else heard_words
+    )
     ass = Path(words_to_ass(words, str(output_dir / "captions.ass"))) if word_highlight else None
     srt = None
     if export_srt or not word_highlight:
@@ -245,6 +252,8 @@ def assemble_project(
             project_dir,
             bool(manifest.captions.get("export_srt", True)),
             bool(manifest.captions.get("word_highlight", True)),
+            manifest.script.get("beats") if isinstance(manifest.script.get("beats"), list) else None,
+            manifest.duration_seconds,
         )
     burn = (captions_ass or captions_srt) if manifest.captions.get("burn_in", True) else None
     _run(build_final_command(silent_video, soundtrack, final, manifest.duration_seconds, config, burn), 1800, "Final render")

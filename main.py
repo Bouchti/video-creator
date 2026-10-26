@@ -1,21 +1,16 @@
 """
-Main orchestrator for the autonomous video pipeline.
+Autonomous vertical-video pipeline.
 
 Every video is built from script BEATS: each sentence of narration carries the
 visual shown while it is spoken.
-  animated - Pixar-style 3D scenes generated locally (Flux via ComfyUI), animated
-             in 2.5D, with recurring characters (~$0/video) — default
   pexels   - Stock/archival footage, real photos, and diagrams (~$0/video, fast)
-  comfy    - Footage beats as AI clips from a LOCAL video model via ComfyUI (slow)
-  local-ai - Durable MiniMax H3 / Wan project with resume, validation, and exact render
-  hailuo   - Footage beats as AI clips via Hailuo 02 (paid per clip, opt-in only)
+  local-ai - Durable MiniMax/Wan production with strict scene and final review (default)
 
 Usage:
-  python3 main.py                                          # default: animated
-  python3 main.py --source pexels                          # use Pexels stock
-  python3 main.py --source comfy "Custom topic here"       # custom topic, local AI video
-  python3 main.py --source hailuo "Custom topic here"      # custom topic, cloud AI video
-  python3 main.py --source pexels "Custom topic here"      # custom topic, stock
+  python main.py                                           # AI chooses a current topic
+  python main.py --duration 60                             # autonomous 60-second video
+  python main.py --source pexels "Custom topic here"       # custom topic, stock
+  python main.py --publish youtube                         # prepare a publish package
 """
 
 import sys
@@ -58,7 +53,7 @@ log = logging.getLogger("pipeline")
 DEFAULT_TOPIC = "The hidden science behind why ocean waves never stop moving"
 DEFAULT_TONE = "mysterious"
 DEFAULT_VOICE = "mysterious"
-DEFAULT_SOURCE = "cutaway"
+DEFAULT_SOURCE = "local-ai"
 
 OUTPUT_DIR = get_output_dir()
 
@@ -74,6 +69,12 @@ def write_post_notes(video_path: str, script: dict, credits: list) -> str:
              " ".join(script.get("hashtags", []))]
     if credits:
         lines += ["", "Photo credits (Wikimedia Commons):"] + [f"- {c}" for c in credits]
+    sources = script.get("research_sources") or []
+    if sources:
+        lines += ["", "Research sources:"] + [
+            f"- {source.get('title', 'Source')}: {source.get('url')}"
+            for source in sources if source.get("url")
+        ]
     with open(notes_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return notes_path
@@ -92,12 +93,15 @@ def run_pipeline(
     ambience: str = "natural location ambience",
     captions: bool = True,
     narration: bool = True,
+    publish_platforms: tuple[str, ...] = (),
+    publish_live: bool = False,
 ) -> dict:
     started = datetime.now()
     log.info("=" * 70)
     log.info(f"PIPELINE START | {started.strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 70)
 
+    selection = None
     # Stage 0: Find today's topic via Leader Agent (unless topic explicitly provided)
     if topic is None:
         log.info("\n[STAGE 0] Leader Agent: trending topic discovery")
@@ -115,13 +119,24 @@ def run_pipeline(
         log.info(f"Topic (manual): {topic}")
         tone = tone or DEFAULT_TONE
 
+    research = selection.get("research", []) if selection else []
+    if not research:
+        log.info("\n[STAGE 0B] Researching factual source evidence")
+        try:
+            from agents.leader import research_topic
+            research = research_topic(topic)
+        except Exception as e:
+            log.error(f"Topic research failed: {e}")
+            return {"success": False, "stage_failed": "research", "topic": topic, "error": str(e)}
+
     log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
 
     log.info("\n[STAGE 1] Script generation + evaluation")
     from agents.evaluator import evaluate_with_retry
-    mode = "animated" if source == "animated" else "local-ai" if source == "local-ai" else "footage"
+    mode = "local-ai" if source == "local-ai" else "footage"
+    angle = selection.get("angle") if selection else None
     script = evaluate_with_retry(topic, tone=tone, max_retries=3, target_seconds=duration, mode=mode,
-                                 source=source)
+                                 source=source, angle=angle, research=research)
     if not script:
         log.error("Script generation failed. Aborting.")
         return {"success": False, "stage_failed": "script", "topic": topic}
@@ -131,18 +146,12 @@ def run_pipeline(
 
     log.info(f"\n[STAGE 2] Video generation ({source})")
 
-    if source == "animated":
-        from agents.editor_beats import process_video
-    elif source == "pexels":
+    if source == "pexels":
         from agents.editor_pexels import process_video
-    elif source == "hailuo":
-        from agents.editor_hailuo import process_video
-    elif source == "comfy":
-        from agents.editor_comfy import process_video
     elif source == "local-ai":
         from agents.editor_local_ai import process_video
     else:
-        log.error(f"Unknown source: {source}. Use 'animated', 'pexels', 'comfy', 'local-ai', or 'hailuo'.")
+        log.error(f"Unknown source: {source}. Use 'pexels' or 'local-ai'.")
         return {"success": False, "stage_failed": "source_invalid", "topic": topic}
 
     try:
@@ -176,6 +185,33 @@ def run_pipeline(
         shutil.move(final_path, output_path)
     credits = script.get("credits") or []
     notes_path = write_post_notes(output_path, script, credits)
+    from agents.post_text import write as write_post_text
+    post_text_path = write_post_text(script, output_path)
+    if selection:
+        from agents.leader import save_used_topic
+        save_used_topic(topic)
+
+    publishing = []
+    if publish_platforms:
+        from agents.publisher import publish_video
+        publish_metadata = {
+            "title": script["video_title"],
+            "description": script.get("description", ""),
+            "hashtags": script.get("hashtags", []),
+            "ai_generated": source == "local-ai",
+        }
+        try:
+            publishing = [
+                publish_video(output_path, platform, publish_metadata, live=publish_live)
+                for platform in publish_platforms
+            ]
+        except Exception as e:
+            log.error(f"Publishing failed: {e}", exc_info=True)
+            return {
+                "success": False, "stage_failed": "publishing", "topic": topic,
+                "video_path": output_path, "notes_path": notes_path,
+                "post_text_path": post_text_path, "publishing": publishing, "error": str(e),
+            }
 
     elapsed_min = (datetime.now() - started).total_seconds() / 60
     log.info(f"\nFINAL VIDEO: {output_path}")
@@ -196,6 +232,8 @@ def run_pipeline(
             "credits": credits,
         },
         "notes_path": notes_path,
+        "post_text_path": post_text_path,
+        "publishing": publishing,
         "elapsed_minutes": round(elapsed_min, 1),
     }
 
@@ -204,22 +242,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["cutaway", "evolution", "animated", "pexels", "comfy", "local-ai", "hailuo"],
+    parser.add_argument("--source", choices=["cutaway", "evolution", "pexels", "local-ai"],
                         default=DEFAULT_SOURCE,
-                        help="cutaway (3D cross-section explainer: the showrunner picks the best topic our "
-                             "Blender sets can film, writes + critiques the script, renders; default), "
+                        help="local-ai (durable MiniMax/Wan production; default), cutaway (3D cross-section "
+                             "explainer: the showrunner picks a filmable topic, critiques and renders), "
                              "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
                              "truss -> suspension bridge), "
-                             "animated (Pixar-style 3D scenes generated locally), pexels "
-                             "(free stock + photos + diagrams), comfy (legacy local AI video), local-ai "
-                             "(durable MiniMax/Wan production), or hailuo "
-                             "(paid cloud AI video, opt-in)")
+                             "or pexels (free stock + photos + diagrams)")
     parser.add_argument("--set", default=None, help="Evolution set for --source evolution (default: the first in "
                                                     "engine/sets EVOLUTION; new sets: python -m agents.set_builder)")
     parser.add_argument("--tone", default=None, help="Script tone")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help="Voice style")
     parser.add_argument("--duration", type=int, default=75,
-                        help="Target video length in seconds (e.g. 60-90). Scales narration + scene count.")
+                        help="Target video length in seconds (30-90). Scales narration + scene count.")
     parser.add_argument("--backend", choices=["auto", "minimax", "wan"], default="auto",
                         help="Backend for --source local-ai (Auto prefers MiniMax H3 and records Wan fallback)")
     parser.add_argument("--visual-style", default=None, help="Shared visual style for --source local-ai")
@@ -228,7 +263,14 @@ if __name__ == "__main__":
     parser.add_argument("--ambience", default="natural location ambience", help="Ambience direction")
     parser.add_argument("--no-captions", action="store_true", help="Disable captions for --source local-ai")
     parser.add_argument("--no-narration", action="store_true", help="Create a music-and-ambience local AI edit")
+    parser.add_argument("--publish", action="append", choices=["youtube", "instagram", "tiktok"], default=[],
+                        help="Prepare a publish package (repeat for multiple platforms)")
+    parser.add_argument("--publish-live", action="store_true",
+                        help="Actually upload; also requires PUBLISH_ENABLED=1 and platform credentials")
     args = parser.parse_args()
+
+    if args.publish_live and not args.publish:
+        parser.error("--publish-live requires at least one --publish PLATFORM")
 
     if args.source in ("evolution", "cutaway"):
         # The 3D pipelines run under the autopilot: script → voice → Blender render (every ~3 s window
@@ -236,7 +278,15 @@ if __name__ == "__main__":
         # redone automatically (agents/autopilot.py). A positional topic is the angle to develop.
         from agents.autopilot import GiveUp, run as autopilot
         try:
-            logging.getLogger("pipeline").info(f"Film: {autopilot(args.source, angle=args.topic, set_id=args.set)}")
+            film_path = autopilot(args.source, angle=args.topic, set_id=args.set)
+            logging.getLogger("pipeline").info(f"Film: {film_path}")
+            if args.publish:
+                from agents.publisher import publish_video
+                for platform in args.publish:
+                    package = publish_video(film_path, platform, {"ai_generated": True}, live=args.publish_live)
+                    logging.getLogger("pipeline").info(
+                        f"{platform} publish status: {package.get('status')} ({package.get('package_path')})"
+                    )
         except GiveUp:
             raise SystemExit(1)
         raise SystemExit(0)
@@ -256,6 +306,8 @@ if __name__ == "__main__":
         ambience=args.ambience,
         captions=not args.no_captions,
         narration=not args.no_narration,
+        publish_platforms=tuple(args.publish),
+        publish_live=args.publish_live,
     )
 
     if result["success"]:
@@ -264,6 +316,9 @@ if __name__ == "__main__":
         print(f"  Video:  {result['video_path']}")
         print(f"  Title:  {result['title']}")
         print(f"  Notes:  {result['notes_path']}")
+        print(f"  Posts:  {result['post_text_path']}")
+        for package in result.get("publishing", []):
+            print(f"  Publish ({package['platform']}): {package['status']}")
         print(f"  Time:   {result['elapsed_minutes']} min")
         sys.exit(0)
     else:

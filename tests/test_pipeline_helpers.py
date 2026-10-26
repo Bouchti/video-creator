@@ -4,12 +4,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents import evaluator
-from agents.editor_hailuo import (
-    get_scenes,
-    scene_prompt,
-    stitch_clips_to_duration,
-    words_to_srt,
-)
+from agents.media import stitch_clips_to_duration
+from agents.scene_utils import get_scenes, scene_prompt
+from agents.transcription import words_to_srt
 from agents.publisher import publish_video
 
 
@@ -83,9 +80,14 @@ class EvaluatorTests(unittest.TestCase):
 
 
 class PublisherTests(unittest.TestCase):
-    def test_publisher_is_explicitly_unimplemented(self):
-        with self.assertRaises(NotImplementedError):
-            publish_video("video.mp4")
+    def test_publisher_prepares_without_external_side_effect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "video.mp4"
+            video.write_bytes(b"video")
+            result = publish_video(video, "youtube", {"title": "Test"})
+            self.assertEqual(result["status"], "prepared")
+            self.assertTrue(Path(result["package_path"]).is_file())
+            self.assertTrue(result["metadata"]["ai_generated"])
 
 
 if __name__ == "__main__":

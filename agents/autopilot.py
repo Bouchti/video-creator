@@ -16,8 +16,8 @@ Stages and what happens when one fails:
                 c) Blender dies without a traceback (GPU / memory / killed) → resume as is
                 d) voice (ElevenLabs) or network error → wait and retry; out of credits → stop with a
                    clear message (cannot be fixed by retrying)
-                e) still rejected after every fix round → finish the video anyway with
-                   SCENE_POLICY=warn, marked NEEDS_REVIEW (or stop: AUTOPILOT_ON_GIVE_UP=fail)
+                e) still rejected after every fix round → stop safely (shipping requires the explicit
+                   AUTOPILOT_ON_GIVE_UP=ship override and is never the default)
   3. check      the final MP4 is probed: 1080x1920, audio present, duration matches the voice.
                 A bad file → rebuild sound + captions (--remix), then a full post-production retry.
   4. notes      <video>.txt with title, caption and hashtags for the upload.
@@ -28,7 +28,7 @@ output/autopilot/<run>.json, so an interrupted run continues where it stopped (-
 
   AUTOPILOT_MAX_ATTEMPTS=6      render attempts (each one resumes, it never starts over)
   AUTOPILOT_MAX_HOURS=10        overall time budget
-  AUTOPILOT_ON_GIVE_UP=ship     ship (marked NEEDS_REVIEW) | fail
+  AUTOPILOT_ON_GIVE_UP=fail     fail safely | ship (explicit override, marked NEEDS_REVIEW)
 """
 import argparse
 import datetime
@@ -127,7 +127,7 @@ def _restore_first_backup(set_id, run):
 
 def probe(path):
     """1080x1920 video, an audio stream, a sane duration."""
-    from agents.editor_hailuo import FFMPEG
+    from agents.media import FFMPEG
     ffprobe = shutil.which("ffprobe") or FFMPEG.replace("ffmpeg", "ffprobe")
     r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration",
                         "-of", "json", path], capture_output=True, text=True)
@@ -258,9 +258,9 @@ def stage_render(run, film_json):
 
 
 def _give_up(run, film_json, set_id, exc):
-    """Every repair round is spent: ship the video marked NEEDS_REVIEW (default), or fail."""
+    """Stop after exhausted repairs unless shipping a flagged draft was explicitly requested."""
     from engine.make_film import produce
-    if (os.getenv("AUTOPILOT_ON_GIVE_UP") or "ship").lower() == "fail":
+    if (os.getenv("AUTOPILOT_ON_GIVE_UP") or "fail").lower() == "fail":
         if set_id:
             _restore_first_backup(set_id, run)
         raise GiveUp(f"render could not be repaired: {exc}")

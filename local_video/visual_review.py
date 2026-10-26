@@ -1,4 +1,4 @@
-"""Story-aware frame review for generated clips, with graceful offline fallback."""
+"""Fail-closed story-aware review for generated clips and the final edit."""
 
 from __future__ import annotations
 
@@ -36,13 +36,32 @@ REVIEW_TOOL = {
     },
 }
 
+FINAL_REVIEW_TOOL = {
+    "name": "submit_final_video_review",
+    "description": "Approve or reject the complete assembled social video.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "story_coherence": {"type": "integer", "minimum": 1, "maximum": 10},
+            "continuity": {"type": "integer", "minimum": 1, "maximum": 10},
+            "visual_quality": {"type": "integer", "minimum": 1, "maximum": 10},
+            "pacing": {"type": "integer", "minimum": 1, "maximum": 10},
+            "caption_readability": {"type": "integer", "minimum": 1, "maximum": 10},
+            "fatal_problems": {"type": "array", "items": {"type": "string"}},
+            "problems": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["story_coherence", "continuity", "visual_quality", "pacing",
+                     "caption_readability", "fatal_problems", "problems"],
+    },
+}
+
 
 def review_enabled() -> bool:
     value = os.getenv("LOCAL_VIDEO_VISION_QC", "1").strip().lower()
     return value not in {"0", "false", "no", "off"} and bool(os.getenv("ANTHROPIC_API_KEY"))
 
 
-def _sample_frames(path: str | Path) -> list[str]:
+def _sample_frames(path: str | Path, ratios=(0.05, 0.5, 0.95)) -> list[str]:
     try:
         import cv2
     except ImportError:
@@ -50,7 +69,7 @@ def _sample_frames(path: str | Path) -> list[str]:
     capture = cv2.VideoCapture(str(path))
     count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     encoded: list[str] = []
-    for ratio in (0.05, 0.5, 0.95):
+    for ratio in ratios:
         capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, round((count - 1) * ratio)))
         ok, frame = capture.read()
         if not ok or frame is None:
@@ -83,12 +102,13 @@ def _encode_still(path: str | Path) -> str | None:
 
 
 def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manifest: Any) -> dict[str, Any]:
-    """Return an acceptance report; service failures skip review rather than deadlocking a run."""
+    """Return an acceptance report. Creative review is fail-closed by default."""
     if not review_enabled():
-        return {"valid": True, "skipped": True, "reason": "vision QC disabled or API key unavailable"}
+        valid = os.getenv("LOCAL_VIDEO_ALLOW_QC_SKIP", "0") == "1"
+        return {"valid": valid, "skipped": True, "reason": "vision QC disabled or API key unavailable"}
     frames = _sample_frames(path)
     if not frames:
-        return {"valid": True, "skipped": True, "reason": "could not sample video frames"}
+        return {"valid": False, "skipped": True, "reason": "could not sample video frames"}
     content: list[dict[str, Any]] = []
     if previous_frame and previous_frame.is_file():
         prior = _encode_still(previous_frame)
@@ -148,7 +168,7 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
         threshold = int(os.getenv("LOCAL_VIDEO_VISION_MIN_SCORE", "7"))
         strict_pass = all(score >= threshold for score in scores.values())
         average = sum(scores.values()) / len(scores)
-        quality_floor_pass = (
+        quality_floor_pass = os.getenv("LOCAL_VIDEO_ALLOW_QUALITY_FLOOR", "0") == "1" and (
             scores["visual_match"] >= max(1, threshold - 2)
             and scores["continuity"] >= max(1, threshold - 1)
             and scores["image_quality"] >= threshold
@@ -168,5 +188,62 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
             "revision_prompt": str(values.get("revision_prompt") or "").strip(),
         }
     except Exception as exc:
-        log.warning("Visual clip review unavailable (%s); continuing with local QC", exc.__class__.__name__)
-        return {"valid": True, "skipped": True, "reason": f"vision review unavailable: {exc.__class__.__name__}"}
+        log.warning("Visual clip review unavailable (%s); rejecting clip", exc.__class__.__name__)
+        valid = os.getenv("LOCAL_VIDEO_ALLOW_QC_SKIP", "0") == "1"
+        return {"valid": valid, "skipped": True, "reason": f"vision review unavailable: {exc.__class__.__name__}"}
+
+
+def review_final_video(path: str | Path, manifest: Any) -> dict[str, Any]:
+    """Review the assembled narrative as a whole; unavailable review fails closed."""
+    if not review_enabled():
+        valid = os.getenv("LOCAL_VIDEO_ALLOW_QC_SKIP", "0") == "1"
+        return {"valid": valid, "skipped": True, "reason": "final vision QC unavailable"}
+    frames = _sample_frames(path, ratios=(0.02, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 0.98))
+    if len(frames) < 6:
+        return {"valid": False, "skipped": True, "reason": "could not sample enough final-video frames"}
+    content: list[dict[str, Any]] = [{"type": "text", "text": (
+        "Review these chronological frames from the complete vertical social video. Judge the whole edit, "
+        "not isolated beauty frames. The story must have a clear hook, causal progression and visible payoff; "
+        "the same characters, wardrobe, props and geography must persist; captions must be readable and stay "
+        "away from interface edges. Reject repeated shots, random objects, obvious identity changes, illegible "
+        "captions, montage-like non sequiturs, or an ending that does not pay off the opening.\n\n"
+        f"Title: {manifest.script.get('video_title', manifest.concept)}\n"
+        f"Premise: {manifest.script.get('story_premise', manifest.concept)}\n"
+        f"Goal: {manifest.script.get('protagonist_goal', '')}\n"
+        f"Expected payoff: {manifest.script.get('ending_payoff', '')}"
+    )}]
+    for index, frame in enumerate(frames, 1):
+        content.extend([
+            {"type": "text", "text": f"Chronological final-video frame {index} of {len(frames)}:"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": frame}},
+        ])
+    try:
+        import anthropic
+        response = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")).messages.create(
+            model=os.getenv("VISION_MODEL") or os.getenv("CLAUDE_MODEL") or CLAUDE_MODEL,
+            max_tokens=800,
+            tools=[FINAL_REVIEW_TOOL],
+            tool_choice={"type": "tool", "name": "submit_final_video_review"},
+            messages=[{"role": "user", "content": content}],
+        )
+        values = next(
+            (block.input for block in response.content
+             if getattr(block, "type", None) == "tool_use" and block.name == "submit_final_video_review"),
+            None,
+        )
+        if not isinstance(values, dict):
+            raise ValueError("final reviewer returned no structured result")
+        names = ("story_coherence", "continuity", "visual_quality", "pacing", "caption_readability")
+        scores = {name: int(values.get(name, 0)) for name in names}
+        threshold = int(os.getenv("LOCAL_VIDEO_FINAL_MIN_SCORE", "7"))
+        fatal = [str(item) for item in values.get("fatal_problems", []) if item]
+        valid = not fatal and all(score >= threshold for score in scores.values())
+        return {
+            "valid": valid, "skipped": False, "threshold": threshold, **scores,
+            "average_score": round(sum(scores.values()) / len(scores), 2),
+            "fatal_problems": fatal,
+            "problems": [str(item) for item in values.get("problems", []) if item],
+        }
+    except Exception as exc:
+        valid = os.getenv("LOCAL_VIDEO_ALLOW_QC_SKIP", "0") == "1"
+        return {"valid": valid, "skipped": True, "reason": f"final vision review unavailable: {exc.__class__.__name__}"}

@@ -1,6 +1,6 @@
 """
-Sound design: a whoosh on every cut, a pop when an overlay appears, and an
-optional music bed — mixed under the voiceover.
+Sound design utilities for deliberately authored effects and an optional music
+bed. Ordinary scene cuts stay silent.
 
 Sound effects are synthesised here (no licensing questions). Music is optional:
 drop royalty-free tracks into assets/music/ (or MUSIC_DIR) and one is picked at
@@ -16,7 +16,7 @@ import subprocess
 import numpy as np
 
 from config.paths import PROJECT_ROOT
-from agents.editor_hailuo import FFMPEG
+from agents.media import FFMPEG
 
 log = logging.getLogger("pipeline")
 
@@ -51,8 +51,8 @@ def _pop(seconds: float = 0.09) -> np.ndarray:
 
 
 def build_fx_track(total_seconds: float, cut_times: list, pop_times: list, path: str) -> str:
-    """Mono 16-bit WAV with a whoosh centred on each cut and a pop at each overlay."""
-    track = np.zeros(int(SR * (total_seconds + 1)))
+    """Mono WAV from explicitly authored whoosh and pop timestamps."""
+    track = np.zeros(max(1, round(SR * total_seconds)))
     whoosh = _whoosh()
 
     def add(sound, at):

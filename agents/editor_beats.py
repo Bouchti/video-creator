@@ -5,15 +5,15 @@ Flow: voiceover → Whisper word timings → align each beat to its words → bu
 each beat's visual for exactly its slot → concatenate → audio → subtitles.
 
 Per beat, by visual kind (first that succeeds wins):
-  scene    → local Flux image (Pixar-style 3D) animated in 2.5D (the default, free)
+  scene    → stock footage/photo/text-card fallback for legacy stock scripts
   diagram  → diagram engine (exact, free)
   photo    → Wikimedia/Wikipedia photo (vision-checked) → footage → text card
   footage  → footage provider (vision-checked) → photo → text card
 
-Footage providers (the --source flag):
-  pexels   free stock/archival sources (default)
-  comfy    local AI video (free, slow)
-  hailuo   paid cloud AI video (opt-in only)
+Footage provider:
+  pexels   free stock/archival sources
+
+Local AI scenes are handled separately by the durable local-video pipeline.
 
 A text card (key phrase on the brand background) is the last resort, so a beat
 never falls back to an unrelated "cinematic abstract" clip.
@@ -30,22 +30,16 @@ from agents.editor_pexels import _UA
 from agents.beats import (
     FPS, get_beats, get_visual, align_beats, split_frames, even_split, script_word_timings,
 )
-from agents.editor_hailuo import (
-    FFMPEG,
-    _remove_files,
-    get_duration,
-    generate_voiceover,
-    detect_crop,
-    landscape_to_vertical,
-    concat_clips,
-    merge_audio_video,
-    transcribe_with_whisper,
-    burn_subtitles,
+from agents.media import (
+    FFMPEG, _remove_files, get_duration, detect_crop, landscape_to_vertical,
+    concat_clips, merge_audio_video, burn_subtitles,
 )
+from agents.transcription import transcribe_with_whisper
+from agents.voice import generate_voiceover
 
 log = logging.getLogger("pipeline")
 
-FOOTAGE_PROVIDERS = ("pexels", "comfy", "hailuo")
+FOOTAGE_PROVIDERS = ("pexels",)
 STOCK_CANDIDATES = 6     # thumbnails shown to the vision check per beat
 
 
@@ -60,10 +54,6 @@ class _Run:
         self.used_urls = set()
         self.credits = []
         self.counter = 0
-        self.ai_done = 0
-        self.ai_total = 0
-        self.images = {}          # id(beat) -> generated scene image
-        self.scene_count = 0
 
     def path(self, stem: str, ext: str) -> str:
         self.counter += 1
@@ -199,59 +189,13 @@ def _build_stock(run: _Run, beat: dict, frames: int) -> list:
             for i, (clip, n) in enumerate(zip(clips, parts))]
 
 
-def _build_ai_footage(run: _Run, beat: dict, frames: int) -> list:
-    """One generated clip per beat (comfy = local, hailuo = paid), looped to fit."""
-    v = get_visual(beat)
-    style = (run.script.get("visual_style") or "").strip()
-    prompt = f"{v.get('description', '')}, {style}" if style else v.get("description", "")
-    run.ai_done += 1
-    if run.footage == "comfy":
-        from agents.editor_comfy import generate_single_clip
-    else:
-        from agents.editor_hailuo import generate_single_clip
-    clip = generate_single_clip(prompt, clip_number=run.ai_done, total_clips=run.ai_total)
-    run.temp.append(clip)
-    return [_normalize(run, clip, frames, v.get("on_screen_text"))]
-
-
 def _build_footage(run: _Run, beat: dict, frames: int) -> list:
-    return _build_stock(run, beat, frames) if run.footage == "pexels" else _build_ai_footage(run, beat, frames)
-
-
-def _generate_scene_images(run: _Run, beats: list) -> None:
-    """Render every scene still up front — before any paid step (voiceover), so a
-    ComfyUI problem fails fast and costs nothing."""
-    import random
-    from agents.image_gen import generate_image, styled_prompt
-    scenes = [b for b in beats if get_visual(b).get("kind") == "scene"]
-    if not scenes:
-        return
-    characters = run.script.get("characters") or []
-    base_seed = random.randint(0, 2**31 - 1000)
-    log.info(f"\n[1/5] Generating {len(scenes)} scene images locally (Flux)...\n")
-    for n, beat in enumerate(scenes, start=1):
-        prompt = styled_prompt(get_visual(beat).get("description", ""), characters)
-        run.images[id(beat)] = generate_image(prompt, base_seed + n, run.path("scene", "png"),
-                                              label=f"{n}/{len(scenes)}")
-
-
-def _build_scene(run: _Run, beat: dict, frames: int) -> list:
-    from agents.animate import CAMERA_MOVES, render_scene
-    v = get_visual(beat)
-    image = run.images.get(id(beat))
-    if not image:
-        raise RuntimeError("scene image was not generated")
-    run.scene_count += 1
-    camera = v.get("camera")
-    if camera not in CAMERA_MOVES:  # vary moves when the script didn't pick one
-        camera = CAMERA_MOVES[run.scene_count % len(CAMERA_MOVES)]
-    return [render_scene(image, frames, run.path("scene", "mp4"), camera=camera,
-                         overlay=v.get("overlay"))]
+    return _build_stock(run, beat, frames)
 
 
 _BUILDERS = {"diagram": _build_diagram, "photo": _build_photo,
-             "footage": _build_footage, "card": _build_card, "scene": _build_scene}
-_ORDER = {"scene": ["scene"],
+             "footage": _build_footage, "card": _build_card}
+_ORDER = {"scene": ["footage", "photo", "card"],
           "diagram": ["diagram", "card"],
           "photo": ["photo", "footage", "card"],
           "footage": ["footage", "photo", "card"]}
@@ -260,15 +204,9 @@ _ORDER = {"scene": ["scene"],
 def build_beat(run: _Run, beat: dict, frames: int) -> list:
     kind = get_visual(beat).get("kind", "footage")
     for builder in _ORDER.get(kind, _ORDER["footage"]):
-        # AI-video fallbacks for photo beats would cost money/time for a weaker
-        # match; only footage beats use the AI provider.
-        if builder == "footage" and kind != "footage" and run.footage != "pexels":
-            continue
         try:
             shots = _BUILDERS[builder](run, beat, frames)
         except Exception as e:
-            if builder == "scene" or (builder == "footage" and run.footage != "pexels"):
-                raise  # local/cloud generator down: fail loudly, don't fill with cards
             log.warning(f"    {builder} failed: {e}")
             shots = []
         if shots:
@@ -292,8 +230,6 @@ def process_video(script: dict, voice: str = "energetic", footage: str = "pexels
     shots = []
 
     try:
-        _generate_scene_images(run, beats)
-
         audio_path, audio_duration = generate_voiceover(script["spoken_script"], voice=voice)
         words = transcribe_with_whisper(audio_path)
         target_duration = audio_duration + 0.5
@@ -311,11 +247,10 @@ def process_video(script: dict, voice: str = "energetic", footage: str = "pexels
         log.info(f"\n[3/5] Assembling {len(shots)} shots to {target_duration:.1f}s...")
         stitched = concat_clips(shots, target_duration)
 
-        # Sound design: whoosh on every cut, pop when an overlay sticker appears.
+        # Ordinary cuts remain silent. Only deliberately authored overlay pops are added.
         from agents.audio_fx import build_fx_track, mix_audio
-        cuts = [s["start"] for s in slots[1:]]
         pops = [s["start"] + 0.18 for b, s in zip(beats, slots) if get_visual(b).get("overlay")]
-        fx = build_fx_track(target_duration, cuts, pops, run.path("fx", "wav"))
+        fx = build_fx_track(target_duration, [], pops, run.path("fx", "wav"))
         mixed = mix_audio(audio_path, fx, run.path("mix", "m4a"), target_duration)
         merged = merge_audio_video(stitched, mixed)
 

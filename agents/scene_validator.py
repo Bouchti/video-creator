@@ -278,10 +278,10 @@ def judge(values: dict, threshold: int = None) -> dict:
 
 
 def review_images(w: dict, images: list, subject: str, previous: str = None) -> dict:
-    """Story review of one window. images: [(label, jpg_path)]. Service failures skip the review
-    (valid, skipped) rather than blocking a render, like the local-ai reviewer."""
+    """Story review of one window. Service failures reject unless explicitly overridden."""
     if not _env_flag("SCENE_VISION", "1"):
-        return {"valid": True, "skipped": True, "reason": "vision review disabled (SCENE_VISION=0)"}
+        return {"valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
+                "reason": "vision review disabled (SCENE_VISION=0)"}
     prompt = _instructions(w, subject, previous)
     imgs = ([("previous window end frame", previous)] if previous else []) + images
     try:
@@ -289,7 +289,8 @@ def review_images(w: dict, images: list, subject: str, previous: str = None) -> 
     except Exception as exc:                         # noqa: BLE001
         log.warning(f"[scenes] vision review unavailable for window {w['window']} ({str(exc)[:120]}); "
                     "technical QC only")
-        return {"valid": True, "skipped": True, "reason": f"vision review unavailable: {exc.__class__.__name__}"}
+        return {"valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
+                "reason": f"vision review unavailable: {exc.__class__.__name__}"}
     return {**judge(values), "skipped": False}
 
 
@@ -408,7 +409,8 @@ class SceneWatcher:
             r = validate_window(w, self.frames_dir, self.review_dir, self.subject, self._previous_frame(w))
         except Exception as exc:                     # noqa: BLE001
             r = {**{k: w[k] for k in ("window", "beat", "action", "part", "f0", "f1", "t0", "t1")},
-                 "valid": True, "skipped": True, "reason": f"validator error: {exc}"}
+                 "valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
+                 "reason": f"validator error: {exc}"}
         with self._lock:
             self.results[(w["f0"], w["f1"])] = r
             self._save()

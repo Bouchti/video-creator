@@ -60,15 +60,16 @@ class RenderRepairTests(_Env):
             out, _ = ap.stage_render(self.run, self.film)
         self.assertEqual(out, self.video)
 
-    def test_persistent_rejection_ships_flagged(self):
+    def test_persistent_rejection_fails_closed(self):
         rej = sv.SceneRejected([{"window": 1, "t0": 0, "t1": 3, "action": "plank", "fatal_problems": ["x"]}], "r.json")
-        outcomes = [rej] * 2 + [self.video]
+        outcomes = [rej] * 2
         produce, calls = self._produce(outcomes)
-        with patch.object(mf, "produce", produce), patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "2"}):
-            out, flagged = ap.stage_render(self.run, self.film)
-            self.assertEqual(os.environ["SCENE_POLICY"], "warn")
-        self.assertTrue(flagged)
-        self.assertTrue(calls[-1].resume)
+        with patch.object(mf, "produce", produce), \
+                patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "2"}), \
+                patch.object(ap, "_restore_first_backup", lambda s, r: None):
+            with self.assertRaises(ap.GiveUp):
+                ap.stage_render(self.run, self.film)
+        self.assertEqual(len(calls), 2)
 
     def test_give_up_fail_mode_raises(self):
         rej = sv.SceneRejected([], "r.json")

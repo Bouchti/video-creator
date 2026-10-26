@@ -42,12 +42,17 @@ def generate_script(concept: str, duration: int, visual_style: str, narration_te
             return _script_from_narration(concept, "", duration, visual_style)
         return _script_from_narration(concept, narration_text, duration, visual_style)
     from agents.evaluator import evaluate_with_retry
+    from agents.leader import research_topic
+    research = research_topic(concept)
     script = evaluate_with_retry(
         concept,
         tone="mysterious",
         max_retries=3,
         target_seconds=duration,
         mode="local-ai",
+        source="local-ai",
+        content_mode="documentary",
+        research=research,
     )
     if not script:
         raise RuntimeError("Script generation failed after three evaluated attempts")

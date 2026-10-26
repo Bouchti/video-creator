@@ -96,7 +96,7 @@ def path(name):
 
 
 def _keys():
-    from agents.editor_hailuo import _elevenlabs_keys
+    from agents.voice import _elevenlabs_keys
     return _elevenlabs_keys()
 
 
@@ -143,7 +143,7 @@ def load(name):
     p = path(name)
     if name not in LIBRARY or not os.path.exists(p):
         return None
-    from agents.editor_hailuo import FFMPEG
+    from agents.media import FFMPEG
     raw = subprocess.run([FFMPEG, "-v", "error", "-i", p, "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"],
                          capture_output=True, check=True).stdout
     x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768

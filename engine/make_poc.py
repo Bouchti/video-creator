@@ -20,8 +20,9 @@ from PIL import Image  # noqa: E402
 
 from config.paths import PROJECT_ROOT, get_output_dir  # noqa: E402
 from agents.beats import align_beats, script_word_timings, FPS  # noqa: E402
-from agents.editor_hailuo import (FFMPEG, generate_voiceover, get_duration,  # noqa: E402
-                                  transcribe_with_whisper, merge_audio_video, burn_subtitles)
+from agents.media import FFMPEG, get_duration, merge_audio_video, burn_subtitles  # noqa: E402
+from agents.transcription import transcribe_with_whisper  # noqa: E402
+from agents.voice import generate_voiceover  # noqa: E402
 from agents.audio_fx import build_fx_track, mix_audio  # noqa: E402
 from agents.captions import words_to_ass  # noqa: E402
 from agents.animate import _draw_overlay  # noqa: E402
@@ -96,7 +97,7 @@ def main():
                    check=True, capture_output=True)
 
     # ---- sound + captions ----
-    cuts = [b["start"] / FPS for b in beats[1:]]
+    cuts = []  # ordinary scene changes stay silent; only explicitly authored effects are mixed
     pops = [s["start"] / FPS + 0.18 for b, s in zip(BEATS, beats) if b.get("overlay")]
     fx = build_fx_track(total, cuts, pops, os.path.join(work, "fx.wav"))
     mixed = mix_audio(voice_path, fx, os.path.join(work, "mix.m4a"), total)

@@ -1,5 +1,4 @@
 anthropic
-fal-client
 faster-whisper
 python-dotenv
 requests
@@ -9,3 +8,4 @@ Pillow
 opencv-python-headless
 onnxruntime
 numpy
+pytest

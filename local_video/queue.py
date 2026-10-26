@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agents.audio_fx import pick_music
-from agents.editor_hailuo import generate_voiceover
+from agents.voice import generate_voiceover
 from config.paths import PROJECT_ROOT
 
 from .assembly import assemble_project
@@ -24,8 +24,9 @@ from .config import PipelineConfig, resolve_within
 from .models import ProjectManifest, ProjectState, completed_shots
 from .planner import MINIMAX_SUFFIX, WAN_SUFFIX, reseed
 from .project import load_project
+from .preflight import run_preflight
 from .validation import extract_last_frame, ffprobe, media_metadata, validate_clip, validate_final
-from .visual_review import review_clip
+from .visual_review import review_clip, review_final_video
 
 log = logging.getLogger("pipeline")
 
@@ -182,6 +183,8 @@ class QueueRunner:
         assembler: Callable[..., dict[str, str]] = assemble_project,
         extractor: Callable[..., Path] = extract_last_frame,
         visual_reviewer: Callable[..., dict[str, Any]] = review_clip,
+        final_reviewer: Callable[..., dict[str, Any]] = review_final_video,
+        preflight: Callable[..., dict[str, Any]] = run_preflight,
         progress: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.config = config or PipelineConfig()
@@ -190,6 +193,8 @@ class QueueRunner:
         self.assembler = assembler
         self.extractor = extractor
         self.visual_reviewer = visual_reviewer
+        self.final_reviewer = final_reviewer
+        self.preflight = preflight
         self.progress = progress
 
     def _emit(self, manifest: ProjectManifest, backend: str | None = None, error: str | None = None) -> None:
@@ -516,6 +521,19 @@ class QueueRunner:
         lock_path = self.config.output_root / ".gpu-generation.lock"
         with FileLock(lock_path):
             self._silence_accepted_clips(manifest)
+            try:
+                manifest.settings["preflight"] = self.preflight(
+                    manifest, self.config, self.backends,
+                    require_visual_qc=self.visual_reviewer is review_clip,
+                )
+            except Exception as exc:
+                manifest.error = str(exc)
+                manifest.set_state(ProjectState.FAILED, stage="preflight", error=str(exc))
+                manifest.save()
+                self._emit(manifest, error=str(exc))
+                raise
+            manifest.record("preflight_passed")
+            manifest.save()
             if manifest.started_at is None:
                 from .models import utc_now
                 manifest.started_at = utc_now()
@@ -567,6 +585,13 @@ class QueueRunner:
                 final = resolve_within(manifest.project_dir, manifest.outputs["video"])
                 report = validate_final(final, self.config, manifest.duration_seconds)
                 manifest.settings["final_validation"] = report
+                creative_report = self.final_reviewer(final, manifest)
+                manifest.settings["final_creative_review"] = creative_report
+                if not creative_report.get("valid", False):
+                    details = creative_report.get("fatal_problems") or creative_report.get("problems") or [
+                        creative_report.get("reason", "final creative review failed")
+                    ]
+                    raise RuntimeError("Final creative review rejected the video: " + "; ".join(details[:5]))
                 from .models import utc_now
                 manifest.completed_at = utc_now()
                 manifest.set_state(ProjectState.COMPLETED)

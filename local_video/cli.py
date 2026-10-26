@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create", help="Generate a script and coherent shot plan")
     create.add_argument("concept")
-    create.add_argument("--duration", type=int, default=60, choices=range(60, 91), metavar="60-90")
+    create.add_argument("--duration", type=int, default=60, choices=range(30, 91), metavar="30-90")
     create.add_argument("--style", default="cinematic realism, tactile detail, restrained teal and amber grade")
     create.add_argument("--backend", choices=["auto", "minimax", "wan"], default="auto")
     create.add_argument("--narration-file", type=Path)
