@@ -23,7 +23,7 @@ failed scene is known minutes into a render instead of at the end. make_film use
   SCENE_WINDOW_SECONDS=3      window length
   SCENE_MIN_SCORE=6           acceptance threshold (1-10)
   SCENE_FIX_ATTEMPTS=2        auto-fix rounds per render (policy "fix")
-  SCENE_REVIEW_BACKEND        "subscription" (claude -p, default = SHOWRUNNER_BACKEND) or "api"
+  SCENE_REVIEW_BACKEND        "codex" (default), "subscription" (claude -p), or "api"
 
 Re-check an existing render without rendering:  python -m agents.scene_validator <film name or JSON>
 """
@@ -47,7 +47,8 @@ from PIL import Image
 log = logging.getLogger("pipeline")
 
 FPS = 30
-REVIEW_W = 432                                   # judged frames are saved at this width (9:16)
+REVIEW_W = int(os.getenv("SCENE_REVIEW_WIDTH") or "360")  # enough for phone-scale QC; lowers image tokens
+REVIEW_JPEG_QUALITY = int(os.getenv("SCENE_REVIEW_JPEG_QUALITY") or "78")
 
 
 def _env_flag(name, default):
@@ -205,15 +206,19 @@ def _jpeg(path, width=REVIEW_W):
     h = int(im.height * width / im.width)
     im = im.resize((width, h), Image.LANCZOS)
     buf = io.BytesIO()
-    im.save(buf, format="JPEG", quality=84)
+    im.save(buf, format="JPEG", quality=REVIEW_JPEG_QUALITY, optimize=True)
     return buf.getvalue()
 
 
 def _backend():
-    return os.getenv("SCENE_REVIEW_BACKEND") or os.getenv("SHOWRUNNER_BACKEND", "subscription")
+    from agents.showrunner import active_backend
+    explicit = (os.getenv("SCENE_REVIEW_BACKEND") or "").strip().lower()
+    active = active_backend()
+    # A process-wide Codex fallback also moves review work; do not probe exhausted Codex again.
+    return active if not explicit or (explicit == "codex" and active != "codex") else explicit
 
 
-def _review_api(prompt, images):
+def _review_api(prompt, images, schema=REVIEW_SCHEMA):
     import anthropic
     content = []
     for label, p in images:
@@ -221,10 +226,13 @@ def _review_api(prompt, images):
                     {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                  "data": base64.b64encode(open(p, "rb").read()).decode()}}]
     content.append({"type": "text", "text": prompt})
-    tool = {"name": "submit_scene_review", "description": "Submit the review of this render window.",
-            "input_schema": REVIEW_SCHEMA}
+    batch = schema is BATCH_REVIEW_SCHEMA
+    tool = {"name": "submit_scene_reviews" if batch else "submit_scene_review",
+            "description": "Submit the review of these render windows." if batch else
+                           "Submit the review of this render window.",
+            "input_schema": schema}
     model = os.getenv("SCENE_REVIEW_MODEL") or os.getenv("VISION_MODEL") or "claude-opus-5-5"
-    resp = anthropic.Anthropic().messages.create(model=model, max_tokens=900, tools=[tool],
+    resp = anthropic.Anthropic().messages.create(model=model, max_tokens=3200 if batch else 900, tools=[tool],
                                                  tool_choice={"type": "tool", "name": tool["name"]},
                                                  messages=[{"role": "user", "content": content}])
     for b in resp.content:
@@ -233,13 +241,14 @@ def _review_api(prompt, images):
     raise RuntimeError("no structured review returned")
 
 
-def _review_cli(prompt, images):
+def _review_cli(prompt, images, schema=REVIEW_SCHEMA):
     """claude -p on the Claude subscription: the images are copied into a temp dir and read with
     the Read tool (API credentials stripped, like the showrunner's subscription backend)."""
     exe = shutil.which("claude")
     if not exe:
         raise RuntimeError("Claude Code CLI not found")
-    from agents.showrunner import _API_ENV, CLI_MODEL
+    from agents.showrunner import (UsageLimit, _API_ENV, CLI_MODEL, _capped_effort,
+                                   _record_claude_usage)
     env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
     with tempfile.TemporaryDirectory() as tmp:
         names = []
@@ -250,15 +259,91 @@ def _review_cli(prompt, images):
         full = (prompt + "\n\nRead these image files (in the current directory) with the Read tool, then return "
                 "the review:\n" + "\n".join(names))
         cmd = [exe, "-p", "--output-format", "json", "--model", os.getenv("SCENE_REVIEW_CLI_MODEL", CLI_MODEL),
-               "--effort", "medium", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
-               "--tools", "Read", "--allowedTools", "Read", "--json-schema", json.dumps(REVIEW_SCHEMA)]
+               "--effort", _capped_effort(os.getenv("SCENE_REVIEW_EFFORT") or "low"),
+               "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
+               "--tools", "Read", "--allowedTools", "Read", "--json-schema", json.dumps(schema)]
         r = subprocess.run(cmd, input=full, capture_output=True, text=True, encoding="utf-8", cwd=tmp, env=env,
                            timeout=600)
-    data = json.loads(r.stdout)
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}") from exc
+    result_text = str(data.get("result") or "")
+    if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
+        raise UsageLimit(result_text[:500])
     if data.get("is_error") or data.get("subtype") != "success":
-        raise RuntimeError(f"claude -p: {str(data.get('result'))[:200]}")
+        raise RuntimeError(f"claude -p: {result_text[:200]}")
+    _record_claude_usage(data, "scene review")
     out = data.get("structured_output")
     return out if out is not None else json.loads(data["result"])
+
+
+def _review_codex(prompt, images, schema=REVIEW_SCHEMA):
+    """Review images through the logged-in Codex subscription."""
+    from agents import codex_cli
+    from agents.showrunner import UsageLimit
+
+    labels = "\n".join(f"Image {i + 1}: {label}" for i, (label, _) in enumerate(images))
+    full = prompt + "\n\nAttached images, in order:\n" + labels
+    model = os.getenv("SCENE_REVIEW_CODEX_MODEL") or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
+    try:
+        out, _ = codex_cli.run(full, schema=schema, effort=os.getenv("SCENE_REVIEW_EFFORT") or "low",
+                               images=[p for _, p in images], model=model,
+                               timeout=900, effort_cap_env="SCENE_REVIEW_CODEX_EFFORT_CAP")
+        return out
+    except RuntimeError as exc:
+        text = str(exc).lower()
+        if "limit" in text and any(x in text for x in ("reset", "rate", "usage", "quota", "plan")):
+            raise UsageLimit(str(exc)[:500]) from exc
+        raise
+
+
+def _review_dispatch(prompt, images, schema=REVIEW_SCHEMA):
+    """Use the active reviewer and move the rest of the process to Claude after a Codex limit."""
+    from agents.showrunner import UsageLimit, activate_fallback, active_backend
+    backend = _backend()
+    try:
+        return (_review_api(prompt, images, schema) if backend == "api" else
+                _review_codex(prompt, images, schema) if backend == "codex" else
+                _review_cli(prompt, images, schema))
+    except UsageLimit as exc:
+        if backend == "codex" and activate_fallback(str(exc)[:180]):
+            return (_review_api(prompt, images, schema) if active_backend() == "api" else
+                    _review_cli(prompt, images, schema))
+        raise
+
+
+BATCH_REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {"reviews": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"window": {"type": "integer"}, **REVIEW_SCHEMA["properties"]},
+        "required": ["window", *REVIEW_SCHEMA["required"]],
+        "additionalProperties": False,
+    }}},
+    "required": ["reviews"],
+    "additionalProperties": False,
+}
+
+
+def review_batch(items: list, subject: str) -> dict:
+    """Judge several windows in one turn on every backend to amortize fixed prompt overhead."""
+    blocks, images = [], []
+    for w, beat_images in items:
+        first = len(images) + 1
+        images.extend(beat_images)
+        last = len(images)
+        blocks.append(_instructions(w, subject, None) +
+                      f"\nThis beat uses attached images {first}-{last}. Return window={w['window']}.")
+    prompt = ("Review every beat below independently. Return exactly one review per requested window, in the "
+              "same order. Do not omit a window. Use adjacent beats' end/start frames to judge continuity.\n\n"
+              + "\n\n--- NEXT BEAT ---\n\n".join(blocks))
+    values = _review_dispatch(prompt, images, BATCH_REVIEW_SCHEMA)
+    by_window = {int(v["window"]): {**judge(v), "skipped": False} for v in values.get("reviews", [])}
+    expected = {int(w["window"]) for w, _ in items}
+    if set(by_window) != expected:
+        raise RuntimeError(f"batch review returned windows {sorted(by_window)}, expected {sorted(expected)}")
+    return by_window
 
 
 def judge(values: dict, threshold: int = None) -> dict:
@@ -285,8 +370,12 @@ def review_images(w: dict, images: list, subject: str, previous: str = None) -> 
     prompt = _instructions(w, subject, previous)
     imgs = ([("previous window end frame", previous)] if previous else []) + images
     try:
-        values = _review_api(prompt, imgs) if _backend() == "api" else _review_cli(prompt, imgs)
+        values = _review_dispatch(prompt, imgs)
     except Exception as exc:                         # noqa: BLE001
+        from agents.showrunner import UsageLimit
+        text = str(exc).lower()
+        if isinstance(exc, UsageLimit) or ("limit" in text and any(x in text for x in ("reset", "rate", "usage"))):
+            raise UsageLimit(str(exc)[:500]) from exc
         log.warning(f"[scenes] vision review unavailable for window {w['window']} ({str(exc)[:120]}); "
                     "technical QC only")
         return {"valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
@@ -294,7 +383,8 @@ def review_images(w: dict, images: list, subject: str, previous: str = None) -> 
     return {**judge(values), "skipped": False}
 
 
-def validate_window(w: dict, frames_dir: str, review_dir: str, subject: str, previous: str = None) -> dict:
+def _prepare_window(w: dict, frames_dir: str, review_dir: str):
+    """Run local QC and encode review frames once; shared by single and batched review paths."""
     os.makedirs(review_dir, exist_ok=True)
     n = w["f1"] - w["f0"]
     picks = [("start", w["f0"] + max(1, n // 10)), ("middle", w["f0"] + n // 2), ("end", w["f1"] - max(1, n // 10))]
@@ -309,6 +399,11 @@ def validate_window(w: dict, frames_dir: str, review_dir: str, subject: str, pre
             images.append((f"{label} frame ({(f - 1) / FPS:.1f} s)", dst))
     rep = {**{k: w[k] for k in ("window", "beat", "action", "part", "f0", "f1", "t0", "t1")},
            "technical": tech, "images": [p for _, p in images]}
+    return rep, images, tech
+
+
+def validate_window(w: dict, frames_dir: str, review_dir: str, subject: str, previous: str = None) -> dict:
+    rep, images, tech = _prepare_window(w, frames_dir, review_dir)
     if not tech["valid"]:
         return {**rep, "valid": False, "acceptance": "rejected", "fatal_problems": tech["fatal_problems"],
                 "problems": tech["problems"], "fix": "", "skipped": False}
@@ -350,7 +445,10 @@ class SceneWatcher:
         self._abort = threading.Event()
         self._stop = threading.Event()
         self._render_done = threading.Event()
-        self._pool = ThreadPoolExecutor(max_workers=int(os.getenv("SCENE_REVIEW_WORKERS", "2")))
+        self._fatal_error = None
+        self.batch_size = (max(1, int(os.getenv("SCENE_REVIEW_BATCH_SIZE") or "4"))
+                           if _env_flag("SCENE_VISION", "1") else 1)
+        self._pool = ThreadPoolExecutor(max_workers=int(os.getenv("SCENE_REVIEW_WORKERS", "1")))
         self._submitted = set(self.results)          # kept verdicts are not checked again
         self._thread = None
 
@@ -384,18 +482,29 @@ class SceneWatcher:
         if self._thread:
             self._thread.join(timeout=10)
         self._pool.shutdown(wait=True, cancel_futures=self._abort.is_set())
+        if self._fatal_error is not None:
+            raise self._fatal_error
         return self.report()
 
     # -- internals --
     def _loop(self):
         while not self._stop.is_set():
+            ready = []
             for w in self.windows:
                 key = (w["f0"], w["f1"])
                 if key in self._submitted:
                     continue
                 if window_ready(w, self.frames_dir, settle=0.5 if self._render_done.is_set() else 2.0):
-                    self._submitted.add(key)
-                    self._pool.submit(self._check, w)
+                    ready.append(w)
+            while len(ready) >= self.batch_size or (ready and self._render_done.is_set()):
+                batch = ready[:self.batch_size]
+                del ready[:self.batch_size]
+                for w in batch:
+                    self._submitted.add((w["f0"], w["f1"]))
+                if self.batch_size == 1:
+                    self._pool.submit(self._check, batch[0])
+                else:
+                    self._pool.submit(self._check_batch, batch)
             if self._abort.is_set():
                 return
             time.sleep(2.0)
@@ -408,12 +517,64 @@ class SceneWatcher:
         try:
             r = validate_window(w, self.frames_dir, self.review_dir, self.subject, self._previous_frame(w))
         except Exception as exc:                     # noqa: BLE001
+            if self._remember_usage_limit(exc):
+                return
             r = {**{k: w[k] for k in ("window", "beat", "action", "part", "f0", "f1", "t0", "t1")},
                  "valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
                  "reason": f"validator error: {exc}"}
+        self._store_result(w, r)
+
+    def _check_batch(self, windows):
+        """Technical-check locally, then send up to SCENE_REVIEW_BATCH_SIZE windows per AI turn."""
+        prepared, ai_items = {}, []
+        try:
+            for w in windows:
+                rep, images, tech = _prepare_window(w, self.frames_dir, self.review_dir)
+                prepared[w["window"]] = (w, rep, tech)
+                if tech["valid"]:
+                    ai_items.append((w, images))
+                else:
+                    self._store_result(w, {**rep, "valid": False, "acceptance": "rejected",
+                                           "fatal_problems": tech["fatal_problems"],
+                                           "problems": tech["problems"], "fix": "", "skipped": False})
+            if self._abort.is_set() or not ai_items:
+                return
+            reviewed = review_batch(ai_items, self.subject)
+            for w, _ in ai_items:
+                _, rep, tech = prepared[w["window"]]
+                story = reviewed[w["window"]]
+                story["problems"] = tech["problems"] + story.get("problems", [])
+                self._store_result(w, {**rep, **story})
+                if self._abort.is_set():
+                    return
+        except Exception as exc:                     # noqa: BLE001
+            if self._remember_usage_limit(exc):
+                return
+            for w in windows:
+                key = (w["f0"], w["f1"])
+                with self._lock:
+                    done = key in self.results
+                if not done:
+                    self._store_result(w, {**{k: w[k] for k in
+                                               ("window", "beat", "action", "part", "f0", "f1", "t0", "t1")},
+                                           "valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
+                                           "reason": f"validator error: {exc}"})
+
+    def _remember_usage_limit(self, exc):
+        from agents.showrunner import UsageLimit
+        text = str(exc).lower()
+        if not (isinstance(exc, UsageLimit) or ("limit" in text and "reset" in text)):
+            return False
+        with self._lock:
+            if self._fatal_error is None:
+                self._fatal_error = exc if isinstance(exc, UsageLimit) else UsageLimit(str(exc))
+        self._abort.set()
+        return True
+
+    def _store_result(self, w, r):
         with self._lock:
             self.results[(w["f0"], w["f1"])] = r
-            self._save()
+            self._save_unlocked()
         verdict = "ACCEPTED" if r.get("valid") else "REJECTED"
         detail = "" if r.get("valid") else ": " + "; ".join((r.get("fatal_problems") or r.get("problems") or [])[:2])
         scores = "" if r.get("skipped") else f" (avg {r.get('average_score')})"
@@ -431,6 +592,10 @@ class SceneWatcher:
                 "complete": all((w["f0"], w["f1"]) in self.results for w in self.windows)}
 
     def _save(self):
+        with self._lock:
+            self._save_unlocked()
+
+    def _save_unlocked(self):
         rows = sorted(self.results.values(), key=lambda r: r["f0"])
         tmp = self.report_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:

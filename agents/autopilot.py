@@ -99,10 +99,10 @@ class Run:
 # ------------------- helpers -------------------
 
 def _wait_for_claude(exc, run, stage):
-    """Claude subscription limit: sleep until the reset Claude announced (or an hour)."""
+    """Subscription limit: sleep until the announced reset (or an hour)."""
     reset = getattr(exc, "reset", None)
     wait = (reset - datetime.datetime.now()).total_seconds() + 90 if reset else 3600
-    run.event(stage, "Claude usage limit reached; waiting for the reset", detail=f"{wait / 60:.0f} min")
+    run.event(stage, "AI subscription usage limit reached; waiting for the reset", detail=f"{wait / 60:.0f} min")
     time.sleep(max(60, wait))
 
 
@@ -172,7 +172,8 @@ def stage_script(run, source, angle, set_id):
     if run["film"] and os.path.exists(run["film"]):
         return run["film"]
     set_id = run["generated_set"] or set_id
-    for attempt in range(1, 7):
+    max_attempts = _int("AUTOPILOT_SCRIPT_ATTEMPTS", 3)
+    for attempt in range(1, max_attempts + 1):
         try:
             use_angle = angle if attempt <= 2 else None          # from the 3rd try: let it pick a fresh angle
             if source == "evolution":
@@ -201,7 +202,7 @@ def stage_script(run, source, angle, set_id):
                     set_id = plan["set_id"]
                     run.set(generated_set=set_id, set=set_id, set_build=status)
                     run.event("set", "new Max set accepted and registered", detail=set_id)
-                    path = write(angle=use_angle, render=False, set_id=set_id)
+                    path = write(angle=use_angle, render=False, set_id=set_id, topic_hint=plan)
             run.set(film=path)
             run.event("script", "script written", detail=os.path.basename(path))
             return path
@@ -211,9 +212,11 @@ def stage_script(run, source, angle, set_id):
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "script")
                 continue
+            if isinstance(exc, (TypeError, AttributeError, KeyError, IndexError)):
+                raise GiveUp(f"pipeline code error; retries would repeat the same work: {exc}") from exc
             run.event("script", f"attempt {attempt} failed; retrying", detail=str(exc)[:300])
             time.sleep(min(300, 20 * attempt))
-    raise GiveUp("no script could be written after 6 attempts")
+    raise GiveUp(f"no script could be written after {max_attempts} attempts")
 
 
 def _voice_error(exc):
@@ -329,6 +332,36 @@ def stage_check(run, video, film_json):
     return video
 
 
+def _cleanup_successful_work(film_json):
+    """Drop reproducible frame caches after a validated run; retain voice, reports and encoded video."""
+    if _enabled("AUTOPILOT_KEEP_WORKFILES", False):
+        return 0
+    output_root = os.path.realpath(get_output_dir())
+    name = os.path.splitext(os.path.basename(film_json))[0]
+    work = os.path.realpath(os.path.join(output_root, name + "_work"))
+    if os.path.commonpath((output_root, work)) != output_root or not work.endswith("_work"):
+        raise RuntimeError(f"refusing to clean unexpected work path: {work}")
+    freed, seen_files = 0, set()
+    for leaf in ("frames", "comp"):
+        target = os.path.join(work, leaf)
+        if os.path.isdir(target):
+            for root, _, files in os.walk(target):
+                for filename in files:
+                    try:
+                        stat = os.stat(os.path.join(root, filename))
+                        identity = (stat.st_dev, stat.st_ino)
+                        if identity not in seen_files:
+                            freed += stat.st_size
+                            seen_files.add(identity)
+                    except OSError:
+                        pass
+            shutil.rmtree(target)
+    if freed:
+        log.info(f"[autopilot] removed reproducible render frames ({freed / 1024 ** 3:.1f} GB); "
+                 "set AUTOPILOT_KEEP_WORKFILES=1 to retain them for manual --redo")
+    return freed
+
+
 # ------------------- the run -------------------
 
 def run(source="evolution", angle=None, set_id=None, resume_path=None):
@@ -344,6 +377,8 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
             shutil.move(video, flagged_path)
             video = flagged_path
         notes = write_notes(video, film_json)
+        if not flagged:
+            _cleanup_successful_work(film_json)
         r.set(status="needs_review" if flagged else "done", video=video, notes=notes,
               minutes=round((time.time() - t0) / 60, 1))
         log.info(f"[autopilot] {'DONE' if not flagged else 'DONE (NEEDS REVIEW)'}: {video}\n"

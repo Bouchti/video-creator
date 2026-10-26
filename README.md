@@ -20,7 +20,11 @@ Copy-Item .env.example .env
 
 Fill in at least:
 
-- `ANTHROPIC_API_KEY` for script and visual quality review.
+- install the Codex CLI, run `codex login`, and keep `SHOWRUNNER_BACKEND=codex` to use your
+  eligible ChatGPT subscription for the Blender showrunner and visual review.
+- install Claude Code and log in once; `SHOWRUNNER_FALLBACK_BACKEND=subscription` moves the
+  remaining script, set-builder and visual-review work to Claude Code if Codex reaches its limit.
+- `ANTHROPIC_API_KEY` only if you intentionally select the paid Anthropic API backend.
 - `TAVILY_API_KEY` for autonomous current-topic research.
 - one of `ELEVENLABS_API_KEY` through `ELEVENLABS_API_KEY_4` for narration.
 - the local MiniMax/Wan service settings installed by `setup.ps1`.
@@ -59,6 +63,24 @@ frames, visually validates every beat, registers it only after it passes, and th
 renders the video. This first run for a new subject is substantially longer than reusing an existing
 set. `SHOWRUNNER_AUTO_BUILD_SETS=0` disables automatic expansion; `SHOWRUNNER_ALLOW_REPEATS=1` is an
 explicit rerun override, not the production default.
+
+The Codex and Claude subscription routes use `SHOWRUNNER_QUALITY=efficient`: one strong script, an
+independent critique, and a revision only when needed. Trend selection and the winning topic's fact
+sheet share one web-search turn. Preview and full-render scene checks are reviewed in batches of
+four, compressed review frames and verdicts are cached, and unchanged source/settings reuse the
+existing Blender preview instead of rendering it again. Reasoning effort is capped independently
+for showrunning, visual review and set building; both CLIs log token/cache usage. Set building runs
+in an isolated source mirror and copies back only the three allowed set files, so it cannot
+overwrite changes made in the real repository during a long generation.
+
+The default backend chain is Codex first, Claude Code second. A Codex quota/usage-limit response
+switches the process once and keeps Claude active for the rest of that run, avoiding repeated Codex
+failures. Set `SHOWRUNNER_FALLBACK_BACKEND=` to disable this behavior.
+
+After an autonomous video passes final validation, raw Blender PNG frames and compositing caches
+are removed to reclaim disk space; the voice, timings, review reports, encoded work video and final
+MP4 remain. Set `AUTOPILOT_KEEP_WORKFILES=1` before a run if you want to retain frames for manual
+`--redo` work.
 
 ### Unreal Engine route
 

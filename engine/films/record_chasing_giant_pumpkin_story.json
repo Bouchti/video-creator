@@ -1,0 +1,100 @@
+{
+  "title": "Max grows a giant pumpkin (it exploded first)",
+  "set": "record_chasing_giant_pumpkin_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "split_hook",
+      "action": "split_hook",
+      "video": "epilogue",
+      "text": "Max's giant pumpkin just burst open. All he did was water it."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's rewind to the day he planted it."
+    },
+    {
+      "id": "plant",
+      "action": "plant",
+      "text": "He wants one his kids can sit on. They bring the wagon."
+    },
+    {
+      "id": "fail_roots",
+      "action": "fail_roots",
+      "text": "It stays tiny: one small root clump can't feed the whole plant."
+    },
+    {
+      "id": "bury_vine",
+      "action": "bury_vine",
+      "text": "So Max buries the vine, and every leaf joint grows its own roots."
+    },
+    {
+      "id": "fail_split",
+      "action": "fail_split",
+      "text": "Then he waters in floods. The inside swells faster than the skin stretches. Crack."
+    },
+    {
+      "id": "drip_line",
+      "action": "drip_line",
+      "text": "Steady drip water keeps the skin in step, even at 20 kilos a day.",
+      "overlay": {
+        "type": "stat",
+        "value": "20 kg",
+        "text": "in a single day"
+      }
+    },
+    {
+      "id": "fail_stem",
+      "action": "fail_stem",
+      "text": "But the swelling pumpkin shoves its vine aside, and the stem cracks."
+    },
+    {
+      "id": "fix_angle",
+      "action": "fix_angle",
+      "text": "At 90 degrees to the vine, the stem rolls instead of ripping.",
+      "overlay": {
+        "type": "label",
+        "text": "Stem at a right angle"
+      }
+    },
+    {
+      "id": "fail_rot",
+      "action": "fail_rot",
+      "text": "Underneath, a pumpkin heavier than a car sits in wet soil, rotting."
+    },
+    {
+      "id": "sand_bed",
+      "action": "sand_bed",
+      "text": "Clean sand drains fast and lets it slide, so the bottom stays dry.",
+      "overlay": {
+        "type": "label",
+        "text": "Sand drains fast"
+      }
+    },
+    {
+      "id": "fail_lift",
+      "action": "fail_lift",
+      "text": "Harvest day. It weighs over a tonne, the plank folds, and the wagon looks tiny."
+    },
+    {
+      "id": "lift_ring",
+      "action": "lift_ring",
+      "text": "A lifting ring spreads the weight over wide straps, so no spot takes it all.",
+      "overlay": {
+        "type": "label",
+        "text": "Lifting ring"
+      }
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "In one piece this time, kids riding behind. Ron Wallace's 3,156-pound record rode the same way. Which disaster would have ended your pumpkin first?"
+    }
+  ],
+  "cta": "Which disaster would have ended your pumpkin first?"
+}

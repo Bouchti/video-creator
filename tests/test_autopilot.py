@@ -107,6 +107,18 @@ class ScriptAndCheckTests(_Env):
         self.assertEqual(path, self.film)
         self.assertEqual(tries, ["my angle", "my angle", None])     # 3rd try: fresh angle
 
+    def test_programming_error_fails_fast_instead_of_spending_six_more_turns(self):
+        calls = []
+
+        def write(angle=None, set_id=None, render=True):
+            calls.append(1)
+            raise TypeError("'NoneType' object is not subscriptable")
+
+        with patch("agents.evolution_writer.run", write):
+            with self.assertRaisesRegex(ap.GiveUp, "pipeline code error"):
+                ap.stage_script(self.run, "evolution", None, None)
+        self.assertEqual(len(calls), 1)
+
     def test_bad_final_video_is_rebuilt(self):
         probes = [["no audio stream"], []]
         produce, calls = self._produce([self.video])
@@ -133,7 +145,7 @@ class ScriptAndCheckTests(_Env):
         plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story",
                 "build_brief": "A cutaway home and ground loop."}
 
-        def write(angle=None, render=True, set_id=None):
+        def write(angle=None, render=True, set_id=None, topic_hint=None):
             calls.append(set_id)
             if set_id is None:
                 raise NoUnusedStorySets("all consumed")
@@ -154,6 +166,19 @@ class ScriptAndCheckTests(_Env):
         again = ap.Run(self.run.path)
         self.assertEqual(again["film"], self.film)
         self.assertEqual(ap.stage_script(again, "evolution", None, None), self.film)
+
+    def test_success_cleanup_removes_only_reproducible_frame_caches(self):
+        work = os.path.join(self.tmp, "f_work")
+        for leaf in ("frames", "comp"):
+            os.makedirs(os.path.join(work, leaf), exist_ok=True)
+            open(os.path.join(work, leaf, "f_0001.png"), "wb").write(b"1234")
+        open(os.path.join(work, "voice.mp3"), "wb").write(b"voice")
+        with patch.object(ap, "get_output_dir", return_value=self.tmp), \
+                patch.dict(os.environ, {"AUTOPILOT_KEEP_WORKFILES": "0"}):
+            self.assertEqual(ap._cleanup_successful_work(self.film), 8)
+        self.assertFalse(os.path.exists(os.path.join(work, "frames")))
+        self.assertFalse(os.path.exists(os.path.join(work, "comp")))
+        self.assertTrue(os.path.exists(os.path.join(work, "voice.mp3")))
 
 
 if __name__ == "__main__":

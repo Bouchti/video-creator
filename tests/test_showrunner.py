@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -94,7 +95,7 @@ class TopicSelectionTests(unittest.TestCase):
         self.assertEqual(available, ["boat_story"])
 
     def test_all_consumed_stops_before_any_ai_call(self):
-        history = [{"set": set_id} for set_id in ("pool_story", "plane_story", "nuclear_story", "boat_story")]
+        history = [{"set": set_id} for set_id in showrunner.sets.AVAILABLE]
         with patch.object(showrunner, "_history", return_value=history), \
                 patch.object(showrunner, "_call", side_effect=AssertionError("AI must not run")):
             with self.assertRaisesRegex(showrunner.NoUnusedStorySets, "already been used"):
@@ -104,6 +105,13 @@ class TopicSelectionTests(unittest.TestCase):
         history = [{"set": "nuclear_story"}]
         with patch.dict(os.environ, {"SHOWRUNNER_ALLOW_REPEATS": "1"}):
             self.assertEqual(showrunner.available_topic_sets(["nuclear_story"], history), ["nuclear_story"])
+
+    def test_topic_research_fact_sheet_avoids_a_second_model_call(self):
+        facts = "\n".join(f"- verified fact {n} from source.example with concrete details" for n in range(10))
+        topic = {"set": "pool", "_fact_sheet": facts}
+        with patch.object(showrunner, "FACTS_DIR", tempfile.mkdtemp()), \
+                patch.object(showrunner, "_research", side_effect=AssertionError("must reuse combined research")):
+            self.assertEqual(showrunner.research(topic), facts)
 
 
 class ToFilmTests(unittest.TestCase):

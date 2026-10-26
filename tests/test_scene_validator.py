@@ -99,7 +99,8 @@ class WatcherTests(unittest.TestCase):
         return review
 
     def test_streams_and_accepts(self):
-        with patch.dict(os.environ, {"SCENE_POLICY": "stop"}), patch.object(sv, "review_images", self._stub()), \
+        with patch.dict(os.environ, {"SCENE_POLICY": "stop", "SCENE_REVIEW_BATCH_SIZE": "1"}), \
+                patch.object(sv, "review_images", self._stub()), \
                 patch.object(sv, "window_ready", lambda w, d, settle=2.0: _ready(w, d)):
             w = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False)
             w.start()
@@ -117,7 +118,7 @@ class WatcherTests(unittest.TestCase):
         self.assertTrue(os.path.exists(saved["windows"][0]["images"][0]))
 
     def test_rejection_requests_abort(self):
-        with patch.dict(os.environ, {"SCENE_POLICY": "stop"}), \
+        with patch.dict(os.environ, {"SCENE_POLICY": "stop", "SCENE_REVIEW_BATCH_SIZE": "1"}), \
                 patch.object(sv, "review_images", self._stub(reject_beat=2)), \
                 patch.object(sv, "window_ready", lambda w, d, settle=2.0: _ready(w, d)):
             w = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False)
@@ -131,6 +132,25 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual([r["beat"] for r in rep["rejected"]], [2])
         with self.assertRaises(sv.SceneRejected):
             raise sv.SceneRejected(rep["rejected"], w.report_path)
+
+    def test_ready_windows_are_batched_into_fewer_model_calls(self):
+        calls = []
+
+        def batch(items, subject):
+            calls.append([w["window"] for w, _ in items])
+            return {w["window"]: {"valid": True, "average_score": 8.0, "fatal_problems": [],
+                                  "problems": [], "fix": "", "skipped": False}
+                    for w, _ in items}
+
+        self._write(1, 420)
+        with patch.dict(os.environ, {"SCENE_POLICY": "report", "SCENE_REVIEW_BATCH_SIZE": "4"}), \
+                patch.object(sv, "review_batch", side_effect=batch), \
+                patch.object(sv, "window_ready", lambda w, d, settle=2.0: _ready(w, d)):
+            watcher = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False)
+            watcher.start()
+            report = watcher.finish()
+        self.assertTrue(report["complete"])
+        self.assertEqual(calls, [[1, 2, 3, 4], [5]])
 
 
 def _ready(w, frames_dir):
@@ -169,24 +189,6 @@ class AbortBlenderTests(unittest.TestCase):
 
 
 class SetBuilderTests(unittest.TestCase):
-    def test_fence_restores_files_outside_the_set(self):
-        from agents import set_builder as sb
-        root = tempfile.mkdtemp()
-        os.makedirs(os.path.join(root, "engine", "sets"))
-        keep = os.path.join(root, "engine", "toy.py")
-        open(keep, "w").write("original")
-        with patch.object(sb, "PROJECT_ROOT", root):
-            before = sb._snapshot()
-            open(keep, "w").write("changed by the agent")
-            allowed = os.path.join(root, "engine", "sets", "x.py")
-            open(allowed, "w").write("new set")
-            stray = os.path.join(root, "engine", "stray.py")
-            open(stray, "w").write("not allowed")
-            sb._fence(before, ["engine/sets/x.py"])
-        self.assertEqual(open(keep).read(), "original")
-        self.assertTrue(os.path.exists(allowed))
-        self.assertFalse(os.path.exists(stray))
-
     def test_static_checks_pass_on_the_bridge_set(self):
         from agents import set_builder as sb
         self.assertEqual(sb.static_checks("bridge_evolution"), [])
@@ -216,6 +218,43 @@ class SetBuilderTests(unittest.TestCase):
             sb.register("heat_pump_story", "AVAILABLE")
             sb.register("heat_pump_story", "AVAILABLE")
         self.assertIn('AVAILABLE = ["pool_story", "heat_pump_story"]', open(p).read())
+
+    def test_preview_fingerprint_changes_only_when_render_inputs_change(self):
+        from agents import set_builder as sb
+        root = tempfile.mkdtemp()
+        for directory in ("engine", os.path.join("engine", "films"), os.path.join("engine", "sets")):
+            os.makedirs(os.path.join(root, directory), exist_ok=True)
+        files = {
+            "engine/shared.py": "SHARED = 1\n",
+            "engine/films/cutaway_film.py": "# runner\n",
+            "engine/films/demo_story.json": "{}\n",
+            "engine/sets/demo_story.py": "# set\n",
+            "engine/sets/demo_story_spec.py": "# spec\n",
+        }
+        for relative, content in files.items():
+            with open(os.path.join(root, relative), "w", encoding="utf-8") as fh:
+                fh.write(content)
+        runner = os.path.join(root, "engine", "films", "cutaway_film.py")
+        with patch.object(sb, "PROJECT_ROOT", root):
+            first = sb._preview_fingerprint("demo_story", runner, True)
+            self.assertEqual(first, sb._preview_fingerprint("demo_story", runner, True))
+            with open(os.path.join(root, "engine", "sets", "demo_story.py"), "a", encoding="utf-8") as fh:
+                fh.write("CHANGED = 1\n")
+            self.assertNotEqual(first, sb._preview_fingerprint("demo_story", runner, True))
+
+    def test_complete_preview_does_not_require_synthesized_rewind_stills(self):
+        from agents import set_builder as sb
+        work = tempfile.mkdtemp()
+        film = {"beats": [{"action": "hook"}, {"action": "rewind"}, {"action": "build"}]}
+
+        class Spec:
+            ACTIONS = {"hook": {"kind": "hook"}, "rewind": {"kind": "rewind"},
+                       "build": {"kind": "build"}}
+
+        for beat in (1, 3):
+            for tag in "abc":
+                open(os.path.join(work, f"preview_{beat:02d}_scene_{tag}.png"), "wb").write(b"image")
+        self.assertTrue(sb._complete_preview(work, film, Spec))
 
     def test_fake_timings(self):
         from agents import set_builder as sb

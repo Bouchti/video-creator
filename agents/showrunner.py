@@ -7,7 +7,7 @@ bar, saves a data-driven film JSON, and (optionally) renders it with engine/make
     python -m agents.showrunner --no-render      # stop after the script (review it first)
     python -m agents.showrunner --angle "why pools are never drained in spring"
 
-Stages (all Claude Opus 5.5, adaptive thinking):
+Stages (Codex subscription by default; Claude/API remain available):
   1. pick_topic   brainstorm angles per available set, score them, avoid repeats
                   (also logs great topics that need a NEW set → output/set_wishlist.json)
   2. research     web search for verified facts + numbers (falls back to model knowledge)
@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import threading
 
 import anthropic
 from dotenv import load_dotenv
@@ -38,7 +39,7 @@ HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # every rubric score must reach this to ship
 MAX_REVISIONS = 1                      # a 2nd round rarely raised the score; it doubled the wait
 # QUALITY=best: 3 competing drafts (~5 min). QUALITY=fast: 1 draft, 1 review, 1 fix (~2-3 min).
-QUALITY = os.getenv("SHOWRUNNER_QUALITY", "best")
+QUALITY = os.getenv("SHOWRUNNER_QUALITY", "efficient")
 FACTS_DIR = os.path.join(get_output_dir(), "facts")
 FACTS_MAX_AGE_DAYS = 30
 HISTORY = os.path.join(get_output_dir(), "explainer_history.json")
@@ -145,26 +146,98 @@ def _style(set_id):
 
 # ------------------- low-level call -------------------
 #
-# Two backends:
-#   subscription (default): Claude Code's headless mode (`claude -p`) on your Claude Pro/Max
+# Three backends:
+#   codex (default): Codex CLI headless mode on the logged-in ChatGPT plan.
+#   subscription: Claude Code's headless mode (`claude -p`) on Claude Pro/Max
 #       login — no API bill; it counts against the plan's usage limits instead.
 #   api: the Anthropic API (pay per token, ~$2 per video). SHOWRUNNER_BACKEND=api to opt in.
 
-BACKEND = os.getenv("SHOWRUNNER_BACKEND", "subscription")
+BACKEND = os.getenv("SHOWRUNNER_BACKEND", "codex").strip().lower()
 CLI_MODEL = os.getenv("SHOWRUNNER_CLI_MODEL", "opus")
+CODEX_MODEL = os.getenv("SHOWRUNNER_CODEX_MODEL", "gpt-5.6-sol")
 _API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
             "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 _notional = [0.0]
+CLAUDE_USAGE = {"calls": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0, "output_tokens": 0}
+_ACTIVE_BACKEND = [None]
+_BACKEND_LOCK = threading.Lock()
+
+
+def active_backend():
+    """Backend currently serving this process; changes once after a Codex usage limit."""
+    return _ACTIVE_BACKEND[0] or BACKEND
+
+
+def activate_fallback(reason="Codex usage limit reached"):
+    """Switch this process from Codex to the configured fallback. Returns True if switched."""
+    fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
+    if fallback == "claude":
+        fallback = "subscription"
+    current = active_backend()
+    if current == fallback and fallback in ("subscription", "api"):
+        return True
+    if current != "codex" or fallback not in ("subscription", "api"):
+        return False
+    with _BACKEND_LOCK:
+        if active_backend() != "codex":
+            return True
+        _ACTIVE_BACKEND[0] = fallback
+        log.warning("[showrunner] %s; switching all remaining AI work to %s", reason, fallback)
+    return True
+
+
+def _capped_effort(requested, env_name="SHOWRUNNER_CLAUDE_EFFORT_CAP", default="medium"):
+    """Cap subscription reasoning so a stray high-effort call cannot consume the session."""
+    order = ("low", "medium", "high", "max")
+    requested = requested if requested in order else default
+    cap = (os.getenv(env_name) or default).strip().lower()
+    if cap not in order:
+        cap = default
+    return order[min(order.index(requested), order.index(cap))]
+
+
+def _record_claude_usage(data, label="claude"):
+    """Collect Claude CLI usage across showrunner, vision and set-builder calls."""
+    usage = data.get("usage") or {}
+    if not usage and isinstance(data.get("modelUsage"), dict):
+        rows = list(data["modelUsage"].values())
+        usage = {
+            "input_tokens": sum(int(r.get("inputTokens") or 0) for r in rows),
+            "cache_read_input_tokens": sum(int(r.get("cacheReadInputTokens") or 0) for r in rows),
+            "cache_creation_input_tokens": sum(int(r.get("cacheCreationInputTokens") or 0) for r in rows),
+            "output_tokens": sum(int(r.get("outputTokens") or 0) for r in rows),
+        }
+    CLAUDE_USAGE["calls"] += 1
+    for key in CLAUDE_USAGE:
+        if key != "calls":
+            CLAUDE_USAGE[key] += int(usage.get(key) or 0)
+    if usage:
+        log.info("[claude] %s usage: %s input (%s cache-read, %s cache-write), %s output", label,
+                 f"{int(usage.get('input_tokens') or 0):,}",
+                 f"{int(usage.get('cache_read_input_tokens') or 0):,}",
+                 f"{int(usage.get('cache_creation_input_tokens') or 0):,}",
+                 f"{int(usage.get('output_tokens') or 0):,}")
+
+
+def claude_usage_summary():
+    u = CLAUDE_USAGE
+    return (f"{u['calls']} call(s), {u['input_tokens']:,} input tokens "
+            f"({u['cache_read_input_tokens']:,} cache-read, "
+            f"{u['cache_creation_input_tokens']:,} cache-write), {u['output_tokens']:,} output tokens")
 
 
 def _call_once(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    if BACKEND == "api":
+    backend = active_backend()
+    if backend == "api":
         return _call_api(system, prompt, schema, effort, tools, max_tokens)
+    if backend == "codex":
+        return _call_codex(system, prompt, schema, effort, web=bool(tools))
     return _call_cli(system, prompt, schema, effort, web=bool(tools))
 
 
 class UsageLimit(RuntimeError):
-    """The Claude subscription hit its session/usage limit; `reset` is Claude's own reset text."""
+    """A subscription backend hit its session/usage limit."""
 
     def __init__(self, msg):
         super().__init__(msg)
@@ -180,17 +253,22 @@ class UsageLimit(RuntimeError):
 
 
 def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    """Calls Claude; on a subscription usage limit, waits for the reset (up to SHOWRUNNER_MAX_WAIT
+    """Call the selected backend; on a usage limit, wait up to SHOWRUNNER_MAX_WAIT
     minutes) and retries once, so an unattended run finishes instead of dying."""
     import time as _t
     try:
         return _call_once(system, prompt, schema, effort, tools, max_tokens)
     except UsageLimit as e:
+        if activate_fallback(str(e)[:180]):
+            try:
+                return _call_once(system, prompt, schema, effort, tools, max_tokens)
+            except UsageLimit as fallback_error:
+                e = fallback_error
         wait = (e.reset - __import__("datetime").datetime.now()).total_seconds() + 60 if e.reset else None
         max_wait = float(os.getenv("SHOWRUNNER_MAX_WAIT", "65")) * 60
         if wait is None or wait > max_wait:
             raise
-        log.warning(f"[showrunner] Claude usage limit hit; waiting {wait / 60:.0f} min for the reset, then continuing")
+        log.warning(f"[showrunner] subscription usage limit hit; waiting {wait / 60:.0f} min for the reset")
         _t.sleep(max(0, wait))
         return _call_once(system, prompt, schema, effort, tools, max_tokens)
 
@@ -214,7 +292,8 @@ def _call_cli(system, prompt, schema=None, effort="high", web=False):
         sys_file = os.path.join(tmp, "system.txt")
         with open(sys_file, "w", encoding="utf-8") as f:
             f.write(system)
-        cmd = [exe, "-p", "--output-format", "json", "--model", CLI_MODEL, "--effort", effort,
+        cmd = [exe, "-p", "--output-format", "json", "--model", CLI_MODEL, "--effort",
+               _capped_effort(effort),
                "--system-prompt-file", sys_file, "--no-session-persistence", "--strict-mcp-config",
                "--setting-sources", "", "--tools", *tools]
         if web:
@@ -233,10 +312,27 @@ def _call_cli(system, prompt, schema=None, effort="high", web=False):
     if data.get("is_error") or data.get("subtype") != "success":
         raise RuntimeError(f"claude -p error ({data.get('subtype')}): {str(data.get('result'))[:300]}")
     _notional[0] += float(data.get("total_cost_usd") or 0)
+    _record_claude_usage(data, "showrunner")
     if schema is not None:
         out = data.get("structured_output")
         return out if out is not None else json.loads(data["result"])
     return data["result"].strip()
+
+
+def _call_codex(system, prompt, schema=None, effort="high", web=False):
+    """One isolated Codex CLI turn authenticated by the user's ChatGPT login."""
+    from agents import codex_cli
+
+    full = ("Follow the role and constraints below. Do the task directly; do not inspect or edit local files.\n\n"
+            f"ROLE AND RULES:\n{system}\n\nTASK:\n{prompt}")
+    try:
+        out, _ = codex_cli.run(full, schema=schema, effort=effort, web=web, model=CODEX_MODEL)
+        return out
+    except RuntimeError as exc:
+        text = str(exc).lower()
+        if "limit" in text and any(word in text for word in ("reset", "rate", "usage", "quota", "plan")):
+            raise UsageLimit(str(exc)[:500]) from exc
+        raise
 
 
 def _call_api(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
@@ -302,29 +398,18 @@ def available_topic_sets(set_ids=None, history=None):
             if not (getattr(sets.spec(set_id), "HERO", None) and set_id in consumed)]
 
 
-def _trend_research(set_ids):
-    """Find current, sourced signals before Claude scores candidate subjects."""
-    briefs = "\n\n".join(_set_brief(set_id) for set_id in set_ids)
-    prompt = f"""Today is {datetime.date.today().isoformat()}. Search the web for current public-interest
-signals from the last 14 days that could honestly support one of these video subjects:
-
-{briefs}
-
-Return a compact plain-text trend brief. For each useful signal include the publication date,
-what is newly relevant, and a direct source URL. Prefer news, search interest, major releases,
-anniversaries only when they are currently being discussed, and authoritative sources. Say
-clearly when a subject has no fresh signal. Never invent a connection just to make a set fit."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 8}]
-    return _call("You are the trend researcher for a factual social-video studio.", prompt,
-                 tools=tools, effort="medium")
-
-
 NEW_STORY_SCHEMA = _obj({
     "subject": S,
+    "title": S,
+    "angle": S,
+    "hook_line": S,
+    "hook_action": S,
+    "payoff": S,
     "trend_signal": S,
     "trend_source_url": S,
     "why_people_care_now": S,
     "build_brief": S,
+    "fact_sheet": S,
 })
 
 
@@ -350,25 +435,10 @@ def plan_new_story_set():
     published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
     ideas = _wishlist()[-30:]
     wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in ideas) or "- none"
-    trend_prompt = f"""Today is {datetime.date.today().isoformat()}. Search current sources from the last
-14 days for subjects people are actively interested in that could support a 60-80 second Max
-trial-and-error engineering story. Search across home projects, infrastructure, transport,
-energy, water, machines and practical science. A usable subject must be visually explainable as
-one coherent 3D cutaway and contain at least three true failure -> engineering-fix steps.
-
-Already used subjects (exclude the entire underlying subject, not just these titles):
-{published}
-
-Return 8-12 concise possibilities. For each, give the current signal, publication date, direct
-source URL, and the physical build/failure ladder. Exclude politics, active tragedies, weapons,
-dangerous copyable experiments, copyrighted characters, and any forced trend connection."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 10}]
-    trends = _call("You research safe, factual, high-retention engineering video subjects.",
-                   trend_prompt, tools=tools, effort="medium")
-    prompt = f"""Choose one genuinely new Max story set to build next.
-
-LIVE TREND RESEARCH:
-{trends}
+    prompt = f"""Today is {datetime.date.today().isoformat()}. Search current sources from the last
+14 days and choose one genuinely new Max trial-and-error engineering story to build next. Search
+across home projects, infrastructure, transport, energy, water, machines and practical science.
+The subject must work as one coherent 3D cutaway with at least three true failure -> fix steps.
 
 OLDER SET WISHLIST (inspiration only; live research wins):
 {wishlist}
@@ -378,8 +448,12 @@ USED SUBJECTS (never repeat or rename these):
 
 Return:
 - subject: a short concrete name for the thing Max builds
+- title, angle, hook_line (13 words maximum), hook_action, and payoff for the eventual video
 - trend_signal and the exact direct trend_source_url from the live research
 - why_people_care_now
+- fact_sheet: a compact 8-12 bullet fact sheet (maximum 250 words), verified during this same
+  search, with a source domain or direct URL on every bullet and a TRUE / NEEDS REWORDING verdict
+  for hook_line
 - build_brief: a self-contained production brief describing the single coherent cutaway world,
   Max's goal, two children in the payoff, 3-5 escalating visible failures, the real engineering fix
   immediately after each failure, the final working result, and the physical principles viewers
@@ -387,7 +461,8 @@ Return:
 
 Do not choose a subject merely because it appears in the old wishlist. It needs a credible current
 signal and must be different from every used subject."""
-    plan = _call(STORY_STYLE, prompt, NEW_STORY_SCHEMA, effort="high")
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
+    plan = _call(STORY_STYLE, prompt, NEW_STORY_SCHEMA, effort="medium", tools=tools)
     url = str(plan.get("trend_source_url", ""))
     if not url.startswith(("http://", "https://")):
         raise NoUnusedStorySets("Fresh topic research returned no verifiable trend source; no set was built.")
@@ -410,6 +485,7 @@ TOPIC_SCHEMA = _obj({
         "trend_signal": S, "trend_source_url": S, "trend_relevance": I,
         "hook_strength": I, "curiosity": I, "visual_fit": I, "novelty": I, "shareability": I})},
     "best": I,
+    "fact_sheet": S,
     "wishlist": {"type": "array", "items": _obj({"topic": S, "hook_line": S, "set_needed": S})},
 })
 
@@ -431,20 +507,17 @@ def pick_topic(set_ids=None, forced_angle=None):
         log.info(f"[showrunner] consumed subjects excluded: {', '.join(skipped)}")
     used = [h.get("title", "") + " | " + h.get("angle", "") for h in history][-40:]
     briefs = "\n\n".join(_set_brief(s) for s in set_ids)
-    trend_brief = _trend_research(set_ids)
-    prompt = f"""Pick today's video.
+    prompt = f"""Today is {datetime.date.today().isoformat()}. Search current sources from the last
+14 days, then pick today's video.
 
 {briefs}
-
-CURRENT TREND RESEARCH (use only claims and links present here):
-{trend_brief}
 
 Already published (do NOT repeat these angles or hooks):
 {chr(10).join('- ' + u for u in used) or '- (nothing yet)'}
 
 {'The producer asked for this angle; develop it, using the set whose SUBJECT matches it: ' + forced_angle if forced_angle else ''}
 
-Brainstorm 10 distinct ANGLES that these sets can film: different hooks and questions about the
+Return 3 distinct ANGLES that these sets can film: different hooks and questions about the
 same subject (why it is built that way, what goes wrong if..., the hidden part nobody sees, the
 surprising number, the thing you should never do). For each: a working title, the angle, the hook
 line (the first 2 seconds, at most 13 words, a true fact), which hook action opens it, the payoff
@@ -456,7 +529,12 @@ fit most). Remember the film always shows
 the whole build, but build steps that are not the point can be raced through as montages, so an
 angle about the water, the soil or the machinery works as well as one about construction.
 
-Also list 5 wishlist topics that would make outstanding cutaway videos but need a NEW set (for
+After choosing `best`, use the same search turn to return `fact_sheet`: a compact 8-12 bullet fact
+sheet (maximum 250 words) for that winning subject. Put a source domain or direct URL on every
+bullet, verify the winning hook with a TRUE / NEEDS REWORDING verdict, and include only facts the
+script can safely repeat.
+
+Also list 2 wishlist topics that would make outstanding cutaway videos but need a NEW set (for
 example a gas station's underground tanks, a septic system, a water tower): topic, hook line, and
 the set to build."""
     if any(getattr(sets.spec(s_), "HERO", None) for s_ in set_ids):
@@ -466,7 +544,8 @@ For hero (story) sets, an ANGLE is a fresh telling of the hero's trial-and-error
 building it for, the running gag, which disaster becomes the hook, the comic voice, the payoff.
 Never frame it as a score or contest ("Physics 1, Max 0", "rounds", "fail #2"): a counter tells the
 viewer nothing. The hook line must make sense on its own to someone who has seen nothing else."""
-    out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium")
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
+    out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium", tools=tools)
     _save_wishlist(out.get("wishlist", []))
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
@@ -477,6 +556,8 @@ viewer nothing. The hook line must make sense on its own to someone who has seen
                        + c["novelty"] + c["shareability"])
     if best["set"] not in set_ids:
         best["set"] = set_ids[0]
+    if str(out.get("fact_sheet", "")).strip():
+        best["_fact_sheet"] = out["fact_sheet"].strip()
     minimum_trend = int(os.getenv("SHOWRUNNER_MIN_TREND_SCORE", "6"))
     if not forced_angle and (best.get("trend_relevance", 0) < minimum_trend
                              or not str(best.get("trend_source_url", "")).startswith(("http://", "https://"))):
@@ -512,7 +593,12 @@ def research(topic):
             return facts
     except OSError:
         pass
-    facts = _research(topic)
+    combined = str(topic.get("_fact_sheet") or "").strip()
+    if len(combined.split()) >= 50:
+        facts = combined
+        log.info(f"[showrunner] fact sheet: reused from topic research ({len(facts.split())} words)")
+    else:
+        facts = _research(topic)
     os.makedirs(FACTS_DIR, exist_ok=True)
     with open(cache, "w", encoding="utf-8") as f:
         f.write(facts)
@@ -526,7 +612,7 @@ Subject: {sp.SUBJECT}
 Facts the 3D model already shows: {json.dumps(sp.MODEL_FACTS, ensure_ascii=False)}
 Example hook to verify: {topic['hook_line']}
 
-Search the web and return a compact FACT SHEET (plain text, max ~350 words): 8-15 bullet facts
+Search the web and return a compact FACT SHEET (plain text, max ~250 words): 8-12 bullet facts
 with concrete numbers about this subject, each with its source domain in brackets; correct any of
 the model facts that are wrong. Start with a verdict on the example hook (TRUE / NEEDS REWORDING). Prefer engineering, trade and government
 sources. Include 2-3 surprising details that would delight a viewer."""
@@ -534,6 +620,8 @@ sources. Include 2-3 surprising details that would delight a viewer."""
     try:
         facts = _call("You are a meticulous fact-checker for an engineering explainer channel.", prompt,
                       tools=tools, effort="medium")
+    except UsageLimit:
+        raise
     except (anthropic.BadRequestError, RuntimeError) as e:  # web search unavailable / failed
         log.warning(f"[showrunner] web search failed ({str(e)[:100]}); using model knowledge")
         facts = _call("You are a meticulous fact-checker for an engineering explainer channel.",
@@ -781,8 +869,8 @@ def develop(topic, facts):
         return script, problems, critique_script(script, topic, facts, problems), direction
 
     directions = _directions(topic["set"])
-    if QUALITY == "fast":
-        directions = dict(list(directions.items())[:1])
+    keep = 2 if QUALITY == "best" else 1
+    directions = dict(list(directions.items())[:keep])
     with ThreadPoolExecutor(max_workers=len(directions)) as pool:
         drafts = list(pool.map(draft_and_review, directions))
     for script, problems, review, direction in drafts:
@@ -798,7 +886,7 @@ def develop(topic, facts):
     script, problems, review = best
     if problems:
         raise RuntimeError(f"no renderable script: {problems}")
-    if not revised:                                     # a revision already polished it
+    if not revised and QUALITY == "best":              # efficient mode avoids a redundant third call
         try:
             polished = polish(script, topic, facts)
             if not hard_checks(polished, topic["set"]):
@@ -866,25 +954,41 @@ def to_film(script, topic, facts, review=None):
         elif ov.get("type") == "label" and ov.get("text"):
             beat["overlay"] = {"type": "label", "text": ov["text"]}
         beats.append(beat)
+    backend = active_backend()
     return {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
             "music": "synth", "beats": beats, "cta": closing_question(beats[-1]["text"]) if beats else None,
             # story sets end on a reunion: hold the payoff after the last word so it can land
             "tail": 2.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2,
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
-                     "created": datetime.datetime.now().isoformat(timespec="seconds"), "model": MODEL}}
+                     "created": datetime.datetime.now().isoformat(timespec="seconds"),
+                     "model": CODEX_MODEL if backend == "codex" else (MODEL if backend == "api" else CLI_MODEL)}}
 
 
 def slug(text):
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48]
 
 
-def run(angle=None, render=True, preview=False, set_id=None):
+def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None):
     import time
     t0 = time.time()
-    log.info(f"[showrunner] backend: {BACKEND}" + (f" (claude -p, model {CLI_MODEL})" if BACKEND != "api" else "")
-             + f", quality: {QUALITY}")
-    topic = pick_topic(set_ids=[set_id] if set_id else None, forced_angle=angle)
+    backend = active_backend()
+    detail = (f"codex exec, model {CODEX_MODEL}" if backend == "codex" else
+              f"claude -p, model {CLI_MODEL}" if backend != "api" else f"Anthropic API, model {MODEL}")
+    fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
+    log.info(f"[showrunner] backend: {backend} ({detail}), quality: {QUALITY}"
+             + (f", fallback: {fallback}" if fallback and backend == "codex" else ""))
+    needed = ("title", "angle", "hook_line", "hook_action", "payoff", "trend_signal", "trend_source_url")
+    hint_is_filmable = (topic_hint and set_id and all(topic_hint.get(k) for k in needed)
+                        and topic_hint.get("hook_action") in sets.spec(set_id).ACTIONS)
+    if hint_is_filmable:
+        topic = {k: topic_hint[k] for k in needed}
+        topic["set"] = set_id
+        if topic_hint.get("fact_sheet"):
+            topic["_fact_sheet"] = topic_hint["fact_sheet"]
+        log.info(f"[showrunner] reusing the new-set trend brief: {topic['title']} | hook: {topic['hook_line']}")
+    else:
+        topic = pick_topic(set_ids=[set_id] if set_id else None, forced_angle=angle)
     facts = research(topic)
     script, review = develop(topic, facts)
     log.info(f"[showrunner] script written in {(time.time() - t0) / 60:.1f} min")
@@ -894,9 +998,12 @@ def run(angle=None, render=True, preview=False, set_id=None):
     path = os.path.join(FILMS_DIR, f"{name}.json")
     json.dump(film, open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
     log.info(f"[showrunner] script saved: {path}")
-    if BACKEND != "api":
-        log.info(f"[showrunner] Claude usage: on your subscription (the same calls on the API would "
-                 f"have cost ~${_notional[0]:.2f})")
+    from agents.codex_cli import TOTAL_USAGE, usage_summary
+    if TOTAL_USAGE["calls"]:
+        log.info(f"[showrunner] Codex subscription usage this process: {usage_summary()}")
+    if CLAUDE_USAGE["calls"]:
+        log.info(f"[showrunner] Claude subscription usage this process: {claude_usage_summary()} "
+                 f"(API-equivalent reported by CLI: ~${_notional[0]:.2f})")
     for b in film["beats"]:
         log.info(f"   [{b['id']:>24}] {b['text']}")
     hist = _history()

@@ -22,11 +22,12 @@ Steps:
   6. accept           all beats accepted → the set is added to EVOLUTION in engine/sets/__init__.py
                       and a contact sheet is saved in output/sets/<id>/
 
-Claude may only write the set's own files: anything else it touches is restored afterwards.
-Needs the `claude` CLI (logged in) and Blender (BLENDER_EXE), like the rest of the 3D pipeline.
+The coding agent works in an isolated source mirror; only the set's own files are copied back.
+Needs the selected subscription CLI (`codex` by default) and Blender (BLENDER_EXE).
 """
 import argparse
 import glob
+import hashlib
 import json
 import logging
 import os
@@ -35,75 +36,103 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from config.paths import PROJECT_ROOT
 
 log = logging.getLogger("pipeline")
 
-GUARD_DIRS = ("engine", "agents", "config", "local_video", "tests")
 BUILD_MODEL = os.getenv("SET_BUILDER_MODEL") or "opus"
+CODEX_BUILD_MODEL = os.getenv("SET_BUILDER_CODEX_MODEL") or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
 
 
-# ------------------- Claude Code as a coding agent, fenced to the set's files -------------------
-
-def _snapshot():
-    snap = {}
-    for d in GUARD_DIRS:
-        for p in glob.glob(os.path.join(PROJECT_ROOT, d, "**", "*"), recursive=True):
-            if os.path.isfile(p) and p.endswith((".py", ".json", ".md")) and "__pycache__" not in p:
-                with open(p, "rb") as fh:
-                    snap[os.path.abspath(p)] = fh.read()
-    for p in ("main.py", "README.md", "requirements.txt"):
-        full = os.path.join(PROJECT_ROOT, p)
-        if os.path.exists(full):
-            with open(full, "rb") as fh:
-                snap[os.path.abspath(full)] = fh.read()
-    return snap
-
-
-def _fence(before, allowed):
-    """Undo any change outside `allowed` (restore modified files, delete new ones)."""
-    allowed = {os.path.abspath(os.path.join(PROJECT_ROOT, a)) for a in allowed}
-    after = _snapshot()
-    for p, data in before.items():
-        if p not in allowed and after.get(p) != data:
-            with open(p, "wb") as fh:
-                fh.write(data)
-            log.warning(f"[set_builder] restored {os.path.relpath(p, PROJECT_ROOT)} (outside the set's files)")
-    for p in after:
-        if p not in before and p not in allowed:
-            os.remove(p)
-            log.warning(f"[set_builder] removed {os.path.relpath(p, PROJECT_ROOT)} (outside the set's files)")
+# ------------------- subscription coding agent, isolated from the real worktree -------------------
 
 
 def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400) -> str:
-    """One headless Claude Code session in the project folder with Read/Glob/Grep/Write/Edit,
-    on the Claude subscription (API credentials stripped). Only `allowed` files may change."""
-    exe = shutil.which("claude")
-    if not exe:
-        raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
-    from agents.showrunner import _API_ENV
-    env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
-    tools = ["Read", "Glob", "Grep", "Write", "Edit"]
+    """Run the selected coding subscription in an isolated source mirror.
+
+    Only allowed files are copied back. This avoids the old snapshot/fence race that could undo
+    edits made in the real repository while a long set-building turn was still running.
+    """
+    from agents.showrunner import (UsageLimit, _API_ENV, _capped_effort, _record_claude_usage,
+                                   activate_fallback, active_backend)
+    backend = active_backend()
+
     rules = ("\n\nYou may create or edit ONLY these files: " + ", ".join(allowed) +
-             ". Every other file is read-only (changes elsewhere are reverted automatically). "
-             "You cannot run commands: the pipeline renders and tests your files after you finish.")
-    before = _snapshot()
-    cmd = [exe, "-p", "--output-format", "json", "--model", BUILD_MODEL, "--effort", effort,
-           "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
-           "--permission-mode", "acceptEdits", "--tools", *tools, "--allowedTools", *tools]
-    try:
-        r = subprocess.run(cmd, input=prompt + rules, capture_output=True, text=True, encoding="utf-8",
-                           cwd=PROJECT_ROOT, env=env, timeout=timeout)
-    finally:
-        _fence(before, allowed)
-    try:
-        data = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
-    if data.get("is_error"):
-        raise RuntimeError(f"claude -p error: {str(data.get('result'))[:300]}")
-    return str(data.get("result") or "").strip()
+             ". Every other file is read-only. The pipeline renders and tests after you finish. "
+             "When inspecting files, issue one simple read/search command at a time; never chain PowerShell "
+             "commands with semicolons, pipes, or command substitution because the execution policy blocks them.")
+    if backend != "codex":
+        rules += " You cannot run commands."
+    with tempfile.TemporaryDirectory(prefix="video_creator_set_agent_") as tmp:
+        workspace = os.path.join(tmp, "repo")
+        os.makedirs(workspace)
+        ignored = shutil.ignore_patterns(".git", ".env", "venv", "output", "logs", "__pycache__",
+                                         ".pytest_cache", "*.pyc", "*.mp4", "*.wav")
+        for name in ("engine", "agents", "config", "local_video", "unreal_video", "tests"):
+            src = os.path.join(PROJECT_ROOT, name)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(workspace, name), ignore=ignored)
+        for name in ("main.py", "README.md", "requirements.txt"):
+            src = os.path.join(PROJECT_ROOT, name)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(workspace, name))
+
+        if backend == "codex":
+            from agents import codex_cli
+            images = [p.strip() for p in re.findall(r"[A-Za-z]:[\\/][^,\n]+?\.(?:png|jpe?g)", prompt, re.I)
+                      if os.path.isfile(p.strip())]
+            try:
+                out, _ = codex_cli.run(prompt + rules, effort=effort, images=images, cwd=workspace,
+                                       sandbox="workspace-write", model=CODEX_BUILD_MODEL, timeout=timeout,
+                                       effort_cap_env="SET_BUILDER_CODEX_EFFORT_CAP")
+            except RuntimeError as exc:
+                text = str(exc).lower()
+                if "limit" in text and any(word in text for word in ("reset", "rate", "usage", "quota", "plan")):
+                    limit = UsageLimit(str(exc)[:500])
+                    if activate_fallback(str(limit)[:180]):
+                        backend = active_backend()
+                        rules += " You cannot run commands."
+                    else:
+                        raise limit from exc
+                else:
+                    raise
+        if backend != "codex":
+            exe = shutil.which("claude")
+            if not exe:
+                raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
+            env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
+            tools = ["Read", "Glob", "Grep", "Write", "Edit"]
+            cmd = [exe, "-p", "--output-format", "json", "--model", BUILD_MODEL, "--effort",
+                   _capped_effort(effort, "SET_BUILDER_CLAUDE_EFFORT_CAP"),
+                   "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
+                   "--permission-mode", "acceptEdits", "--tools", *tools, "--allowedTools", *tools]
+            r = subprocess.run(cmd, input=prompt + rules, capture_output=True, text=True, encoding="utf-8",
+                               cwd=workspace, env=env, timeout=timeout)
+            try:
+                data = json.loads(r.stdout)
+            except json.JSONDecodeError:
+                raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
+            result_text = str(data.get("result") or "")
+            if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
+                raise UsageLimit(result_text[:300])
+            if data.get("is_error"):
+                raise RuntimeError(f"claude -p error: {result_text[:300]}")
+            _record_claude_usage(data, "set builder")
+            out = result_text.strip()
+
+        for relative in allowed:
+            relative = os.path.normpath(relative)
+            if os.path.isabs(relative) or relative == ".." or relative.startswith(".." + os.sep):
+                raise RuntimeError(f"unsafe allowed path: {relative}")
+            src = os.path.join(workspace, relative)
+            if not os.path.isfile(src):
+                raise RuntimeError(f"coding agent did not produce required file: {relative}")
+            dst = os.path.join(PROJECT_ROOT, relative)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+        return str(out).strip()
 
 
 # ------------------- the brief Claude works from -------------------
@@ -336,13 +365,44 @@ def fake_timings(film: dict, path: str):
     return spans
 
 
+def _preview_fingerprint(set_id: str, runner: str, story: bool) -> str:
+    """Hash every input that can change preview pixels, so unchanged previews are reusable."""
+    paths = set(glob.glob(os.path.join(PROJECT_ROOT, "engine", "*.py")))
+    paths.update(glob.glob(os.path.join(PROJECT_ROOT, "engine", "films", "*.py")))
+    paths.update(os.path.join(PROJECT_ROOT, p) for p in _files(set_id))
+    paths.add(runner)
+    h = hashlib.sha256()
+    for path in sorted(paths):
+        if os.path.isfile(path):
+            h.update(os.path.relpath(path, PROJECT_ROOT).encode("utf-8"))
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+    settings = {
+        "story": story,
+        "pct": os.getenv("CUT_PCT" if story else "EVO_PCT", "50"),
+        "samples": os.getenv("CUT_SAMPLES" if story else "EVO_SAMPLES", "16"),
+        "blender": os.getenv("BLENDER_EXE", ""),
+    }
+    h.update(json.dumps(settings, sort_keys=True).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _complete_preview(work: str, film: dict, spec) -> bool:
+    """Every renderable beat has three stills; rewind beats are synthesized and intentionally absent."""
+    for k, beat in enumerate(film["beats"], 1):
+        actions = list(beat.get("actions") or [beat.get("action")])
+        if actions and all(spec.ACTIONS.get(action, {}).get("kind") == "rewind" for action in actions):
+            continue
+        if len(glob.glob(os.path.join(work, f"preview_{k:02d}_*_[abc].png"))) < 3:
+            return False
+    return True
+
+
 def preview_render(set_id, work) -> str:
-    """Render 3 stills per beat; returns '' or the Blender error text."""
+    """Render 3 stills per beat, or reuse an exact source/settings match."""
     from engine.make_film import BLENDER, _run_blender
     film_json = _film_file(set_id)
     film = json.load(open(film_json, encoding="utf-8"))
-    for p in glob.glob(os.path.join(work, "preview_*.png")):
-        os.remove(p)
     timings = os.path.join(work, "timings.json")
     fake_timings(film, timings)
     import importlib
@@ -352,25 +412,67 @@ def preview_render(set_id, work) -> str:
                           "cutaway_film.py" if story else "evolution_film.py")
     os.environ.setdefault("CUT_PCT" if story else "EVO_PCT", "50")
     os.environ.setdefault("CUT_SAMPLES" if story else "EVO_SAMPLES", "16")
+    fingerprint = _preview_fingerprint(set_id, runner, story)
+    manifest_path = os.path.join(work, "preview_manifest.json")
+    try:
+        manifest = json.load(open(manifest_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        manifest = {}
+    if manifest.get("fingerprint") == fingerprint and _complete_preview(work, film, spec):
+        log.info("[set_builder] preview unchanged; reusing existing stills")
+        return ""
+    for p in glob.glob(os.path.join(work, "preview_*.png")):
+        os.remove(p)
     try:
         _run_blender([BLENDER, "--background", "--factory-startup", "--python", runner, "--", film_json, timings,
                       work, "--preview"])
     except RuntimeError as exc:
         return str(exc)[-4000:]
+    if not _complete_preview(work, film, spec):
+        return "preview renderer completed without producing all three stills for every renderable beat"
+    tmp = manifest_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"fingerprint": fingerprint, "beats": len(film["beats"])}, fh, indent=2)
+    os.replace(tmp, manifest_path)
     return ""
 
 
 def review_preview(set_id, work) -> list:
-    """Every beat's three preview stills through the scene validator. Returns the per-beat reports."""
+    """Review previews with a persistent image cache and batched turns on every backend."""
     import importlib
 
     from agents import scene_validator as sv
     spec = importlib.reload(importlib.import_module(f"engine.sets.{set_id}_spec"))
+    review_backend = sv._backend()
     film = json.load(open(_film_file(set_id), encoding="utf-8"))
     spans = json.load(open(os.path.join(work, "timings.json")))["beats"]
     review_dir = os.path.join(work, "review")
     os.makedirs(review_dir, exist_ok=True)
-    reports, previous = [], None
+    cache_path = os.path.join(work, "review_cache.json")
+    try:
+        cache = json.load(open(cache_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        cache = {}
+
+    def save_cache():
+        tmp = cache_path + ".tmp"
+        json.dump(cache, open(tmp, "w", encoding="utf-8"), indent=1)
+        os.replace(tmp, cache_path)
+
+    def cache_key(w, images, previous):
+        model = ((os.getenv("SCENE_REVIEW_CODEX_MODEL") or os.getenv("SHOWRUNNER_CODEX_MODEL") or "")
+                 if review_backend == "codex" else
+                 (os.getenv("SCENE_REVIEW_CLI_MODEL") or os.getenv("SHOWRUNNER_CLI_MODEL") or "opus"))
+        meta = {"cache_version": 2, "window": w, "subject": getattr(spec, "SUBJECT", set_id),
+                "backend": review_backend, "model": model, "review_width": sv.REVIEW_W,
+                "jpeg_quality": sv.REVIEW_JPEG_QUALITY, "min_score": sv.min_score()}
+        h = hashlib.sha256(json.dumps(meta, sort_keys=True).encode("utf-8"))
+        for path in ([previous] if previous else []) + [p for _, p in images]:
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+        return h.hexdigest()
+
+    reports, pending, previous = [], [], None
     for k, (beat, sp) in enumerate(zip(film["beats"], spans)):
         acts = list(beat.get("actions") or [beat.get("action")])
         if all(spec.ACTIONS.get(action, {}).get("kind") == "rewind" for action in acts):
@@ -394,13 +496,43 @@ def review_preview(set_id, work) -> list:
             r = {**w, "valid": False, "fatal_problems": tech["fatal_problems"], "problems": tech["problems"],
                  "fix": ""}
         else:
-            r = {**w, **sv.review_images(w, images, getattr(spec, "SUBJECT", set_id), previous)}
+            key = cache_key(w, images, previous)
+            if key in cache:
+                r = {**w, **cache[key], "cached": True}
+            else:
+                pending.append((w, images, previous, key))
+                previous = images[-1][1]
+                continue
         r["images"] = [p for _, p in images]
         previous = images[-1][1]
         reports.append(r)
-        log.info(f"[set_builder] beat {k + 1:02d} [{w['action']}] "
+
+    subject = getattr(spec, "SUBJECT", set_id)
+    if sv._env_flag("SCENE_VISION", "1"):
+        size = max(1, int(os.getenv("SCENE_REVIEW_BATCH_SIZE") or "4"))
+        for start in range(0, len(pending), size):
+            batch = pending[start:start + size]
+            reviewed = sv.review_batch([(w, images) for w, images, _, _ in batch], subject)
+            for w, images, _, key in batch:
+                result = reviewed[w["window"]]
+                cache[key] = result
+                reports.append({**w, **result, "images": [p for _, p in images]})
+            save_cache()
+    else:
+        for w, images, previous, key in pending:
+            result = sv.review_images(w, images, subject, previous)
+            if not result.get("skipped"):
+                cache[key] = result
+                save_cache()
+            reports.append({**w, **result, "images": [p for _, p in images]})
+
+    reports.sort(key=lambda r: r["window"])
+    for r in reports:
+        problems = r.get("fatal_problems") or r.get("problems") or [r.get("reason", "review unavailable")]
+        log.info(f"[set_builder] beat {r['beat']:02d} [{r['action']}] "
                  f"{'ACCEPTED' if r.get('valid') else 'REJECTED'}"
-                 + ("" if r.get("valid") else ": " + "; ".join((r.get("fatal_problems") or r.get("problems"))[:2])))
+                 + (" [cached]" if r.get("cached") else "")
+                 + ("" if r.get("valid") else ": " + "; ".join(str(x) for x in problems[:2])))
     json.dump(reports, open(os.path.join(work, "build_review.json"), "w", encoding="utf-8"), indent=1)
     return reports
 
