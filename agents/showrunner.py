@@ -37,7 +37,7 @@ WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 wor
 TARGET_WORDS = (140, 192)              # ≈ 60–80 s with this voice (incl. the closing question)
 HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # every rubric score must reach this to ship
-MAX_REVISIONS = 1                      # a 2nd round rarely raised the score; it doubled the wait
+MAX_REVISIONS = max(1, int(os.getenv("SHOWRUNNER_MAX_REVISIONS", "2")))
 # QUALITY=best: 3 competing drafts (~5 min). QUALITY=fast: 1 draft, 1 review, 1 fix (~2-3 min).
 QUALITY = os.getenv("SHOWRUNNER_QUALITY", "efficient")
 FACTS_DIR = os.path.join(get_output_dir(), "facts")
@@ -252,6 +252,24 @@ class UsageLimit(RuntimeError):
             self.reset = t if t > now else t + _dt.timedelta(days=1)
 
 
+def codex_unavailable(exc):
+    """True when a Codex subscription call should immediately move to the fallback.
+
+    Codex reports both quota exhaustion and transient model saturation as ordinary CLI
+    failures. Neither can be repaired by repeating the same expensive pipeline stage.
+    """
+    text = str(exc).lower()
+    limited = "limit" in text and any(
+        word in text for word in ("reset", "rate", "usage", "quota", "plan")
+    )
+    saturated = any(phrase in text for phrase in (
+        "model is at capacity", "model at capacity", "selected model is at capacity",
+        "server is overloaded", "service is overloaded", "temporarily unavailable",
+        "try a different model",
+    ))
+    return limited or saturated
+
+
 def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
     """Call the selected backend; on a usage limit, wait up to SHOWRUNNER_MAX_WAIT
     minutes) and retries once, so an unattended run finishes instead of dying."""
@@ -329,8 +347,7 @@ def _call_codex(system, prompt, schema=None, effort="high", web=False):
         out, _ = codex_cli.run(full, schema=schema, effort=effort, web=web, model=CODEX_MODEL)
         return out
     except RuntimeError as exc:
-        text = str(exc).lower()
-        if "limit" in text and any(word in text for word in ("reset", "rate", "usage", "quota", "plan")):
+        if codex_unavailable(exc):
             raise UsageLimit(str(exc)[:500]) from exc
         raise
 
@@ -671,7 +688,9 @@ def _rules(set_id):
   "shotcrete"]) to race through steps that are not the point. Hooks, the rewind{' and failures' if fails else ''} are single.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
   {WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. 10-17 beats in total.
-- Word budget: {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{WORDS_PER_SECOND} words/s). Hook <= {HOOK_MAX_WORDS} words.
+- Word budget: aim for 155-180 words and count before returning. The hard allowed range is
+  {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{WORDS_PER_SECOND} words/s); do not draft at
+  the upper boundary. Hook <= {HOOK_MAX_WORDS} words.
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "50 tons", text like "of dirt": a REAL measurement only); "label" = a short badge naming a real
   part or idea, no numbers (e.g. "Planes turn by banking"). Use "none" on most beats,
@@ -681,7 +700,8 @@ def _rules(set_id):
 
 STORY_DIRECTIONS = {
     "slapstick": "Escalating physical comedy: every disaster bigger than the last, big reactions, the "
-                 "narrator gleefully counting the fails. Fast, punchy.",
+                 "narrator landing each visible mishap as a punchline. Use one physical running gag "
+                 "that pays off at the end; never count, score or number the failures. Fast, punchy.",
     "deadpan": "A dry, deadpan narrator who describes each catastrophe with total calm and perfect "
                "understatement. The calmer the voice, the bigger the disaster.",
     "sitcom": "A family sitcom: the kids waiting with towels and floaties as a running gag, Max's famous "
@@ -882,7 +902,9 @@ def develop(topic, facts):
     try:
         best, revised = _revise(topic, facts, script, problems, review, best)
     except UsageLimit as e:
-        log.warning(f"[showrunner] {e}; shipping the best draft without revision")
+        if not _ships(best[2], best[1]):
+            raise
+        log.warning(f"[showrunner] {e}; the best draft already passes, so revision is skipped")
     script, problems, review = best
     if problems:
         raise RuntimeError(f"no renderable script: {problems}")
@@ -900,35 +922,30 @@ def develop(topic, facts):
     return script, review
 
 
-WEAK_SCORE = 4                         # any score this low earns a re-graded second revision
-
-
 def _revise(topic, facts, script, problems, review, best):
-    """Apply the editor's notes. Normally once, without re-grading (that doubled the wait). If any
-    score is very weak (fun 3/10...), the fix is re-graded and revised once more, and the best
-    graded version ships. The hard checks guard every version."""
+    """Apply fresh editor notes and independently grade every revision.
+
+    Re-grading costs one small call, but prevents a repaired script from being rejected with its
+    predecessor's stale scores and gives the next revision precise, current feedback.
+    """
     revised = False
-    rounds = 2 if min(review["scores"].values()) <= WEAK_SCORE else MAX_REVISIONS
-    for round_ in range(rounds):
+    for round_ in range(MAX_REVISIONS):
         if _ships(review, problems):
             break
         fixed = write_script(topic, facts, previous=script, critique={
             "automatic_checks": problems, **review,
-            "also": "read it aloud as a voice actor: full, flowing, funny sentences with punchlines; polish rhythm"},
+            "also": ("Fix every score below 8, not only the automatic checks. Read it aloud as a "
+                     "voice actor: full, flowing, funny sentences with punchlines; polish rhythm. "
+                     "If narration is over budget, cut it decisively to 180 words or fewer instead "
+                     "of shaving only enough words to sit on the hard boundary.")},
             effort="high")
         fixed_problems = hard_checks(fixed, topic["set"])
-        if rounds > 1:                                 # weak draft: grade the fix so the next round has fresh notes
-            new_review = critique_script(fixed, topic, facts, fixed_problems)
-            log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(new_review['scores'])} | "
-                     f"hard problems: {fixed_problems or 0}")
-            if not fixed_problems and _rank(new_review, fixed_problems) > _rank(best[2], best[1]):
-                best, revised = (fixed, fixed_problems, new_review), True
-            script, problems, review = fixed, fixed_problems, new_review
-        else:
-            log.info(f"[showrunner] revision {round_ + 1}: editor notes applied | hard problems: {fixed_problems or 0}")
-            if not fixed_problems:
-                best, revised = (fixed, fixed_problems, review), True
-            script, problems = fixed, fixed_problems
+        new_review = critique_script(fixed, topic, facts, fixed_problems)
+        log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(new_review['scores'])} | "
+                 f"hard problems: {fixed_problems or 0}")
+        if _rank(new_review, fixed_problems) > _rank(best[2], best[1]):
+            best, revised = (fixed, fixed_problems, new_review), True
+        script, problems, review = fixed, fixed_problems, new_review
     return best, revised
 
 
@@ -969,7 +986,7 @@ def slug(text):
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48]
 
 
-def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None):
+def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on_topic=None):
     import time
     t0 = time.time()
     backend = active_backend()
@@ -989,6 +1006,8 @@ def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None):
         log.info(f"[showrunner] reusing the new-set trend brief: {topic['title']} | hook: {topic['hook_line']}")
     else:
         topic = pick_topic(set_ids=[set_id] if set_id else None, forced_angle=angle)
+    if on_topic:
+        on_topic(dict(topic))
     facts = research(topic)
     script, review = develop(topic, facts)
     log.info(f"[showrunner] script written in {(time.time() - t0) / 60:.1f} min")

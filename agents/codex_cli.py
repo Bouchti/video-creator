@@ -19,6 +19,27 @@ OPENAI_API_ENV = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_
 TOTAL_USAGE = {"calls": 0, "input_tokens": 0, "cached_input_tokens": 0,
                "output_tokens": 0, "reasoning_output_tokens": 0}
 log = logging.getLogger("pipeline")
+_PREFERRED_MODELS: dict[str, str] = {}
+
+
+def _capacity_error(exc: object) -> bool:
+    text = str(exc).lower()
+    return any(phrase in text for phrase in (
+        "model is at capacity", "model at capacity", "selected model is at capacity",
+        "server is overloaded", "service is overloaded", "try a different model",
+    ))
+
+
+def _unsupported_model_error(exc: object) -> bool:
+    text = str(exc).lower()
+    return "model" in text and any(phrase in text for phrase in (
+        "not found", "does not exist", "unsupported", "unknown model", "invalid model",
+    ))
+
+
+def _model_fallbacks(primary: str) -> list[str]:
+    raw = os.getenv("SHOWRUNNER_CODEX_FALLBACK_MODELS", "")
+    return [m for m in dict.fromkeys(x.strip() for x in raw.split(",")) if m and m != primary]
 
 
 def _effort(requested: str, cap_env: str = "SHOWRUNNER_CODEX_EFFORT_CAP") -> str:
@@ -50,12 +71,14 @@ def _usage(stdout: str) -> dict:
 def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web: bool = False,
         images: list[str] | None = None, cwd: str | None = None, sandbox: str = "read-only",
         model: str | None = None, timeout: int = 1800,
-        effort_cap_env: str = "SHOWRUNNER_CODEX_EFFORT_CAP") -> tuple[object, dict]:
+        effort_cap_env: str = "SHOWRUNNER_CODEX_EFFORT_CAP",
+        _allow_model_fallback: bool = True) -> tuple[object, dict]:
     """Run one ephemeral Codex turn and return ``(last_message, token_usage)``."""
     exe = shutil.which("codex")
     if not exe:
         raise RuntimeError("Codex CLI not found; install it and run `codex login`")
-    model = model or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
+    primary = model or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
+    model = _PREFERRED_MODELS.get(primary, primary)
     env = {k: v for k, v in os.environ.items() if k not in OPENAI_API_ENV}
     with tempfile.TemporaryDirectory(prefix="video_creator_codex_") as tmp:
         answer = os.path.join(tmp, "answer.txt")
@@ -66,6 +89,14 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
                 "--skip-git-repo-check", "--sandbox", sandbox, "--model", model,
                 "-c", f'model_reasoning_effort="{_effort(effort, effort_cap_env)}"', "--json",
                 "--output-last-message", answer]
+        if cwd:
+            # On Windows, subprocess.cwd alone does not reliably establish the writable sandbox
+            # root. Explicit -C keeps isolated coding-agent workspaces writable.
+            cmd += ["-C", os.path.abspath(cwd)]
+        if os.name == "nt" and sandbox != "read-only":
+            # The default (unelevated) Windows sandbox denies every write, even inside the workspace:
+            # patches are rejected and the agent ends with "the workspace is read-only".
+            cmd += ["-c", f'windows.sandbox="{os.getenv("CODEX_WINDOWS_SANDBOX", "elevated")}"']
         if schema is not None:
             schema_path = os.path.join(tmp, "schema.json")
             Path(schema_path).write_text(json.dumps(schema), encoding="utf-8")
@@ -84,7 +115,25 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
                      f"{int(usage.get('reasoning_output_tokens') or 0):,}")
         combined = (result.stderr or "") + "\n" + (result.stdout or "")
         if result.returncode:
-            raise RuntimeError(f"codex exec failed (exit {result.returncode}): {combined[-800:]}")
+            error = RuntimeError(f"codex exec failed (exit {result.returncode}): {combined[-800:]}")
+            if _allow_model_fallback and (_capacity_error(error) or _unsupported_model_error(error)):
+                last_error = error
+                for alternate in _model_fallbacks(primary):
+                    if alternate == model:
+                        continue
+                    log.warning("[codex] model %s unavailable; retrying this call with %s", model, alternate)
+                    try:
+                        value = run(prompt, schema=schema, effort=effort, web=web, images=images,
+                                    cwd=cwd, sandbox=sandbox, model=alternate, timeout=timeout,
+                                    effort_cap_env=effort_cap_env, _allow_model_fallback=False)
+                        _PREFERRED_MODELS[primary] = alternate
+                        return value
+                    except RuntimeError as alternate_error:
+                        last_error = alternate_error
+                        if not (_capacity_error(alternate_error) or _unsupported_model_error(alternate_error)):
+                            raise
+                raise last_error
+            raise error
         if not os.path.exists(answer):
             raise RuntimeError(f"codex exec returned no final answer: {combined[-800:]}")
         text = Path(answer).read_text(encoding="utf-8").strip()

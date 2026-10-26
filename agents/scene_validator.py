@@ -34,6 +34,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -195,8 +196,14 @@ Score 1-10:
 fatal_problems (only concrete, visually unambiguous failures, each with the visible evidence): the
 subject is not in frame or fully blocked; the frames show a different action than this beat; broken
 or exploded geometry; black / blank / magenta frames; a camera inside an object.
+Also fatal: a required action or explicit narration detail is visibly missing or wrong in the final
+part of its beat; a character or prop visibly floats, hovers, clips through, or is detached from the
+surface supporting it. Put those failures in fatal_problems, not merely problems.
 Do NOT call stylised low-poly trees, simple models, missing fine detail, motion blur, depth of field or
 a camera angle you would have chosen differently fatal. Line drawings in white/orange are intentional.
+Do not transfer a narrated comparison or external record onto an in-world display. For example, if
+the hero's object is on a scale while narration separately cites a world record, the scale should show
+the hero's result unless the action explicitly requires the record number.
 fix: one concrete instruction for the 3D set's code (camera position/aim, object placement, timing),
 empty if nothing to fix."""
 
@@ -281,7 +288,7 @@ def _review_cli(prompt, images, schema=REVIEW_SCHEMA):
 def _review_codex(prompt, images, schema=REVIEW_SCHEMA):
     """Review images through the logged-in Codex subscription."""
     from agents import codex_cli
-    from agents.showrunner import UsageLimit
+    from agents.showrunner import UsageLimit, codex_unavailable
 
     labels = "\n".join(f"Image {i + 1}: {label}" for i, (label, _) in enumerate(images))
     full = prompt + "\n\nAttached images, in order:\n" + labels
@@ -292,8 +299,7 @@ def _review_codex(prompt, images, schema=REVIEW_SCHEMA):
                                timeout=900, effort_cap_env="SCENE_REVIEW_CODEX_EFFORT_CAP")
         return out
     except RuntimeError as exc:
-        text = str(exc).lower()
-        if "limit" in text and any(x in text for x in ("reset", "rate", "usage", "quota", "plan")):
+        if codex_unavailable(exc):
             raise UsageLimit(str(exc)[:500]) from exc
         raise
 
@@ -351,15 +357,21 @@ def judge(values: dict, threshold: int = None) -> dict:
     threshold, or a quality floor (visual_match and readability at most 1 below, average at it)."""
     threshold = threshold or min_score()
     scores = {k: int(values.get(k, 0)) for k in SCORES}
+    problems = [str(x) for x in values.get("problems", []) if x]
     fatal = [str(x) for x in values.get("fatal_problems", []) if x]
+    # Fail closed on physically impossible contact even when a vision model files it as an
+    # ordinary note or assigns generous numeric scores.
+    impossible = [p for p in problems if re.search(
+        r"\b(float(?:s|ing|ed)?|hover(?:s|ing|ed)?|suspend(?:s|ing|ed)?|clips? through|detached)\b", p, re.I)]
+    fatal += [p for p in impossible if p not in fatal]
     avg = sum(scores.values()) / len(scores)
     strict = all(v >= threshold for v in scores.values())
-    floor = (scores["visual_match"] >= threshold - 1 and scores["readability"] >= threshold - 1
+    floor = (scores["visual_match"] >= threshold and scores["readability"] >= threshold - 1
              and scores["image_quality"] >= threshold and avg >= threshold)
     valid = not fatal and (strict or floor)
     return {"valid": valid, "acceptance": "strict" if strict and valid else "quality-floor" if valid else "rejected",
             "average_score": round(avg, 2), "threshold": threshold, **scores, "fatal_problems": fatal,
-            "problems": [str(x) for x in values.get("problems", []) if x], "fix": str(values.get("fix") or "")}
+            "problems": problems, "fix": str(values.get("fix") or "")}
 
 
 def review_images(w: dict, images: list, subject: str, previous: str = None) -> dict:

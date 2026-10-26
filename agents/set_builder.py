@@ -46,6 +46,10 @@ BUILD_MODEL = os.getenv("SET_BUILDER_MODEL") or "opus"
 CODEX_BUILD_MODEL = os.getenv("SET_BUILDER_CODEX_MODEL") or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
 
 
+class RepairNotApplied(RuntimeError):
+    """The coding agent returned, but none of the permitted source files changed."""
+
+
 # ------------------- subscription coding agent, isolated from the real worktree -------------------
 
 
@@ -56,7 +60,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
     edits made in the real repository while a long set-building turn was still running.
     """
     from agents.showrunner import (UsageLimit, _API_ENV, _capped_effort, _record_claude_usage,
-                                   activate_fallback, active_backend)
+                                   activate_fallback, active_backend, codex_unavailable)
     backend = active_backend()
 
     rules = ("\n\nYou may create or edit ONLY these files: " + ", ".join(allowed) +
@@ -88,8 +92,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                                        sandbox="workspace-write", model=CODEX_BUILD_MODEL, timeout=timeout,
                                        effort_cap_env="SET_BUILDER_CODEX_EFFORT_CAP")
             except RuntimeError as exc:
-                text = str(exc).lower()
-                if "limit" in text and any(word in text for word in ("reset", "rate", "usage", "quota", "plan")):
+                if codex_unavailable(exc):
                     limit = UsageLimit(str(exc)[:500])
                     if activate_fallback(str(limit)[:180]):
                         backend = active_backend()
@@ -128,7 +131,8 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 raise RuntimeError(f"unsafe allowed path: {relative}")
             src = os.path.join(workspace, relative)
             if not os.path.isfile(src):
-                raise RuntimeError(f"coding agent did not produce required file: {relative}")
+                raise RuntimeError(f"coding agent did not produce required file: {relative} "
+                                   f"(agent said: {str(out).strip()[-300:]})")
             dst = os.path.join(PROJECT_ROOT, relative)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
@@ -297,9 +301,12 @@ itself is wrong. Finish with one line per problem saying what you changed."""
 
 def fix_code(set_id: str, error: str, allowed=None):
     """Blender crashed with a Python traceback inside the set: Claude fixes the code."""
+    allowed = allowed or [f"engine/sets/{set_id}.py"]
+    before = _content_hashes(allowed)
     out = claude_agent(fix_prompt(set_id, f"Blender crashed while building or rendering the set:\n{error[-6000:]}",
                                   "The render failed with a Python error. Find the cause and fix it."),
-                       allowed or [f"engine/sets/{set_id}.py"])
+                       allowed)
+    _require_changed(allowed, before, out)
     log.info(f"[set_builder] code fix applied:\n{out[-1200:]}")
     return out
 
@@ -314,11 +321,33 @@ def fix_scenes(set_id: str, rejected: list, allowed=None):
                      f"'{r.get('action')}' (method a_{str(r.get('action')).split('+')[0]}): "
                      f"fatal: {r.get('fatal_problems')}; problems: {r.get('problems')}; reviewer's fix: "
                      f"{r.get('fix')}; frames: {imgs}")
+    allowed = allowed or [f"engine/sets/{set_id}.py"]
+    before = _content_hashes(allowed)
     out = claude_agent(fix_prompt(set_id, "\n".join(lines),
                                   "The scene reviewer REJECTED these rendered windows of a 3D film."),
-                       allowed or [f"engine/sets/{set_id}.py"])
+                       allowed)
+    _require_changed(allowed, before, out)
     log.info(f"[set_builder] fix applied:\n{out[-1500:]}")
     return out
+
+
+def _content_hashes(relative_paths):
+    values = {}
+    for relative in relative_paths:
+        path = os.path.join(PROJECT_ROOT, relative)
+        try:
+            with open(path, "rb") as fh:
+                values[relative] = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            values[relative] = None
+    return values
+
+
+def _require_changed(relative_paths, before, agent_output):
+    if _content_hashes(relative_paths) == before:
+        detail = str(agent_output).strip().replace("\n", " ")[-500:]
+        raise RepairNotApplied("AI repair made no source changes; refusing to rerender identical scenes"
+                               + (f": {detail}" if detail else ""))
 
 
 # ------------------- checks, preview render, review -------------------

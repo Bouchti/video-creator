@@ -50,9 +50,13 @@ class JudgeTests(unittest.TestCase):
         self.assertTrue(sv.judge(good, 6)["valid"])
         self.assertFalse(sv.judge({**good, "fatal_problems": ["subject not in frame"]}, 6)["valid"])
         self.assertFalse(sv.judge({**good, "readability": 3}, 6)["valid"])
-        floor = sv.judge({**good, "visual_match": 5}, 6)          # one point under, strong average
+        floor = sv.judge({**good, "readability": 5}, 6)           # minor readability dip, strong average
         self.assertTrue(floor["valid"])
         self.assertEqual(floor["acceptance"], "quality-floor")
+        self.assertFalse(sv.judge({**good, "visual_match": 5}, 6)["valid"])
+        floating = sv.judge({**good, "problems": ["Both children hover above the pumpkin."]}, 6)
+        self.assertFalse(floating["valid"])
+        self.assertTrue(floating["fatal_problems"])
 
 
 class TechnicalTests(unittest.TestCase):

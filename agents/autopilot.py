@@ -99,9 +99,20 @@ class Run:
 # ------------------- helpers -------------------
 
 def _wait_for_claude(exc, run, stage):
-    """Subscription limit: sleep until the announced reset (or an hour)."""
+    """Wait only for a known, near-term subscription reset; never sleep on a guess."""
     reset = getattr(exc, "reset", None)
-    wait = (reset - datetime.datetime.now()).total_seconds() + 90 if reset else 3600
+    if reset is None:
+        run.event(stage, "all configured AI backends are unavailable; stopped safely",
+                  detail="no reset time was supplied; resume later")
+        raise GiveUp("Codex models and the Claude fallback are currently unavailable; no reset time "
+                     "was supplied, so the run was stopped instead of sleeping blindly. Resume it later.") from exc
+    wait = (reset - datetime.datetime.now()).total_seconds() + 90
+    max_wait = float(os.getenv("SHOWRUNNER_MAX_WAIT", "65")) * 60
+    if wait > max_wait:
+        run.event(stage, "AI reset is beyond the automatic wait limit; stopped safely",
+                  detail=f"reset in {wait / 60:.0f} min; limit {max_wait / 60:.0f} min")
+        raise GiveUp(f"AI subscriptions reset in {wait / 60:.0f} minutes, beyond the configured "
+                     f"{max_wait / 60:.0f}-minute wait limit. Resume the run after the reset.") from exc
     run.event(stage, "AI subscription usage limit reached; waiting for the reset", detail=f"{wait / 60:.0f} min")
     time.sleep(max(60, wait))
 
@@ -181,10 +192,17 @@ def stage_script(run, source, angle, set_id):
                 path = write(angle=use_angle, set_id=set_id, render=False)
             else:
                 from agents.showrunner import NoUnusedStorySets, plan_new_story_set, run as write
+                topic_hint = run["script_topic"]
+                selected_set = set_id or ((topic_hint or {}).get("set"))
+
+                def remember_topic(topic):
+                    run.set(script_topic=topic)
+
                 try:
-                    path = write(angle=use_angle, render=False, set_id=set_id)
+                    path = write(angle=use_angle, render=False, set_id=selected_set,
+                                 topic_hint=topic_hint, on_topic=remember_topic)
                 except NoUnusedStorySets as exc:
-                    if set_id or not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True):
+                    if selected_set or not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True):
                         raise GiveUp(str(exc)) from exc
                     plan = run["new_set_plan"]
                     if not plan:
@@ -202,7 +220,8 @@ def stage_script(run, source, angle, set_id):
                     set_id = plan["set_id"]
                     run.set(generated_set=set_id, set=set_id, set_build=status)
                     run.event("set", "new Max set accepted and registered", detail=set_id)
-                    path = write(angle=use_angle, render=False, set_id=set_id, topic_hint=plan)
+                    path = write(angle=use_angle, render=False, set_id=set_id, topic_hint=plan,
+                                 on_topic=remember_topic)
             run.set(film=path)
             run.event("script", "script written", detail=os.path.basename(path))
             return path
@@ -229,7 +248,7 @@ def _voice_error(exc):
 def stage_render(run, film_json):
     """make_film with scene validation + auto-fix; every failure is classified, repaired, resumed."""
     from agents import scene_validator as sv
-    from agents.set_builder import fix_code
+    from agents.set_builder import RepairNotApplied, fix_code
     from engine.make_film import BlenderFailed, produce
 
     film = json.load(open(film_json, encoding="utf-8"))
@@ -267,6 +286,8 @@ def stage_render(run, film_json):
                           detail=exc.log[exc.log.rfind("Traceback"):][:300])
                 try:
                     fix_code(set_id, exc.log)
+                except RepairNotApplied:
+                    raise
                 except Exception as fx:                   # noqa: BLE001
                     if _is_usage_limit(fx):
                         _wait_for_claude(fx, run, "render")
@@ -278,6 +299,9 @@ def stage_render(run, film_json):
                 time.sleep(30)
         except GiveUp:
             raise
+        except RepairNotApplied as exc:
+            raise GiveUp(f"automatic scene repair could not edit the set; stopped before wasting another render: "
+                         f"{exc}") from exc
         except Exception as exc:                          # noqa: BLE001
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "render")
@@ -366,6 +390,10 @@ def _cleanup_successful_work(film_json):
 
 def run(source="evolution", angle=None, set_id=None, resume_path=None):
     r = Run(resume_path, source=source, angle=angle, set=set_id)
+    if resume_path:
+        # A manual resume is a fresh repair session. Source may have been corrected between runs;
+        # make that current version the new rollback baseline and renew the bounded attempt budget.
+        r.set(status="running", error=None, render_attempts=0, first_backup=None)
     source, angle, set_id = r["source"] or source, r["angle"], r["set"]
     t0 = time.time()
     try:

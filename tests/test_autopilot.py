@@ -94,6 +94,12 @@ class RenderRepairTests(_Env):
 
 
 class ScriptAndCheckTests(_Env):
+    def test_unknown_ai_reset_stops_instead_of_sleeping_for_an_hour(self):
+        from agents.showrunner import UsageLimit
+        with self.assertRaisesRegex(ap.GiveUp, "sleeping blindly"):
+            ap._wait_for_claude(UsageLimit("both subscriptions unavailable"), self.run, "script")
+        self.assertIn("stopped safely", self.run["events"][-1]["what"])
+
     def test_script_retries_then_succeeds(self):
         tries = []
 
@@ -130,7 +136,7 @@ class ScriptAndCheckTests(_Env):
         from agents.showrunner import NoUnusedStorySets
         calls = []
 
-        def write(angle=None, render=True, set_id=None):
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
             calls.append((angle, set_id))
             raise NoUnusedStorySets("already consumed")
 
@@ -145,7 +151,7 @@ class ScriptAndCheckTests(_Env):
         plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story",
                 "build_brief": "A cutaway home and ground loop."}
 
-        def write(angle=None, render=True, set_id=None, topic_hint=None):
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
             calls.append(set_id)
             if set_id is None:
                 raise NoUnusedStorySets("all consumed")
@@ -161,11 +167,44 @@ class ScriptAndCheckTests(_Env):
         build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4)
         self.assertEqual(self.run["generated_set"], "heat_pump_story")
 
+    def test_cutaway_retry_reuses_the_selected_topic(self):
+        chosen = {"set": "record_chasing_giant_pumpkin_story", "title": "Pumpkin",
+                  "angle": "split", "hook_line": "It split.", "hook_action": "split_hook",
+                  "payoff": "fixed", "trend_signal": "current", "trend_source_url": "https://example.test"}
+        hints = []
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            hints.append(topic_hint)
+            if len(hints) == 1:
+                on_topic(chosen)
+                raise RuntimeError("editor rejected first draft")
+            return self.film
+
+        with patch("agents.showrunner.run", write):
+            path = ap.stage_script(self.run, "cutaway", None, "record_chasing_giant_pumpkin_story")
+        self.assertEqual(path, self.film)
+        self.assertIsNone(hints[0])
+        self.assertEqual(hints[1], chosen)
+        self.assertEqual(self.run["script_topic"], chosen)
+
     def test_run_record_is_resumable(self):
         self.run.set(film=self.film, render_attempts=2)
         again = ap.Run(self.run.path)
         self.assertEqual(again["film"], self.film)
         self.assertEqual(ap.stage_script(again, "evolution", None, None), self.film)
+
+    def test_explicit_resume_renews_attempts_and_backup_baseline(self):
+        self.run.set(film=self.film, video=self.video, render_attempts=6,
+                     first_backup=os.path.join(self.tmp, "old_backup.py"))
+        with patch.object(ap, "stage_script", return_value=self.film), \
+                patch.object(ap, "stage_render", return_value=(self.video, False)), \
+                patch.object(ap, "stage_check", return_value=self.video), \
+                patch.object(ap, "write_notes", return_value=self.video + ".txt"), \
+                patch.object(ap, "_cleanup_successful_work"):
+            ap.run(resume_path=self.run.path)
+        again = ap.Run(self.run.path)
+        self.assertEqual(again["render_attempts"], 0)
+        self.assertIsNone(again["first_backup"])
 
     def test_success_cleanup_removes_only_reproducible_frame_caches(self):
         work = os.path.join(self.tmp, "f_work")

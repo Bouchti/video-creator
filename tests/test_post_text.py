@@ -19,6 +19,8 @@ class PostTextTests(unittest.TestCase):
             text = open(out, encoding="utf-8").read()
         self.assertIn("===== TIKTOK =====", text)
         self.assertIn("===== YOUTUBE SHORTS =====", text)
+        self.assertIn("===== INSTAGRAM REELS =====", text)
+        self.assertIn("Alt text:", text)
         self.assertIn("Would you ride it?", text)
         self.assertIn("#boats", text)
         self.assertNotRegex(text.lower(), r"\b(subscribe|like and)\b")

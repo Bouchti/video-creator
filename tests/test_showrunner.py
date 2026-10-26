@@ -114,6 +114,31 @@ class TopicSelectionTests(unittest.TestCase):
             self.assertEqual(showrunner.research(topic), facts)
 
 
+class RevisionTests(unittest.TestCase):
+    def test_revision_is_regraded_and_can_pass_with_fresh_scores(self):
+        low = {"scores": {name: 7 for name in
+                           ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy",
+                            "pacing", "visual_sync", "learn")},
+               "problems": ["needs work"], "line_edits": [], "verdict": "revise"}
+        high = {"scores": {name: 8 for name in low["scores"]},
+                "problems": [], "line_edits": [], "verdict": "ship"}
+        original = {"title": "old", "beats": []}
+        fixed = {"title": "new", "beats": []}
+        topic = {"set": "pool", "title": "t", "angle": "a", "hook_line": "h",
+                 "hook_action": "float_hook", "payoff": "p"}
+        with patch.object(showrunner, "MAX_REVISIONS", 2), \
+                patch.object(showrunner, "write_script", return_value=fixed), \
+                patch.object(showrunner, "hard_checks", return_value=[]), \
+                patch.object(showrunner, "critique_script", return_value=high) as grade:
+            best, revised = showrunner._revise(topic, "facts", original, [], low,
+                                                (original, [], low))
+        self.assertTrue(revised)
+        self.assertIs(best[0], fixed)
+        self.assertIs(best[2], high)
+        self.assertTrue(showrunner._ships(best[2], best[1]))
+        grade.assert_called_once_with(fixed, topic, "facts", [])
+
+
 class ToFilmTests(unittest.TestCase):
     def test_roles_and_overlays(self):
         script = {"title": "T", "caption": "c", "hashtags": ["#a"], "beats": _beats(GOOD, words=11)}

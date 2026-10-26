@@ -34,6 +34,62 @@ class CodexCliTests(unittest.TestCase):
         self.assertIn("--ignore-user-config", seen["cmd"])
         self.assertIn('model_reasoning_effort="medium"', seen["cmd"])
 
+    def test_capacity_retries_an_alternate_codex_model_and_remembers_it(self):
+        attempted = []
+
+        def fake_run(cmd, **kwargs):
+            model = cmd[cmd.index("--model") + 1]
+            attempted.append(model)
+            if model == "gpt-5.6-sol":
+                stdout = json.dumps({"type": "error", "message":
+                                     "Selected model is at capacity. Please try a different model."})
+                return subprocess.CompletedProcess(cmd, 1, stdout, "")
+            answer = cmd[cmd.index("--output-last-message") + 1]
+            with open(answer, "w", encoding="utf-8") as fh:
+                fh.write("done")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch.object(codex_cli.shutil, "which", return_value="codex"), \
+                patch.object(codex_cli.subprocess, "run", side_effect=fake_run), \
+                patch.object(codex_cli, "_PREFERRED_MODELS", {}), \
+                patch.dict(os.environ, {"SHOWRUNNER_CODEX_FALLBACK_MODELS": "gpt-6.1-sol"}):
+            self.assertEqual(codex_cli.run("test", model="gpt-5.6-sol")[0], "done")
+            self.assertEqual(codex_cli.run("again", model="gpt-5.6-sol")[0], "done")
+        self.assertEqual(attempted, ["gpt-5.6-sol", "gpt-6.1-sol", "gpt-6.1-sol"])
+
+    def test_explicit_cwd_is_sent_to_codex_as_the_sandbox_root(self):
+        seen = {}
+        root = tempfile.mkdtemp()
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            answer = cmd[cmd.index("--output-last-message") + 1]
+            with open(answer, "w", encoding="utf-8") as fh:
+                fh.write("done")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch.object(codex_cli.shutil, "which", return_value="codex"), \
+                patch.object(codex_cli.subprocess, "run", side_effect=fake_run):
+            codex_cli.run("test", cwd=root)
+        self.assertEqual(seen["cmd"][seen["cmd"].index("-C") + 1], os.path.abspath(root))
+
+    def test_writable_sandbox_uses_the_elevated_windows_sandbox(self):
+        seen = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(cmd)
+            with open(cmd[cmd.index("--output-last-message") + 1], "w", encoding="utf-8") as fh:
+                fh.write("done")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch.object(codex_cli.shutil, "which", return_value="codex"), \
+                patch.object(codex_cli.subprocess, "run", side_effect=fake_run), \
+                patch.object(codex_cli.os, "name", "nt"):
+            codex_cli.run("write", cwd=tempfile.mkdtemp(), sandbox="workspace-write")
+            codex_cli.run("read")
+        self.assertIn('windows.sandbox="elevated"', seen[0])
+        self.assertFalse(any("windows.sandbox" in a for a in seen[1]))
+
     def test_showrunner_dispatches_to_codex(self):
         with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
                 patch.object(showrunner, "_call_codex", return_value={"x": 1}) as call:
@@ -50,6 +106,16 @@ class CodexCliTests(unittest.TestCase):
             self.assertEqual(showrunner._call_once("s2", "p2"), {"ok": True})
         self.assertEqual(codex.call_count, 1)
         self.assertEqual(claude.call_count, 2)
+
+    def test_model_capacity_switches_immediately_to_claude_subscription(self):
+        capacity = RuntimeError("Selected model is at capacity. Please try a different model.")
+        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
+                patch.object(codex_cli, "run", side_effect=capacity), \
+                patch.object(showrunner, "_call_cli", return_value={"ok": True}) as claude:
+            self.assertEqual(showrunner._call("s", "p", {"type": "object"}), {"ok": True})
+            self.assertEqual(showrunner.active_backend(), "subscription")
+        claude.assert_called_once()
 
 
 class CodexVisionTests(unittest.TestCase):
@@ -128,6 +194,19 @@ class IsolatedBuilderTests(unittest.TestCase):
             set_builder.claude_agent("work", ["engine/sets/new.py"])
         self.assertEqual(open(allowed, encoding="utf-8").read(), "new")
         self.assertEqual(open(readme, encoding="utf-8").read(), "keep")
+
+    def test_unchanged_repair_is_rejected_before_an_identical_rerender(self):
+        root = tempfile.mkdtemp()
+        relative = os.path.join("engine", "sets", "unchanged.py")
+        path = os.path.join(root, relative)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("original")
+        with patch.object(set_builder, "PROJECT_ROOT", root), \
+                patch.object(set_builder, "claude_agent", return_value="No files were changed"):
+            with self.assertRaises(set_builder.RepairNotApplied):
+                set_builder.fix_scenes("unchanged", [{"window": 1, "action": "finale"}],
+                                       allowed=[relative])
 
 
 if __name__ == "__main__":

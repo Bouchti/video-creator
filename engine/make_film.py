@@ -111,6 +111,38 @@ def _ranges(frames):
     return out
 
 
+def _restore_redo_frames(video, frames_dir, total_frames, targets):
+    """Recover cleaned frame caches from the retained intermediate video.
+
+    Successful autopilot runs normally delete their large PNG caches. A later
+    ``--redo`` still should not require a full Blender render: ``work/video.mp4``
+    contains every previously accepted frame (with its existing stickers). Extract
+    that video to a temporary directory and restore only non-target frames; Blender
+    will replace the target ranges with fresh, clean renders below.
+    """
+    targets = set(targets)
+    missing = [f for f in range(1, total_frames + 1)
+               if f not in targets and not os.path.exists(os.path.join(frames_dir, f"f_{f:04d}.png"))]
+    if not missing or not os.path.exists(video):
+        return 0
+
+    os.makedirs(frames_dir, exist_ok=True)
+    work = os.path.dirname(frames_dir)
+    with tempfile.TemporaryDirectory(prefix="redo_restore_", dir=work) as restored_dir:
+        pattern = os.path.join(restored_dir, "f_%04d.png")
+        subprocess.run([FFMPEG, "-v", "error", "-i", video, "-map", "0:v:0", "-an", "-sn", "-dn",
+                        "-fps_mode", "passthrough", "-start_number", "1", pattern], check=True)
+        restored = 0
+        for f in missing:
+            src = os.path.join(restored_dir, f"f_{f:04d}.png")
+            if os.path.exists(src):
+                shutil.move(src, os.path.join(frames_dir, f"f_{f:04d}.png"))
+                restored += 1
+    if restored:
+        log.info(f"Redo: restored {restored} unaffected frames from the retained video cache")
+    return restored
+
+
 class BlenderFailed(RuntimeError):
     """Blender exited without finishing; .log holds its output (a Python traceback when the set's
     code is at fault, nothing useful when the process itself died: GPU, memory, killed)."""
@@ -122,6 +154,65 @@ class BlenderFailed(RuntimeError):
     @property
     def is_code_error(self):
         return "Traceback (most recent call last)" in self.log
+
+
+def _code_hash(film):
+    """Fingerprint of everything that decides how a film's frames look (engine + its set)."""
+    import hashlib
+    h = hashlib.sha1()
+    eng = os.path.join(PROJECT_ROOT, "engine")
+    for root, _dirs, files in os.walk(eng):
+        for fn in sorted(files):
+            if fn.endswith(".py"):
+                with open(os.path.join(root, fn), "rb") as fh:
+                    h.update(fn.encode() + fh.read())
+    return h.hexdigest()[:16]
+
+
+def _frame_codes(work):
+    try:
+        return json.load(open(os.path.join(work, "frame_code.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_frame_codes(work, codes):
+    with open(os.path.join(work, "frame_code.json"), "w", encoding="utf-8") as fh:
+        json.dump(codes, fh)
+
+
+def _stale_beats(cmd, film, beats, spans, work, keep, code):
+    """Kept frames rendered with OTHER code: does the current code still produce them? Render a quick
+    low-res sample per affected beat and compare it with the kept frame; beats that changed are
+    returned (so a fix in shared code, e.g. where the kids sit, reaches every scene it touches)."""
+    codes = _frame_codes(work)
+    suspect = {}
+    for k, sp in enumerate(spans):
+        frames = [f for f in range(sp["start"] + 1, sp["end"] + 2) if f in keep and codes.get(str(f)) != code]
+        if frames and _beat_ids(beats)[k] != "rewind":
+            suspect[k] = frames
+    if not suspect:
+        return []
+    probe = {k: fr[len(fr) // 2] for k, fr in suspect.items()}
+    tmp = tempfile.mkdtemp(prefix="stale_", dir=work)
+    env = dict(os.environ, CUT_PCT="25", CUT_SAMPLES="8")
+    subprocess.run(cmd + [f"--frames={','.join(str(f) for f in probe.values())}"], env=env, capture_output=True,
+                   text=True)
+    changed = []
+    for k, f in probe.items():
+        new_p = os.path.join(tmp, f"still_{f:04d}.png")
+        old_p = os.path.join(work, "frames", f"f_{f:04d}.png")
+        if not (os.path.exists(new_p) and os.path.exists(old_p)):
+            changed.append(k)
+            continue
+        a = np.asarray(Image.open(new_p).convert("L"), dtype=np.float32)
+        b = np.asarray(Image.open(old_p).convert("L").resize((a.shape[1], a.shape[0])), dtype=np.float32)
+        y0 = int(a.shape[0] * 0.24)                              # below the sticker band
+        diff = np.abs(a[y0:] - b[y0:])
+        if (diff > 40).mean() > 0.015:                           # >1.5% of the picture really moved
+            changed.append(k)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return changed
 
 
 def _run_blender(cmd, watcher=None):
@@ -331,11 +422,17 @@ def produce(args):
     """Voice → timings → Blender render → post. `args.film` is a film name in engine/films/ or a
     path to a film JSON (e.g. a script written by agents/showrunner.py). Returns the final mp4."""
     films = os.path.join(PROJECT_ROOT, "engine", "films")
-    if args.film.endswith(".json") and os.path.exists(args.film):
-        film_json = os.path.abspath(args.film)
+    # Automatic scene repair recursively calls produce(). Preserve the original absolute JSON
+    # path because generated films live in output/films, while args.film is shortened below only
+    # to derive stable work and output names.
+    film_source = getattr(args, "_film_json", args.film)
+    if film_source.endswith(".json") and os.path.exists(film_source):
+        film_json = os.path.abspath(film_source)
+        args._film_json = film_json
         args.film = os.path.splitext(os.path.basename(film_json))[0]
     else:
-        film_json = os.path.join(films, f"{args.film}.json")
+        film_json = os.path.join(films, f"{film_source}.json")
+        args._film_json = film_json
     film = json.load(open(film_json, encoding="utf-8"))
     # Data-driven films (a 3D set + one action per beat) all render through a generic runner:
     # "evolution" films (no hook/rewind, e.g. bridge_evolution) through evolution_film.py.
@@ -396,6 +493,20 @@ def produce(args):
         spec = _sets.spec(film["set"])
     if redo:                                           # only the requested scenes are re-rendered
         targets = _parse_redo(redo, film, beats, spans)
+        frames_dir = os.path.join(work, "frames")
+        restored = _restore_redo_frames(video, frames_dir, total_frames, targets)
+        code = _code_hash(film)
+        if os.getenv("REDO_KEEP_STALE") != "1":
+            probe_cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json,
+                         timings_path, work]
+            keep = set(range(1, total_frames + 1)) - set(targets)
+            stale = _stale_beats(probe_cmd, film, beats, spans, work, keep, code)
+            if stale:
+                names = [beats[k].get("id") or beats[k].get("action") for k in stale]
+                log.warning(f"Redo: the code changed since these scenes were rendered and they now look different: "
+                            f"{', '.join(names)} -> re-rendering them too")
+                for k in stale:
+                    targets = sorted(set(targets) | set(range(spans[k]["start"] + 1, spans[k]["end"] + 2)))
         ids = _beat_ids(beats)
         hook = spans[ids.index("hook")] if "hook" in ids else None
         rew = spans[ids.index("rewind")] if "rewind" in ids else None
@@ -403,13 +514,14 @@ def produce(args):
         build = [f for f in targets if not (hook and hook["start"] + 1 <= f <= hook["end"] + 1)
                  and not (rew and rew["start"] + 1 <= f <= rew["end"] + 1)]   # the rewind is rebuilt from the build
         for f in targets:
-            p = os.path.join(work, "frames", f"f_{f:04d}.png")
+            p = os.path.join(frames_dir, f"f_{f:04d}.png")
             if os.path.exists(p):
                 os.remove(p)
         rr = _ranges(build)
         log.info(f"Redo: {len(targets)} frames ({len(targets) / FPS:.1f}s) in {len(rr)} range(s)"
                  + (" + hook" if in_hook else "") + f"; keeping the other {total_frames - len(targets)} frames")
-        baked_frames = None if os.path.exists(os.path.join(work, "frames", ".clean")) else set(targets)
+        baked_frames = None if (os.path.exists(os.path.join(work, "frames", ".clean")) and not restored) \
+            else set(targets)                         # restored frames already carry their stickers
         if rr or in_hook:                              # (a rewind-only redo needs no Blender run)
             cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json, timings_path,
                    work]
@@ -461,6 +573,14 @@ def produce(args):
     if args.preview or args.frames:
         log.info(f"Stills in {work}")
         return
+    codes = {} if not (redo or resume) else _frame_codes(work)
+    fresh = targets if redo else range(1, total_frames + 1)
+    if resume and not redo:
+        fresh = [f for f in range(1, total_frames + 1) if str(f) not in codes]
+    code_now = _code_hash(film)
+    for f in fresh:
+        codes[str(f)] = code_now
+    _save_frame_codes(work, codes)
     _rewind_montage(film, beats, spans, os.path.join(work, "frames"))
     frames = sorted(glob.glob(os.path.join(work, "frames", "f_*.png")))
     log.info(f"Rendered {len(frames)} frames")

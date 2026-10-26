@@ -24,7 +24,7 @@ from engine import events, textures as tx, toy
 from engine.backyard import _appear, _key
 from engine.camera import CameraRig, facing_to
 from engine.character import Character
-from engine.cutaway import _bold_font, _grass_tuft
+from engine.cutaway import _bold_font, _grass_tuft, key_node_value
 from engine.machines import Puffs, Spray, nozzle
 from engine.sets.plane_story import arrow, label
 from engine.sets.record_chasing_giant_pumpkin_story_spec import ACTIONS, beat_actions
@@ -41,7 +41,7 @@ STEM_BOT = V((0.02, 0.0, 0.08))      # ... down to the vine
 RING_Z = 0.95                        # lifting ring height (pumpkin-root local)
 SOIL_BASE = -0.04                    # pumpkin pressed into the bed
 SAND_TOP = 0.08
-TOP_Z, SUB_Z = -0.5, -6.0            # topsoil bottom, subsoil bottom
+TOP_Z, SUB_Z = -0.5, -40.0           # topsoil bottom, subsoil bottom (deep: low cameras never see past it)
 FACE = -0.025                        # section decals: just in front of the cut face (y = 0)
 CROWN = V((-3.0, 0.35, 0.0))         # where the seed goes in: the main stem and its root ball
 JOINTS_X = (-2.6, -2.15, -1.7)       # leaf joints along the front run of the vine (above the cut)
@@ -160,6 +160,95 @@ def surface(phi, t, grow=1.0):
                      zz * grow))
 
 
+def rot_skin_material(base, center, name="pk_skin_rot"):
+    """The pumpkin skin with rot that spreads from `center` (pumpkin-root local): a sunken, soft
+    brown-black core, an olive bruise rim, white-grey mould specks and a wet sheen. Its size is the
+    keyable Value node 'rot_radius' (0 = healthy). Lives IN the skin: no decals, no hard edges."""
+    mat = base.copy()
+    mat.name = name
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    base_col = bsdf.inputs["Base Color"].links[0].from_socket if bsdf.inputs["Base Color"].is_linked else None
+    base_nrm = bsdf.inputs["Normal"].links[0].from_socket if bsdf.inputs["Normal"].is_linked else None
+    L = nt.links.new
+
+    def node(kind, **inp):
+        n = nt.nodes.new(kind)
+        for k, v in inp.items():
+            n.inputs[k.replace("_", " ")].default_value = v
+        return n
+
+    def math_(op, a, b=0.0, clamp=False):
+        n = nt.nodes.new("ShaderNodeMath")
+        n.operation, n.use_clamp = op, clamp
+        for sock, v in zip(n.inputs, (a, b)):
+            if isinstance(v, bpy.types.NodeSocket):
+                L(v, sock)
+            else:
+                sock.default_value = v
+        return n.outputs[0]
+
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    dist = nt.nodes.new("ShaderNodeVectorMath")
+    dist.operation = "DISTANCE"
+    L(tc.outputs["Object"], dist.inputs[0])
+    dist.inputs[1].default_value = center
+    wobble = node("ShaderNodeTexNoise", Scale=4.0, Detail=6.0, Roughness=0.6)
+    L(tc.outputs["Object"], wobble.inputs["Vector"])
+    d = math_("ADD", dist.outputs["Value"], math_("MULTIPLY", math_("SUBTRACT", wobble.outputs["Fac"], 0.5), 0.22))
+    radius = nt.nodes.new("ShaderNodeValue")
+    radius.name = "rot_radius"
+    radius.outputs[0].default_value = 0.0
+    # t = 1 at the centre .. 0 at the edge;  rim band just outside the edge
+    t = math_("DIVIDE", math_("SUBTRACT", radius.outputs[0], d), math_("MAXIMUM", radius.outputs[0], 0.001), clamp=True)
+    rim = math_("SUBTRACT", math_("DIVIDE", math_("SUBTRACT", math_("ADD", radius.outputs[0], 0.09), d), 0.09, clamp=True),
+                math_("GREATER_THAN", t, 0.0))
+    rim = math_("MULTIPLY", math_("MAXIMUM", rim, 0.0), math_("GREATER_THAN", radius.outputs[0], 0.01))
+    core = math_("POWER", t, 0.6)
+    # colours
+    rotcol = nt.nodes.new("ShaderNodeValToRGB")
+    rotcol.color_ramp.elements[0].color = (*toy.srgb("#2A1C10"), 1)
+    rotcol.color_ramp.elements[1].color = (*toy.srgb("#5A4422"), 1)
+    mottle = node("ShaderNodeTexNoise", Scale=18.0, Detail=8.0)
+    L(tc.outputs["Object"], mottle.inputs["Vector"])
+    L(mottle.outputs["Fac"], rotcol.inputs["Fac"])
+    specks = node("ShaderNodeTexVoronoi", Scale=55.0)
+    L(tc.outputs["Object"], specks.inputs["Vector"])
+    mould = math_("MULTIPLY", math_("LESS_THAN", specks.outputs["Distance"], 0.16), math_("GREATER_THAN", t, 0.25))
+    mix1 = nt.nodes.new("ShaderNodeMix")
+    mix1.data_type = "RGBA"
+    L(rim, mix1.inputs["Factor"])
+    if base_col is not None:
+        L(base_col, mix1.inputs["A"])
+    else:
+        mix1.inputs["A"].default_value = bsdf.inputs["Base Color"].default_value
+    mix1.inputs["B"].default_value = (*toy.srgb("#8C7A2C"), 1)                 # olive bruise rim
+    mix2 = nt.nodes.new("ShaderNodeMix")
+    mix2.data_type = "RGBA"
+    L(core, mix2.inputs["Factor"])
+    L(mix1.outputs["Result"], mix2.inputs["A"])
+    L(rotcol.outputs["Color"], mix2.inputs["B"])
+    mix3 = nt.nodes.new("ShaderNodeMix")
+    mix3.data_type = "RGBA"
+    L(mould, mix3.inputs["Factor"])
+    L(mix2.outputs["Result"], mix3.inputs["A"])
+    mix3.inputs["B"].default_value = (*toy.srgb("#E4E1D2"), 1)                 # mould specks
+    L(mix3.outputs["Result"], bsdf.inputs["Base Color"])
+    # wet sheen in the core, sunken bumpy surface
+    rough = math_("SUBTRACT", 0.45, math_("MULTIPLY", core, 0.25))
+    L(rough, bsdf.inputs["Roughness"])
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.6
+    bump.inputs["Distance"].default_value = 0.03
+    height = math_("SUBTRACT", math_("MULTIPLY", mottle.outputs["Fac"], math_("MULTIPLY", core, 0.6)),
+                   math_("MULTIPLY", core, 1.0))
+    L(height, bump.inputs["Height"])
+    if base_nrm is not None:
+        L(base_nrm, bump.inputs["Normal"])
+    L(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
 def pumpkin_mesh(name, mat, parent):
     """Squashed UV sphere with ten ribs (radial grooves) and a flattened base resting at z = 0."""
     bpy.ops.mesh.primitive_uv_sphere_add(radius=1.0, segments=80, ring_count=40, location=(0, 0, 0))
@@ -207,17 +296,24 @@ class RecordChasingGiantPumpkinStorySet:
             "subsoil": toy.noise_material("pk_subsoil", s("#422C1C"), s("#553A26"), scale=6, roughness=0.95, bump=0.4),
             "bed": toy.noise_material("pk_bed", s("#5A3B25"), s("#73503A"), scale=16, roughness=0.95, bump=0.7),
             "grass": toy.noise_material("pk_grass", s("#4C8A33"), s("#6AA543"), scale=30, bump=0.3),
-            "wet": _mat("pk_wet_soil", "#2B1D14", 0.3, coat=0.4),
+            # Wet earth must still read as soil in the bright toy palette. Near-black made the
+            # surface puddle and section view look like unexplained plastic platforms.
+            "wet": toy.noise_material("pk_wet_soil", s("#654536"), s("#4B3025"), scale=11,
+                                       roughness=0.48, bump=0.25),
             "pumpkin": toy.noise_material("pk_skin", s("#F27A12"), s("#E3600A"), scale=5, roughness=0.42, bump=0.12),
             "stem": toy.noise_material("pk_stem", s("#A3A660"), s("#7E8742"), scale=18, roughness=0.7, bump=0.4),
             "vine": toy.noise_material("pk_vine", s("#4E8F2E"), s("#3B7424"), scale=22, roughness=0.6, bump=0.3),
             "leaf": toy.noise_material("pk_leaf", s("#3F8A2E"), s("#5BA640"), scale=8, roughness=0.6, bump=0.35),
             "root": _mat("pk_root", "#EADCB8", 0.7, subsurface=0.1),
-            "slit": _mat("pk_slit", "#2A140A", 0.8),
+            "slit": _mat("pk_slit", "#351006", 0.72),
+            "flesh": _mat("pk_split_flesh", "#FFB83F", 0.48),
             "water": _mat("pk_water", "#4FB3F0", 0.06, coat=0.8),
             "dripline": _mat("pk_dripline", "#161616", 0.5),
             "sand": toy.noise_material("pk_sand", s("#D9C38F"), s("#EAD8A8"), scale=45, roughness=0.95, bump=0.3),
-            "rot": toy.noise_material("pk_rot", s("#5A3A1C"), s("#3A2511"), scale=14, roughness=0.8, bump=0.5),
+            "rot_rim": toy.noise_material("pk_rot_rim", s("#B6A547"), s("#7E762D"), scale=10,
+                                           roughness=0.78, bump=0.35),
+            "rot": toy.noise_material("pk_rot", s("#34401E"), s("#17200F"), scale=14,
+                                       roughness=0.82, bump=0.6),
             "worm": _mat("pk_worm", "#D98C8C", 0.4, subsurface=0.3),
             "seed": _mat("pk_seed", "#EFE3C0", 0.5),
             "post": tx.wood("pk_fence_post", "#7E5E40", "#9C7B58", along="z"),
@@ -242,8 +338,8 @@ class RecordChasingGiantPumpkinStorySet:
 
     def _world(self):
         m = self.m
-        toy.box("ground_topsoil", (30, 16, -TOP_Z), (0, 8, TOP_Z / 2), mat=m["topsoil"], bevel=0)
-        toy.box("ground_subsoil", (30, 16, TOP_Z - SUB_Z), (0, 8, (TOP_Z + SUB_Z) / 2), mat=m["subsoil"], bevel=0)
+        toy.box("ground_topsoil", (90, 16, -TOP_Z), (0, 8, TOP_Z / 2), mat=m["topsoil"], bevel=0)
+        toy.box("ground_subsoil", (90, 16, TOP_Z - SUB_Z), (0, 8, (TOP_Z + SUB_Z) / 2), mat=m["subsoil"], bevel=0)
         # lawn around the bed (front faces a hair behind the cut: a thin turf line on top of the section)
         for nm, x0, x1, y0, y1 in (("ground_lawn_r", 1.6, 15, 0.002, 16), ("ground_lawn_b", -15, 1.6, 2.75, 16),
                                    ("ground_lawn_l", -15, -3.95, 0.002, 2.75)):
@@ -410,9 +506,15 @@ class RecordChasingGiantPumpkinStorySet:
         led.visible_shadow = False
         toy.cylinder("tap_timer_dial", 0.035, 0.01, (0, -0.048, -0.03), rotation=(R(90), 0, 0),
                      mat=_mat("pk_dial", "#F4F1EA", 0.4), parent=self.timer)
-        # wet soil: the cut face darkens downward, the surface darkens around the pumpkin
+        # Wet soil: irregular brown lobes on the cut face and a brown surface stain around the
+        # pumpkin. A black rectangular decal used to dominate these shots and had no visual meaning.
         self.wet_face = toy.empty("wetsoil_face", (-0.2, -0.006, -0.002))
-        toy.box("wetsoil_face_patch", (2.6, 0.006, 0.7), (0, 0, -0.35), mat=m["wet"], parent=self.wet_face, bevel=0)
+        for k, (x, z, radius, scale) in enumerate((
+                (0.0, -0.27, 0.5, (2.1, 0.025, 0.52)),
+                (-0.82, -0.23, 0.34, (1.35, 0.025, 0.55)),
+                (0.78, -0.31, 0.38, (1.25, 0.025, 0.48)))):
+            toy.sphere(f"wetsoil_face_patch{k}", radius, (x, 0, z), scale=scale, mat=m["wet"],
+                       parent=self.wet_face, subdiv=1, segments=24, rings=12)
         self.wet_top = toy.cylinder("wetsoil_top", 1.25, 0.006, (-0.25, PY, 0.016), mat=m["wet"], vertices=48)
         self.wet_top.scale = (1.0, 0.72, 1.0)                           # an oval that stops at the cut
         self.puddle = toy.cylinder("flood_puddle", 1.15, 0.01, (-0.4, PY - 0.08, 0.02), mat=m["water"], vertices=48)
@@ -435,7 +537,9 @@ class RecordChasingGiantPumpkinStorySet:
     def _pumpkin(self):
         m = self.m
         self.pk = toy.empty("pk_root", VJ + V((0, 0, SOIL_BASE)))
-        self.pk_body = pumpkin_mesh("pk_body", m["pumpkin"], self.pk)
+        rot_phi, rot_t = R(-60), R(-30)
+        self.skin = rot_skin_material(m["pumpkin"], surface(rot_phi, rot_t, 1.0))
+        self.pk_body = pumpkin_mesh("pk_body", self.skin, self.pk)
         # stem: a short ridged cylinder from the fruit's shoulder to the vine, on a pivot at the fruit
         self.stem_piv = toy.empty("stem_piv", STEM_TOP, self.pk)
         self.stem_rest = (STEM_BOT - STEM_TOP).to_track_quat("Z", "Y").to_euler()
@@ -447,27 +551,53 @@ class RecordChasingGiantPumpkinStorySet:
             if idx % 2:
                 v.co.x *= 0.82
                 v.co.y *= 0.82
-        bpy.ops.mesh.primitive_torus_add(major_radius=0.074, minor_radius=0.02, location=(0, 0, 0))
-        self.stem_crack = bpy.context.active_object
-        self.stem_crack.name = "pk_stem_crack"
-        toy._finish(self.stem_crack, m["slit"], subdiv=0, parent=st)
-        self.stem_crack.location = (0, 0, -0.04)
-        self.stem_crack.scale = (1.05, 1.05, 1.0)
-        # the split along a rib (drawn in from bevel_factor_end)
+        # The crack: the lower half of the stem hangs on a hinge at mid-length, so it can KINK away;
+        # a jagged dark seam rings the break and pale torn fibres show in the gap.
+        mid = ln * 0.5
+        lower = toy.cylinder("pk_stem_lower", 0.07, ln - mid, (0, 0, (ln - mid) / 2), mat=m["stem"], vertices=20)
+        self.stem_hinge = toy.empty("pk_stem_hinge", (0, 0, mid), self.stem_piv)
+        lower.parent = self.stem_hinge
+        lower.location = (0, 0, (ln - mid) / 2)
+        st.scale = (1.0, 1.0, mid / ln)                 # the upper half only reaches the hinge now
+        st.location = (0, 0, mid / 2)
+        self.stem_crack = toy.empty("pk_stem_crack", (0, 0, 0), self.stem_hinge)
+        rnd = random.Random(4)
+        seam = []
+        for k in range(25):
+            a = 2 * math.pi * k / 24
+            seam.append(V((math.cos(a) * 0.082, math.sin(a) * 0.082, rnd.uniform(-0.03, 0.03))))
+        _curve("pk_stem_seam", [seam], 0.018, m["slit"], parent=self.stem_crack)
+        fib = _mat("pk_stem_fibres", "#E9F0C8", 0.6)
+        for k in range(14):
+            a = 2 * math.pi * k / 14
+            r = rnd.uniform(0.02, 0.06)
+            b0 = V((math.cos(a) * r, math.sin(a) * r, -0.01))
+            b1 = b0 + V((rnd.uniform(-0.01, 0.01), rnd.uniform(-0.01, 0.01), rnd.uniform(0.03, 0.06)))
+            _rod(f"pk_stem_fibre{k}", b0, b1, 0.007, fib, parent=self.stem_crack, vertices=5)
+        core_disc = toy.cylinder("pk_stem_core", 0.064, 0.012, (0, 0, -0.012), mat=fib, vertices=20)
+        core_disc.parent = self.stem_crack
+        core_disc.location = (0, 0, -0.012)
+        # The split along a rib: exposed golden flesh under a narrower dark opening. The old single
+        # dark line disappeared against the orange ribs, especially under motion and captions.
         pts = []
         rnd = random.Random(9)
         side = V((-math.sin(SLIT_PHI), math.cos(SLIT_PHI), 0))
         for k in range(12):
             t = R(-42 + 100 * k / 11)
             pts.append(surface(SLIT_PHI, t, 1.012) + side * rnd.uniform(-0.025, 0.025))
-        self.slit_mid = pts[5]
+        dark_pts = []
+        for p in pts:
+            outward = V(((p.x - BODY.x) / (RXY * RXY), p.y / (RXY * RXY),
+                         (p.z - BODY.z) / (RZ * RZ))).normalized()
+            # Lift the narrower centre beyond the flesh tube, otherwise the larger tube encloses
+            # it completely and the split looks like a painted yellow stripe.
+            dark_pts.append(p + outward * 0.055)
+        self.slit_mid = dark_pts[5]
         self.slit_dir = V((math.cos(SLIT_PHI), math.sin(SLIT_PHI), 0.25)).normalized()
-        self.slit = _curve("pk_slit", [pts], 0.03, m["slit"], parent=self.pk)
-        # rot patch on the underside, facing the camera
-        phi, t = R(-60), R(-38)
-        self.rot = toy.sphere("pk_rot_patch", 0.26, surface(phi, t, 0.975), scale=(1.0, 0.22, 0.75), mat=m["rot"],
-                              parent=self.pk, subdiv=1)
-        self.rot.rotation_euler = (R(-20), 0, R(-150))
+        self.slit_rim = _curve("pk_slit_flesh", [pts], 0.052, m["flesh"], parent=self.pk)
+        self.slit = _curve("pk_slit", [dark_pts], 0.034, m["slit"], parent=self.pk)
+        # Rot lives in the skin shader (rot_skin_material); this empty only keeps the old API.
+        self.rot = toy.empty("pk_rot_patch", (0, 0, 0), parent=self.pk)
         # lifting ring + wide straps down the sides and under the fruit
         bpy.ops.mesh.primitive_torus_add(major_radius=0.42, minor_radius=0.045, location=(0, 0, 0))
         self.ring = bpy.context.active_object
@@ -485,7 +615,7 @@ class RecordChasingGiantPumpkinStorySet:
                 pts.append(p)
             sides = [V((-math.sin(phi), math.cos(phi), 0)) * 0.06 for _ in pts]
             self.straps.append(_ribbon(f"pk_strap{k}", pts, sides, m["strap"], parent=self.pk))
-        self.pk_extras = {"slit": [self.slit], "rot": [self.rot], "ring": [self.ring] + self.straps,
+        self.pk_extras = {"slit": [self.slit_rim, self.slit], "rot": [self.rot], "ring": [self.ring] + self.straps,
                           "crack": [self.stem_crack]}
 
     # ------------------- small props -------------------
@@ -708,8 +838,16 @@ class RecordChasingGiantPumpkinStorySet:
 
     # ---- the pumpkin ----
 
+    def rot_key(self, f, radius, constant=False):
+        key_node_value(self.skin, "rot_radius", f, radius, "CONSTANT" if constant else None)
+
     def pk_show(self, f, extras=()):
         toy.hide_tree(self.pk, f, False)
+        if "rot" not in extras:
+            self.rot_key(f, 0.0, constant=True)
+        if "crack" not in extras:
+            toy.key_hold(self.stem_hinge, "rotation_euler", f - 1, "CONSTANT")
+            _key(self.stem_hinge, f, rotation_euler=V((0, 0, 0)))
         for name, objs in self.pk_extras.items():
             if name not in extras:
                 for o in objs:
@@ -733,13 +871,14 @@ class RecordChasingGiantPumpkinStorySet:
         return self.pk_world(f, BODY)
 
     def crack_open(self, f, frames=8):
-        """The rib splits: the dark slit draws itself along the rib."""
-        toy.hide_tree(self.slit, f, False)
-        cu = self.slit.data
-        cu.bevel_factor_end = 0.0
-        cu.keyframe_insert("bevel_factor_end", frame=f)
-        cu.bevel_factor_end = 1.0
-        cu.keyframe_insert("bevel_factor_end", frame=f + frames)
+        """The rib splits: exposed flesh and its dark centre draw together along the rib."""
+        for ob in (self.slit_rim, self.slit):
+            toy.hide_tree(ob, f, False)
+            cu = ob.data
+            cu.bevel_factor_end = 0.0
+            cu.keyframe_insert("bevel_factor_end", frame=f)
+            cu.bevel_factor_end = 1.0
+            cu.keyframe_insert("bevel_factor_end", frame=f + frames)
 
     # ---- vine, stem, leaves ----
 
@@ -871,8 +1010,10 @@ class RecordChasingGiantPumpkinStorySet:
 
     def salute(self, f0, f1):
         m = self.max
-        m.pose(f0 + 6, shoulderR=(-150, 0, 40), head=(-4, 0, 0))
-        m.pose(f1, shoulderR=(-150, 0, 40), head=(-4, 0, 0))
+        # This simple rig has no elbow, so keep the arm nearly vertical: the hand lands beside the
+        # hat brim and reads as a salute instead of the diagonal wave produced by the old pose.
+        m.pose(f0 + 6, shoulderR=(0, 164, -8), head=(-4, 0, 0))
+        m.pose(f1, shoulderR=(0, 164, -8), head=(-4, 0, 0))
         m.smile(f0 + 6, big=True)
 
     def pat(self, f0, f1):
@@ -954,9 +1095,14 @@ class RecordChasingGiantPumpkinStorySet:
     def kid_top(k):
         """Where kid k sits on the pumpkin once it is on the scale."""
         dx = (-0.3, 0.3)[k]
+        dy = -0.48
         base = 0.2 + PALLET_H
-        z = base + BODY.z + RZ * math.sqrt(1 - (dx / RXY) ** 2) - 0.02
-        return V((SCALE_X + dx, PY - 0.05, z))
+        surface_z = base + BODY.z + RZ * math.sqrt(1 - (dx / RXY) ** 2 - (dy / RXY) ** 2)
+        # Character.root is a standing-foot origin. In a seated pose the hips are at local z=.34;
+        # lower the scaled root by that amount so the hips touch the skin. Moving them toward the
+        # camera makes the bent legs visible down the front instead of hiding behind the crown.
+        z = surface_z - 0.34 * (0.6, 0.56)[k] + 0.015
+        return V((SCALE_X + dx, PY + dy, z))
 
     # ------------------- the ladder -------------------
 
@@ -1097,7 +1243,9 @@ class RecordChasingGiantPumpkinStorySet:
         self.deadpan(fc + 4, e)
         self.kids_home(b)
         self.glance(fc + 14)
-        self.shot(b, e, (2.0, -3.6, 1.5), (1.8, -3.3, 1.4), (0.2, 1.1, 0.3), lens=22)
+        self.shot(b, fc - 1, (2.0, -3.6, 1.5), (1.8, -3.3, 1.4), (0.2, 1.1, 0.3), lens=22)
+        # Cut in when the skin opens so the viewer can actually read the jagged split and spurt.
+        self.shot(fc, e, (1.15, -2.65, 1.0), (1.05, -2.5, 0.95), (-0.18, 0.72, 0.36), lens=29)
 
     def a_drip_line(self, i, b, e):
         L = e - b
@@ -1139,15 +1287,22 @@ class RecordChasingGiantPumpkinStorySet:
         self.move(self.stem_piv, p0, p1, "rotation_euler", rot)         # ...bending the stem out of line
         self.move(self.stem_piv, p0, p1, "scale", V((1, 1, stretch)))
         events.add(p0 + 6, "creak", gain=0.5)
-        toy.hide_tree(self.stem_crack, p1 + 1, False)                   # until it cracks
+        cut = b + int(L * 0.8)
+        toy.hide_tree(self.stem_crack, p1 + 1, False)                   # until it cracks...
+        toy.key_hold(self.stem_hinge, "rotation_euler", p1)
+        _key(self.stem_hinge, p1 + 3, rotation_euler=V((R(34), 0, R(10))))      # ...SNAP: the lower half kinks
+        _key(self.stem_hinge, p1 + 7, rotation_euler=V((R(26), 0, R(8))))
+        _key(self.stem_hinge, e, rotation_euler=V((R(28), 0, R(8))))
         events.add(p1 + 1, "crack", gain=0.8)
-        arrow("vine_pull", (-1.22, PY - 0.42, 0.34), (-0.42, 0, 0.14), p0 + 4, e, color="#FF7A1A", width=0.07)
+        arrow("vine_pull", (-1.22, PY - 0.42, 0.34), (-0.42, 0, 0.14), p0 + 4, p1 - 8, color="#FF7A1A", width=0.07)
+        label("STEM TEARS!", (-1.05, 0.5, 0.58), p1 + 4, cut, size=0.085, color="#FF3344")
         self.at(b, STEM_SPOT, facing_to(STEM_SPOT, (VJ.x, PY, 0)))
         self.max.pose(b + int(L * 0.15), head=(12, 0, 0))
-        cut = b + int(L * 0.8)
         self.jaw_drop(p1 + 3, cut)
         self.kids_home(b)
-        self.shot(b, cut, (-2.5, -2.3, 1.9), (-2.35, -2.1, 1.8), (-1.05, PY, 0.25), lens=24)
+        self.shot(b, p1 - 8, (-2.5, -2.3, 1.9), (-2.35, -2.1, 1.8), (-1.05, PY, 0.25), lens=24)
+        self.shot(p1 - 7, cut, (-1.75, -1.05, 0.85), (-1.6, -0.9, 0.78), (-1.0, PY, 0.24), (-1.0, PY, 0.22),
+                  lens=30, cut=False)                                   # close on the stem as it snaps
         self.wide(cut + 1, e)
         self.glance(cut + 3)
 
@@ -1194,9 +1349,11 @@ class RecordChasingGiantPumpkinStorySet:
         self.state(b, wet=True)
         self.pk_show(b, extras=("rot",))
         self.pk_snap(b, 1.0)
-        self._snap(self.rot, "scale", b, V((0.1, 0.022, 0.075)))
-        _key(self.rot, b + int(L * 0.2), scale=V((0.1, 0.022, 0.075)))
-        _key(self.rot, b + int(L * 0.75), scale=V((1.0, 0.22, 0.75)))   # the rot spreads
+        self.rot_key(b, 0.0, constant=True)
+        self.rot_key(b + int(L * 0.15), 0.04)
+        self.rot_key(b + int(L * 0.75), 0.48)                           # the rot spreads across the belly
+        self.rot_key(e, 0.5)
+        events.add(b + int(L * 0.3), "bubbles", gain=0.25)
         self._snap(self.wet_face, "scale", b, V((1, 1, 1)))
         w0 = b + int(L * 0.42)
         toy.hide_tree(self.worm, w0, False)
@@ -1209,7 +1366,7 @@ class RecordChasingGiantPumpkinStorySet:
         self.max.look_at(b + int(L * 0.5), (0.45, -0.05, -0.05), hold=24)
         self.kids_home(b)
         cut = b + int(L * 0.74)
-        self.shot(b, cut, (0.7, -2.7, 0.2), (0.6, -2.45, 0.15), (0.2, 0.5, -0.05), lens=24)
+        self.shot(b, cut, (0.85, -3.05, 0.58), (0.72, -2.8, 0.52), (0.05, 0.62, 0.18), lens=27)
         self.wide(cut + 1, e)
         self.glance(cut + 3)
 
@@ -1338,12 +1495,17 @@ class RecordChasingGiantPumpkinStorySet:
         for k, kid in enumerate(self.kids):
             toy.hide_tree(kid.root, f0, False)
             kid.cut_place(f0, self.kid_top(k), 0)
+            kid.sit(f0 - 1, f1 + 1, frames=1)
             self.arms_up(kid, f0 + 4 + 3 * k, f1)
         events.add(f0 + 4, "kids_cheer")
+        toy.hide_tree(self.wagon, f0, False)
+        # Bring the callback prop into the foreground; behind Max/forklift it was technically
+        # present but almost completely occluded in the portrait crop.
+        self.wagon_snap(f0, V((SCALE_X + 1.1, -0.05, 0)))
         self.at(f0, V((SCALE_X - 1.3, 0.22, 0)), 0)
         self.salute(f0, f1)
-        self.shot(f0, f1, (SCALE_X - 0.5, -3.9, 1.6), (SCALE_X - 0.45, -3.6, 1.55), (SCALE_X - 0.15, 0.95, 1.0),
-                  lens=24)
+        self.shot(f0, f1, (SCALE_X - 0.75, -4.3, 1.65), (SCALE_X - 0.7, -4.0, 1.6),
+                  (SCALE_X - 0.55, 1.0, 0.9), lens=20)
 
     def a_finale(self, i, b, e):
         L = e - b

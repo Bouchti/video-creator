@@ -1,6 +1,6 @@
 """
 Ready-to-post text for a finished film: TikTok caption + hashtags + cover idea, YouTube Shorts title,
-description and tags. Written next to the video as `<video>_post.txt` every time a film is produced.
+description and tags, Instagram Reels caption + hashtags + alt text. Written next to the video as `<video>_post.txt` every time a film is produced.
 
 Claude writes it from the film's script and fact sheet (same backend as the showrunner: the
 subscription by default). Without Claude it falls back to a template built from the script.
@@ -26,6 +26,11 @@ RULES = """Write the posting text for this short vertical video.
   "What you'll learn:" with 4-6 emoji bullets (each a real fact from the script, with its number),
   then the closing question, then 6-8 hashtags starting with #shorts; 8-12 search tags
   (comma-separated phrases people search).
+- Instagram Reels: a caption whose first line is the hook (the first ~125 characters show before
+  "more"), then 2-4 short lines that tell the story and the most surprising fact (with its number),
+  line breaks between ideas, 2-4 emojis, then the closing question on its own line. Then 8-12
+  hashtags mixing broad (#science, #engineering), topic and niche tags (no #fyp, no #learnontiktok).
+  Plus an alt text: one plain sentence describing what is seen in the video, for accessibility.
 - Never ask people to like, comment, follow or subscribe: end on the question only.
 - Only facts that are in the script or the fact sheet. Plain text, no markdown headers."""
 
@@ -39,9 +44,13 @@ SCHEMA = {
         "youtube_title": {"type": "string"},
         "youtube_description": {"type": "string"},
         "youtube_tags": {"type": "array", "items": {"type": "string"}},
+        "instagram_caption": {"type": "string"},
+        "instagram_hashtags": {"type": "array", "items": {"type": "string"}},
+        "instagram_alt_text": {"type": "string"},
     },
     "required": ["tiktok_caption", "tiktok_hashtags", "cover_moment", "cover_text", "youtube_title",
-                 "youtube_description", "youtube_tags"],
+                 "youtube_description", "youtube_tags", "instagram_caption", "instagram_hashtags",
+                 "instagram_alt_text"],
     "additionalProperties": False,
 }
 
@@ -84,16 +93,31 @@ def _template(film):
         "youtube_title": f"{film.get('title', '')} #shorts"[:100],
         "youtube_description": f"{meta.get('caption', hook)}\n\n{q}\n\n#shorts " + " ".join(tags),
         "youtube_tags": [t.lstrip("#") for t in tags],
+        "instagram_caption": f"{hook}\n\n{meta.get('caption', '')}\n\n{q}".strip(),
+        "instagram_hashtags": tags + ["#science", "#engineering", "#animation", "#reels"],
+        "instagram_alt_text": f"Animated 3D cartoon: {film.get('title', '')}.",
     }
 
 
+def _no_tag_lines(text):
+    """Drop hashtag-only lines from a caption (the hashtags are printed once, below it)."""
+    keep = [ln for ln in text.strip().splitlines()
+            if not (ln.strip() and all(w.startswith("#") for w in ln.split()))]
+    return "\n".join(keep).strip()
+
+
 def _fmt(p):
+    p = dict(p, tiktok_caption=_no_tag_lines(p["tiktok_caption"]),
+             instagram_caption=_no_tag_lines(p["instagram_caption"]))
     tags = " ".join(t if t.startswith("#") else f"#{t}" for t in p["tiktok_hashtags"])
     return (f"===== TIKTOK =====\n{p['tiktok_caption'].strip()}\n\n{tags}\n\n"
             f"Cover: {p['cover_moment'].strip()}\nCover text: {p['cover_text'].strip()}\n\n"
             f"===== YOUTUBE SHORTS =====\nTitle:\n{p['youtube_title'].strip()}\n\n"
             f"Description:\n{p['youtube_description'].strip()}\n\n"
-            f"Tags:\n{', '.join(t.strip().lstrip('#') for t in p['youtube_tags'])}\n")
+            f"Tags:\n{', '.join(t.strip().lstrip('#') for t in p['youtube_tags'])}\n\n"
+            f"===== INSTAGRAM REELS =====\n{p['instagram_caption'].strip()}\n\n"
+            f"{' '.join(t if t.startswith('#') else f'#{t}' for t in p['instagram_hashtags'])}\n\n"
+            f"Alt text: {p['instagram_alt_text'].strip()}\n")
 
 
 def write(film, video_path):
