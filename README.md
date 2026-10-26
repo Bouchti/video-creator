@@ -5,6 +5,7 @@ This project creates 9:16 social videos from research to a reviewed final MP4. W
 The current production routes are:
 
 - `local-ai` (default): durable, resumable MiniMax H3 generation with Wan fallback through local ComfyUI service endpoints.
+- `unreal`: locally rendered UE5 Sequencer cinematics through Movie Render Queue, with no per-render API fee.
 - `pexels`: stock/archival footage, public-domain media, photographs, and diagrams.
 - `cutaway` and `evolution`: authored Blender showrunner formats.
 
@@ -40,12 +41,37 @@ Common alternatives:
 ```powershell
 python main.py --duration 60
 python main.py --source local-ai "Why deep-sea animals glow"
+python main.py --source unreal "How a geothermal heat pump works"
+python -m unreal_video.cli status output\unreal_projects\PROJECT_ID
+python -m unreal_video.cli resume output\unreal_projects\PROJECT_ID
 python main.py --source pexels "How Roman concrete heals itself"
 python -m local_video.cli status output\projects\PROJECT_ID
 python -m local_video.cli resume output\projects\PROJECT_ID
 ```
 
 `--duration` accepts 30–90 seconds. Shot timing is allocated from the screenplay rather than fixed three-second cuts.
+
+For `--source cutaway`, the showrunner searches current 14-day trend evidence before scoring the
+unused registered 3D subjects. A Max story subject is consumed after its first generated script;
+changing the title or joke does not make it new. If every registered Max set is consumed, the
+autopilot researches a new trend-backed subject, creates its Blender story set, renders preview
+frames, visually validates every beat, registers it only after it passes, and then writes and
+renders the video. This first run for a new subject is substantially longer than reusing an existing
+set. `SHOWRUNNER_AUTO_BUILD_SETS=0` disables automatic expansion; `SHOWRUNNER_ALLOW_REPEATS=1` is an
+explicit rerun override, not the production default.
+
+### Unreal Engine route
+
+Install Unreal Engine 5.8 through Epic Games Launcher, then enable the plugins already declared in
+`unreal/VideoCreatorUE/VideoCreatorUE.uproject`: Python Editor Script, Editor Scripting Utilities,
+Movie Render Queue, PCG and Geometry Scripting. If Unreal is installed outside the default Epic
+Games directory, set `UNREAL_EDITOR_CMD` in `.env`.
+
+The Unreal route is resumable under `output/unreal_projects`. Unreal renders silent 1080x1920 PNG
+frames only. The application adds one narration track and local captions afterward, so scene audio,
+generated speech, generated subtitles and automatic cut whooshes cannot leak into the final edit.
+The first invocation creates the level, Level Sequence and Movie Render Queue preset; later stages
+resume from the saved handoff and existing frames.
 
 The output includes the video, plain post notes, and platform-specific post copy. Generated video projects remain resumable under `output/projects`.
 

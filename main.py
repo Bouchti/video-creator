@@ -5,6 +5,7 @@ Every video is built from script BEATS: each sentence of narration carries the
 visual shown while it is spoken.
   pexels   - Stock/archival footage, real photos, and diagrams (~$0/video, fast)
   local-ai - Durable MiniMax/Wan production with strict scene and final review (default)
+  unreal   - Local UE5 Sequencer/Movie Render Queue cinematics (no per-render API fee)
 
 Usage:
   python main.py                                           # AI chooses a current topic
@@ -101,6 +102,20 @@ def run_pipeline(
     log.info(f"PIPELINE START | {started.strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 70)
 
+    # UE is a large local prerequisite. Fail before spending trend/script API calls when it is absent.
+    if source == "unreal":
+        from unreal_video.config import UnrealConfig
+        unreal_config = UnrealConfig()
+        problems = []
+        if not unreal_config.editor:
+            problems.append("Unreal Engine 5 was not found; install UE 5.8 or set UNREAL_EDITOR_CMD in .env")
+        if not unreal_config.project.is_file():
+            problems.append(f"Unreal project is missing: {unreal_config.project}")
+        if problems:
+            error = "; ".join(problems)
+            log.error(f"Unreal preflight failed: {error}")
+            return {"success": False, "stage_failed": "unreal_preflight", "error": error}
+
     selection = None
     # Stage 0: Find today's topic via Leader Agent (unless topic explicitly provided)
     if topic is None:
@@ -133,7 +148,7 @@ def run_pipeline(
 
     log.info("\n[STAGE 1] Script generation + evaluation")
     from agents.evaluator import evaluate_with_retry
-    mode = "local-ai" if source == "local-ai" else "footage"
+    mode = "local-ai" if source in ("local-ai", "unreal") else "footage"
     angle = selection.get("angle") if selection else None
     script = evaluate_with_retry(topic, tone=tone, max_retries=3, target_seconds=duration, mode=mode,
                                  source=source, angle=angle, research=research)
@@ -150,8 +165,10 @@ def run_pipeline(
         from agents.editor_pexels import process_video
     elif source == "local-ai":
         from agents.editor_local_ai import process_video
+    elif source == "unreal":
+        from agents.editor_unreal import process_video
     else:
-        log.error(f"Unknown source: {source}. Use 'pexels' or 'local-ai'.")
+        log.error(f"Unknown source: {source}. Use 'pexels', 'local-ai', or 'unreal'.")
         return {"success": False, "stage_failed": "source_invalid", "topic": topic}
 
     try:
@@ -168,6 +185,16 @@ def run_pipeline(
                 captions=captions,
                 narration_enabled=narration,
             )
+        elif source == "unreal":
+            final_path = process_video(
+                script,
+                voice=voice,
+                duration=duration,
+                visual_style=visual_style,
+                music=music,
+                captions=captions,
+                narration_enabled=narration,
+            )
         else:
             final_path = process_video(script, voice=voice)
     except Exception as e:
@@ -177,7 +204,7 @@ def run_pipeline(
     ts = started.strftime("%Y%m%d_%H%M%S")
     safe_title = "".join(c if c.isalnum() else "_" for c in script["video_title"])[:60]
     output_path = os.path.join(OUTPUT_DIR, f"{ts}_{source}_{safe_title}.mp4")
-    if source == "local-ai":
+    if source in ("local-ai", "unreal"):
         # The durable project keeps its canonical final render; preserve the
         # legacy top-level output convention with a copy.
         shutil.copy2(final_path, output_path)
@@ -198,7 +225,7 @@ def run_pipeline(
             "title": script["video_title"],
             "description": script.get("description", ""),
             "hashtags": script.get("hashtags", []),
-            "ai_generated": source == "local-ai",
+            "ai_generated": source in ("local-ai", "unreal"),
         }
         try:
             publishing = [
@@ -242,27 +269,28 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["cutaway", "evolution", "pexels", "local-ai"],
+    parser.add_argument("--source", choices=["cutaway", "evolution", "pexels", "local-ai", "unreal"],
                         default=DEFAULT_SOURCE,
                         help="local-ai (durable MiniMax/Wan production; default), cutaway (3D cross-section "
                              "explainer: the showrunner picks a filmable topic, critiques and renders), "
                              "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
                              "truss -> suspension bridge), "
-                             "or pexels (free stock + photos + diagrams)")
-    parser.add_argument("--set", default=None, help="Evolution set for --source evolution (default: the first in "
-                                                    "engine/sets EVOLUTION; new sets: python -m agents.set_builder)")
+                             "unreal (local UE5 Sequencer + Movie Render Queue), or pexels "
+                             "(free stock + photos + diagrams)")
+    parser.add_argument("--set", default=None, help="Specific set for cutaway/evolution; consumed Max story sets "
+                                                    "are rejected unless repeats are explicitly enabled")
     parser.add_argument("--tone", default=None, help="Script tone")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help="Voice style")
     parser.add_argument("--duration", type=int, default=75,
                         help="Target video length in seconds (30-90). Scales narration + scene count.")
     parser.add_argument("--backend", choices=["auto", "minimax", "wan"], default="auto",
                         help="Backend for --source local-ai (Auto prefers MiniMax H3 and records Wan fallback)")
-    parser.add_argument("--visual-style", default=None, help="Shared visual style for --source local-ai")
+    parser.add_argument("--visual-style", default=None, help="Shared visual style for local-ai/unreal")
     parser.add_argument("--reference-image", default=None, help="Optional continuity reference image")
     parser.add_argument("--music", default="subtle cinematic", help="Music preference or configured track")
     parser.add_argument("--ambience", default="natural location ambience", help="Ambience direction")
-    parser.add_argument("--no-captions", action="store_true", help="Disable captions for --source local-ai")
-    parser.add_argument("--no-narration", action="store_true", help="Create a music-and-ambience local AI edit")
+    parser.add_argument("--no-captions", action="store_true", help="Disable software captions")
+    parser.add_argument("--no-narration", action="store_true", help="Create a music/ambience-only edit")
     parser.add_argument("--publish", action="append", choices=["youtube", "instagram", "tiktok"], default=[],
                         help="Prepare a publish package (repeat for multiple platforms)")
     parser.add_argument("--publish-live", action="store_true",

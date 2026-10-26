@@ -1,7 +1,7 @@
 """
-Auto set builder: Claude creates a whole new 3D "evolution" set (spec + Blender builder + reference
-script) for a subject, renders it, LOOKS at the result, and fixes it until every beat is accepted.
-A set is only registered (usable by `--source evolution --set <id>`) once it passes.
+Auto set builder: Claude creates a whole new 3D evolution or Max-story set (spec + Blender builder
+and reference script), renders it, LOOKS at the result, and fixes it until every beat is accepted.
+A set is only registered once it passes.
 
     python -m agents.set_builder "from a raft to a container ship"
     python -m agents.set_builder "how castles evolved" --id castle_evolution --rounds 5
@@ -112,6 +112,19 @@ def _files(set_id):
     return [f"engine/sets/{set_id}_spec.py", f"engine/sets/{set_id}.py", f"engine/films/{set_id}.json"]
 
 
+def _film_file(set_id):
+    exact = os.path.join(PROJECT_ROOT, "engine", "films", f"{set_id}.json")
+    if os.path.exists(exact):
+        return exact
+    for path in glob.glob(os.path.join(PROJECT_ROOT, "engine", "films", "*.json")):
+        try:
+            if json.load(open(path, encoding="utf-8")).get("set") == set_id:
+                return path
+        except (OSError, json.JSONDecodeError):
+            continue
+    return exact
+
+
 GUIDE = """HOW EVOLUTION SETS WORK (read these files first, in this order):
 - engine/evo_kit.py: the toolkit and the EvolutionSet base class (river valley with sliding banks,
   forest, village, clouds, ship, cars + traffic, pop_in / fly_in / fall / show_between, attach, beam,
@@ -168,8 +181,60 @@ Then write the three files:
 Finish with a short summary of the ladder."""
 
 
+STORY_GUIDE = """HOW MAX STORY SETS WORK (read these files first, in this order):
+- engine/sets/pool_story_spec.py and engine/sets/pool_story.py: the smallest complete Max story.
+- engine/sets/plane_story_spec.py and engine/sets/plane_story.py: a self-contained outdoor story.
+- engine/sets/boat_story_spec.py and engine/sets/boat_story.py: a detailed cutaway reference.
+- engine/films/cutaway_film.py, engine/toy.py, engine/camera.py and engine/character.py.
+
+The spec is pure data and must define SET_ID, SUBJECT, HERO = "Max", MODEL_FACTS, STORY_ORDER,
+ACTIONS, beat_actions(), min_seconds() and validate(). It needs two hook actions, then rewind,
+then a 7-10 action trial-and-error ladder that alternates visible failures with real engineering
+fixes and ends in a happy finale with Max's two children. Each action needs kind, shows and seconds.
+The validator must require one hook first, rewind second, and every STORY_ORDER action exactly once.
+
+The Blender module defines one class whose name ends in Set. Its constructor is
+(scene, sun, fill, bg, total), builds all models hidden as needed, creates Max and two children with
+engine.character.Character, and owns a CameraRig. Its run(beats, spans, epilogue_offset) method
+plays every non-hook action through a_<action>(i, start, end), stages the opening hook at the
+epilogue offset, then calls rig.build(). Every action named by the spec needs a method.
+
+VISUAL AND SAFETY RULES:
+- Use only reusable primitives and the repository's Blender helpers; never require downloaded assets.
+- Make one coherent 9:16 diorama with a readable cutaway. Keep the active subject large and centred.
+- Every failure must visibly happen; every fix must visibly answer it. Max is endearing, never harmed.
+- Do not render narration, captions, lettering, watermarks or title cards in Blender. Short physical
+  labels and fact arrows are allowed only when they explain the mechanism.
+- Add only motivated diegetic sound events. Never add recurring transition whooshes.
+- Deterministic output: seed random generators. Blender 5.2 Python. Build everything before animation.
+- Hidden objects are excluded from evaluation; use toy.hide_tree/show helpers and keyframe visibility.
+- Camera shots use cuts between beats and keep objects away from the vertical-frame edges.
+- The reference film JSON names this set, uses captions "word", one beat per required action, 140-192
+  spoken words, a <=13-word hook and a final question. It exists for preview validation; the
+  showrunner writes the production script after the set passes.
+"""
+
+
+def story_design_prompt(subject, set_id):
+    return f"""Create a completely new 3D Max trial-and-error story set.
+
+Set id: {set_id}
+Subject and build brief: {subject}
+
+{STORY_GUIDE}
+
+Design the story first. The thing Max builds must be unambiguous; every failure must teach one true
+physical principle, and the following fix must solve exactly that failure. Keep it achievable with
+simple, robust Blender geometry. Then write exactly these three files:
+- engine/sets/{set_id}_spec.py
+- engine/sets/{set_id}.py
+- engine/films/{set_id}.json
+
+Finish with a short summary of the visual ladder."""
+
+
 def _guide(set_id):
-    """The evolution guide for evolution sets; a short note for the hand-built Max cutaway sets."""
+    """Return the format-specific repair guide for this set."""
     try:
         import importlib
         fmt = getattr(importlib.import_module(f"engine.sets.{set_id}_spec"), "FORMAT", "")
@@ -177,6 +242,11 @@ def _guide(set_id):
         fmt = ""
     if fmt == "evolution":
         return GUIDE
+    try:
+        if getattr(importlib.import_module(f"engine.sets.{set_id}_spec"), "HERO", None):
+            return STORY_GUIDE
+    except Exception:                                # noqa: BLE001
+        pass
     return ("This is a hand-built cutaway set (rendered by engine/films/cutaway_film.py with toy.py, camera.py "
             "and character.py). Keep its structure and style; change as little as possible.")
 
@@ -216,7 +286,7 @@ def fix_scenes(set_id: str, rejected: list, allowed=None):
                      f"fatal: {r.get('fatal_problems')}; problems: {r.get('problems')}; reviewer's fix: "
                      f"{r.get('fix')}; frames: {imgs}")
     out = claude_agent(fix_prompt(set_id, "\n".join(lines),
-                                  "The scene reviewer REJECTED these rendered windows of an evolution film."),
+                                  "The scene reviewer REJECTED these rendered windows of a 3D film."),
                        allowed or [f"engine/sets/{set_id}.py"])
     log.info(f"[set_builder] fix applied:\n{out[-1500:]}")
     return out
@@ -224,13 +294,20 @@ def fix_scenes(set_id: str, rejected: list, allowed=None):
 
 # ------------------- checks, preview render, review -------------------
 
-def static_checks(set_id) -> list:
+def static_checks(set_id, story=False) -> list:
     """Import the spec and validate the reference script in a fresh interpreter; compile the builder."""
     errs = []
+    identity_check = ("assert getattr(sp, 'HERO', '') == 'Max', 'story spec HERO must be Max'; "
+                      if story else
+                      "assert getattr(sp, 'FORMAT', '') == 'evolution', 'spec FORMAT must be \"evolution\"'; ")
+    story_check = (f"from agents.showrunner import hard_checks; e += hard_checks(f, {set_id!r}); "
+                   if story else "")
+    film_path = _film_file(set_id)
     code = (f"import json; from engine.sets import {set_id}_spec as sp; "
-            f"f = json.load(open('engine/films/{set_id}.json', encoding='utf-8')); "
-            "assert getattr(sp, 'FORMAT', '') == 'evolution', 'spec FORMAT must be \"evolution\"'; "
-            "e = sp.validate(f['beats']); print(json.dumps(e))")
+            f"f = json.load(open({film_path!r}, encoding='utf-8')); "
+            + identity_check +
+            "assert f.get('set') == sp.SET_ID, 'film set must match spec SET_ID'; "
+            "e = sp.validate(f['beats']); " + story_check + "print(json.dumps(e))")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=PROJECT_ROOT)
     if r.returncode:
         errs.append(f"spec/script check failed:\n{r.stderr[-2000:]}")
@@ -241,7 +318,7 @@ def static_checks(set_id) -> list:
     except py_compile.PyCompileError as exc:
         errs.append(f"builder does not compile: {exc.msg}")
     if not errs:
-        film = json.load(open(os.path.join(PROJECT_ROOT, "engine", "films", f"{set_id}.json"), encoding="utf-8"))
+        film = json.load(open(film_path, encoding="utf-8"))
         words = sum(len(b["text"].split()) for b in film["beats"])
         if not 120 <= words <= 200:
             errs.append(f"reference script has {words} words; aim for 140-190")
@@ -262,15 +339,19 @@ def fake_timings(film: dict, path: str):
 def preview_render(set_id, work) -> str:
     """Render 3 stills per beat; returns '' or the Blender error text."""
     from engine.make_film import BLENDER, _run_blender
-    film_json = os.path.join(PROJECT_ROOT, "engine", "films", f"{set_id}.json")
+    film_json = _film_file(set_id)
     film = json.load(open(film_json, encoding="utf-8"))
     for p in glob.glob(os.path.join(work, "preview_*.png")):
         os.remove(p)
     timings = os.path.join(work, "timings.json")
     fake_timings(film, timings)
-    runner = os.path.join(PROJECT_ROOT, "engine", "films", "evolution_film.py")
-    os.environ.setdefault("EVO_PCT", "50")
-    os.environ.setdefault("EVO_SAMPLES", "16")
+    import importlib
+    spec = importlib.import_module(f"engine.sets.{set_id}_spec")
+    story = bool(getattr(spec, "HERO", None))
+    runner = os.path.join(PROJECT_ROOT, "engine", "films",
+                          "cutaway_film.py" if story else "evolution_film.py")
+    os.environ.setdefault("CUT_PCT" if story else "EVO_PCT", "50")
+    os.environ.setdefault("CUT_SAMPLES" if story else "EVO_SAMPLES", "16")
     try:
         _run_blender([BLENDER, "--background", "--factory-startup", "--python", runner, "--", film_json, timings,
                       work, "--preview"])
@@ -285,13 +366,15 @@ def review_preview(set_id, work) -> list:
 
     from agents import scene_validator as sv
     spec = importlib.reload(importlib.import_module(f"engine.sets.{set_id}_spec"))
-    film = json.load(open(os.path.join(PROJECT_ROOT, "engine", "films", f"{set_id}.json"), encoding="utf-8"))
+    film = json.load(open(_film_file(set_id), encoding="utf-8"))
     spans = json.load(open(os.path.join(work, "timings.json")))["beats"]
     review_dir = os.path.join(work, "review")
     os.makedirs(review_dir, exist_ok=True)
     reports, previous = [], None
     for k, (beat, sp) in enumerate(zip(film["beats"], spans)):
         acts = list(beat.get("actions") or [beat.get("action")])
+        if all(spec.ACTIONS.get(action, {}).get("kind") == "rewind" for action in acts):
+            continue
         w = {"window": k + 1, "beat": k + 1, "action": "+".join(acts), "part": "whole beat",
              "f0": sp["start"] + 1, "f1": sp["end"] + 1, "t0": sp["start"] / 30, "t1": (sp["end"] + 1) / 30,
              "shows": " ".join(spec.ACTIONS.get(a, {}).get("shows", "") for a in acts), "text": beat["text"]}
@@ -340,35 +423,37 @@ def contact_sheet(work, out_path):
     return out_path
 
 
-def register(set_id):
+def register(set_id, collection="EVOLUTION"):
     p = os.path.join(PROJECT_ROOT, "engine", "sets", "__init__.py")
     s = open(p, encoding="utf-8").read()
-    m = re.search(r"EVOLUTION = \[([^\]]*)\]", s)
+    m = re.search(rf"{re.escape(collection)} = \[([^\]]*)\]", s)
     names = re.findall(r'"([^"]+)"', m.group(1)) if m else []
     if set_id not in names:
         names.append(set_id)
-        new = "EVOLUTION = [" + ", ".join(f'"{n}"' for n in names) + "]"
+        new = collection + " = [" + ", ".join(f'"{n}"' for n in names) + "]"
         s = s.replace(m.group(0), new) if m else s + f"\n{new}\n"
         open(p, "w", encoding="utf-8").write(s)
 
 
 # ------------------- the build loop -------------------
 
-def build_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
-    set_id = set_id or re.sub(r"[^a-z0-9]+", "_", subject.lower()).strip("_")[:28] + "_evolution"
+def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = False) -> dict:
+    suffix = "_story" if story else "_evolution"
+    set_id = set_id or re.sub(r"[^a-z0-9]+", "_", subject.lower()).strip("_")[:28] + suffix
     files = _files(set_id)
     work = os.path.join(PROJECT_ROOT, "output", "sets", set_id)
     os.makedirs(work, exist_ok=True)
     exists = all(os.path.exists(os.path.join(PROJECT_ROOT, f)) for f in files)
     if not exists:
         log.info(f"[set_builder] designing and writing '{set_id}' for: {subject}")
-        log.info(claude_agent(design_prompt(subject, set_id), files)[-1500:])
+        prompt = story_design_prompt(subject, set_id) if story else design_prompt(subject, set_id)
+        log.info(claude_agent(prompt, files)[-1500:])
     else:
         log.info(f"[set_builder] '{set_id}' already exists: checking and improving it")
     status = {"set": set_id, "accepted": False, "rounds": 0, "work": work}
     for rnd in range(1, rounds + 1):
         status["rounds"] = rnd
-        errs = static_checks(set_id)
+        errs = static_checks(set_id, story=story)
         if errs:
             log.info(f"[set_builder] round {rnd}: {len(errs)} static problem(s); sending back to Claude")
             claude_agent(fix_prompt(set_id, "\n".join(f"- {e}" for e in errs),
@@ -387,10 +472,11 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
         log.info(f"[set_builder] round {rnd}: {len(reports) - len(rejected)}/{len(reports)} beats accepted"
                  + (f" (contact sheet: {sheet})" if sheet else ""))
         if not rejected:
-            register(set_id)
+            register(set_id, "AVAILABLE" if story else "EVOLUTION")
             status.update(accepted=True, contact_sheet=sheet)
+            source = "cutaway" if story else "evolution"
             log.info(f"[set_builder] ACCEPTED: '{set_id}' is registered. Make a video with:\n"
-                     f"  python main.py --source evolution --set {set_id}")
+                     f"  python main.py --source {source} --set {set_id}")
             return status
         if rnd < rounds:
             fix_scenes(set_id, rejected, allowed=files)
@@ -400,12 +486,18 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
     return status
 
 
+def build_story_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
+    """Build, visually validate and register a new Max cutaway story set."""
+    return build_set(subject, set_id=set_id, rounds=rounds, story=True)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser(description="Let Claude build (and validate) a new 3D evolution set.")
     ap.add_argument("subject", nargs="?", help='e.g. "from a raft to a container ship"')
     ap.add_argument("--id", default=None, help="set id (default: from the subject, ending in _evolution)")
     ap.add_argument("--rounds", type=int, default=int(os.getenv("SET_BUILD_ROUNDS") or "4"))
+    ap.add_argument("--story", action="store_true", help="build a Max cutaway story instead of evolution")
     ap.add_argument("--fix", default=None, help="fix an existing set from a scene_review.json (with --report)")
     ap.add_argument("--report", default=None, help="scene_review.json whose rejected windows to fix")
     a = ap.parse_args()
@@ -419,7 +511,7 @@ def main():
         return
     if not a.subject:
         ap.error("give a subject, or --fix SET --report FILE")
-    print(json.dumps(build_set(a.subject, a.id, a.rounds), indent=1))
+    print(json.dumps(build_set(a.subject, a.id, a.rounds, story=a.story), indent=1))
 
 
 if __name__ == "__main__":

@@ -275,11 +275,125 @@ S, I = {"type": "string"}, {"type": "integer"}
 
 # ------------------- 1. topic -------------------
 
+class NoUnusedStorySets(RuntimeError):
+    """Every requested hero/story set has already been used for a published script."""
+
+
 def _history():
     try:
         return json.load(open(HISTORY, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
+
+
+def available_topic_sets(set_ids=None, history=None):
+    """Return selectable sets, treating a hero set as one consumable story subject.
+
+    A different title, hook, or running gag does not make Max rebuilding the same thing a new
+    subject. Non-story explainer sets may still support genuinely different mechanisms/angles.
+    SHOWRUNNER_ALLOW_REPEATS=1 is an explicit producer override for reruns and tests.
+    """
+    requested = list(set_ids or sets.AVAILABLE)
+    if os.getenv("SHOWRUNNER_ALLOW_REPEATS", "0").lower() in ("1", "true", "yes"):
+        return requested
+    history = _history() if history is None else history
+    consumed = {item.get("set") for item in history if item.get("set")}
+    return [set_id for set_id in requested
+            if not (getattr(sets.spec(set_id), "HERO", None) and set_id in consumed)]
+
+
+def _trend_research(set_ids):
+    """Find current, sourced signals before Claude scores candidate subjects."""
+    briefs = "\n\n".join(_set_brief(set_id) for set_id in set_ids)
+    prompt = f"""Today is {datetime.date.today().isoformat()}. Search the web for current public-interest
+signals from the last 14 days that could honestly support one of these video subjects:
+
+{briefs}
+
+Return a compact plain-text trend brief. For each useful signal include the publication date,
+what is newly relevant, and a direct source URL. Prefer news, search interest, major releases,
+anniversaries only when they are currently being discussed, and authoritative sources. Say
+clearly when a subject has no fresh signal. Never invent a connection just to make a set fit."""
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 8}]
+    return _call("You are the trend researcher for a factual social-video studio.", prompt,
+                 tools=tools, effort="medium")
+
+
+NEW_STORY_SCHEMA = _obj({
+    "subject": S,
+    "trend_signal": S,
+    "trend_source_url": S,
+    "why_people_care_now": S,
+    "build_brief": S,
+})
+
+
+def _wishlist():
+    try:
+        return json.load(open(WISHLIST, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _new_story_set_id(subject):
+    words = re.sub(r"\b(max|builds?|makes?|creates?|a|an|the|his|her)\b", " ", subject.lower())
+    stem = re.sub(r"[^a-z0-9]+", "_", words).strip("_")[:28] or "new_max_project"
+    base = stem + "_story"
+    candidate, n = base, 2
+    while os.path.exists(os.path.join(os.path.dirname(__file__), "..", "engine", "sets", candidate + ".py")):
+        candidate, n = f"{stem[:24]}_{n}_story", n + 1
+    return candidate
+
+
+def plan_new_story_set():
+    """Research and choose a genuinely new, timely Max subject that can become a 3D set."""
+    published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
+    ideas = _wishlist()[-30:]
+    wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in ideas) or "- none"
+    trend_prompt = f"""Today is {datetime.date.today().isoformat()}. Search current sources from the last
+14 days for subjects people are actively interested in that could support a 60-80 second Max
+trial-and-error engineering story. Search across home projects, infrastructure, transport,
+energy, water, machines and practical science. A usable subject must be visually explainable as
+one coherent 3D cutaway and contain at least three true failure -> engineering-fix steps.
+
+Already used subjects (exclude the entire underlying subject, not just these titles):
+{published}
+
+Return 8-12 concise possibilities. For each, give the current signal, publication date, direct
+source URL, and the physical build/failure ladder. Exclude politics, active tragedies, weapons,
+dangerous copyable experiments, copyrighted characters, and any forced trend connection."""
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 10}]
+    trends = _call("You research safe, factual, high-retention engineering video subjects.",
+                   trend_prompt, tools=tools, effort="medium")
+    prompt = f"""Choose one genuinely new Max story set to build next.
+
+LIVE TREND RESEARCH:
+{trends}
+
+OLDER SET WISHLIST (inspiration only; live research wins):
+{wishlist}
+
+USED SUBJECTS (never repeat or rename these):
+{published}
+
+Return:
+- subject: a short concrete name for the thing Max builds
+- trend_signal and the exact direct trend_source_url from the live research
+- why_people_care_now
+- build_brief: a self-contained production brief describing the single coherent cutaway world,
+  Max's goal, two children in the payoff, 3-5 escalating visible failures, the real engineering fix
+  immediately after each failure, the final working result, and the physical principles viewers
+  learn. It must be feasible using Blender primitives and must not need logos or downloaded assets.
+
+Do not choose a subject merely because it appears in the old wishlist. It needs a credible current
+signal and must be different from every used subject."""
+    plan = _call(STORY_STYLE, prompt, NEW_STORY_SCHEMA, effort="high")
+    url = str(plan.get("trend_source_url", ""))
+    if not url.startswith(("http://", "https://")):
+        raise NoUnusedStorySets("Fresh topic research returned no verifiable trend source; no set was built.")
+    plan["set_id"] = _new_story_set_id(plan["subject"])
+    log.info(f"[showrunner] new subject: {plan['subject']} | trend: {plan['trend_signal']}")
+    return plan
 
 
 def _set_brief(set_id):
@@ -293,6 +407,7 @@ def _set_brief(set_id):
 TOPIC_SCHEMA = _obj({
     "candidates": {"type": "array", "items": _obj({
         "set": S, "title": S, "angle": S, "hook_line": S, "hook_action": S, "payoff": S,
+        "trend_signal": S, "trend_source_url": S, "trend_relevance": I,
         "hook_strength": I, "curiosity": I, "visual_fit": I, "novelty": I, "shareability": I})},
     "best": I,
     "wishlist": {"type": "array", "items": _obj({"topic": S, "hook_line": S, "set_needed": S})},
@@ -300,12 +415,29 @@ TOPIC_SCHEMA = _obj({
 
 
 def pick_topic(set_ids=None, forced_angle=None):
-    set_ids = set_ids or sets.AVAILABLE
-    used = [h.get("title", "") + " | " + h.get("angle", "") for h in _history()][-40:]
+    requested = list(set_ids or sets.AVAILABLE)
+    history = _history()
+    set_ids = available_topic_sets(requested, history)
+    if not set_ids:
+        consumed = sorted({h.get("set") for h in history if h.get("set") in requested})
+        raise NoUnusedStorySets(
+            "All registered Max story subjects have already been used"
+            + (f": {', '.join(consumed)}" if consumed else "")
+            + ". Add a new story set before generating another Max video, or set "
+              "SHOWRUNNER_ALLOW_REPEATS=1 only when you intentionally want a rerun."
+        )
+    skipped = [set_id for set_id in requested if set_id not in set_ids]
+    if skipped:
+        log.info(f"[showrunner] consumed subjects excluded: {', '.join(skipped)}")
+    used = [h.get("title", "") + " | " + h.get("angle", "") for h in history][-40:]
     briefs = "\n\n".join(_set_brief(s) for s in set_ids)
+    trend_brief = _trend_research(set_ids)
     prompt = f"""Pick today's video.
 
 {briefs}
+
+CURRENT TREND RESEARCH (use only claims and links present here):
+{trend_brief}
 
 Already published (do NOT repeat these angles or hooks):
 {chr(10).join('- ' + u for u in used) or '- (nothing yet)'}
@@ -316,9 +448,11 @@ Brainstorm 10 distinct ANGLES that these sets can film: different hooks and ques
 same subject (why it is built that way, what goes wrong if..., the hidden part nobody sees, the
 surprising number, the thing you should never do). For each: a working title, the angle, the hook
 line (the first 2 seconds, at most 13 words, a true fact), which hook action opens it, the payoff
-that closes the loop, and honest 1-10 scores for hook_strength, curiosity, visual_fit (how well
-this set's actions can SHOW it), novelty (vs published) and shareability. Set `best` to the index
-of the strongest overall (weight hook_strength and visual_fit most). Remember the film always shows
+that closes the loop, the exact current trend signal, its direct source URL, and honest 1-10 scores
+for trend_relevance, hook_strength, curiosity, visual_fit (how well this set's actions can SHOW it),
+novelty (vs published) and shareability. A weak or forced trend connection must score below 6.
+Set `best` to the index of the strongest overall (weight trend relevance, hook strength and visual
+fit most). Remember the film always shows
 the whole build, but build steps that are not the point can be raced through as montages, so an
 angle about the water, the soil or the machinery works as well as one about construction.
 
@@ -343,6 +477,13 @@ viewer nothing. The hook line must make sense on its own to someone who has seen
                        + c["novelty"] + c["shareability"])
     if best["set"] not in set_ids:
         best["set"] = set_ids[0]
+    minimum_trend = int(os.getenv("SHOWRUNNER_MIN_TREND_SCORE", "6"))
+    if not forced_angle and (best.get("trend_relevance", 0) < minimum_trend
+                             or not str(best.get("trend_source_url", "")).startswith(("http://", "https://"))):
+        raise NoUnusedStorySets(
+            "No unused story subject has a strong, sourced trend signal today. "
+            "No video was started; add a new set from output/set_wishlist.json or try again later."
+        )
     log.info(f"[showrunner] topic: {best['title']} | hook: {best['hook_line']}")
     return best
 
@@ -738,12 +879,12 @@ def slug(text):
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48]
 
 
-def run(angle=None, render=True, preview=False):
+def run(angle=None, render=True, preview=False, set_id=None):
     import time
     t0 = time.time()
     log.info(f"[showrunner] backend: {BACKEND}" + (f" (claude -p, model {CLI_MODEL})" if BACKEND != "api" else "")
              + f", quality: {QUALITY}")
-    topic = pick_topic(forced_angle=angle)
+    topic = pick_topic(set_ids=[set_id] if set_id else None, forced_angle=angle)
     facts = research(topic)
     script, review = develop(topic, facts)
     log.info(f"[showrunner] script written in {(time.time() - t0) / 60:.1f} min")
@@ -760,7 +901,9 @@ def run(angle=None, render=True, preview=False):
         log.info(f"   [{b['id']:>24}] {b['text']}")
     hist = _history()
     hist.append({"title": script["title"], "angle": topic["angle"], "hook": film["beats"][0]["text"],
-                 "set": topic["set"], "film": path, "date": datetime.date.today().isoformat()})
+                 "set": topic["set"], "film": path, "date": datetime.date.today().isoformat(),
+                 "trend_signal": topic.get("trend_signal", ""),
+                 "trend_source_url": topic.get("trend_source_url", "")})
     json.dump(hist, open(HISTORY, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
     if not render:
         return path
@@ -772,7 +915,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser(description="Pick the best topic, write a great script, render the film.")
     ap.add_argument("--angle", default=None, help="develop this angle instead of choosing one")
+    ap.add_argument("--set", choices=sets.AVAILABLE, default=None, help="use one specific unused set")
     ap.add_argument("--no-render", action="store_true", help="stop after writing the script")
     ap.add_argument("--preview", action="store_true", help="render preview stills instead of the full film")
     a = ap.parse_args()
-    print(run(angle=a.angle, render=not a.no_render, preview=a.preview))
+    print(run(angle=a.angle, render=not a.no_render, preview=a.preview, set_id=a.set))

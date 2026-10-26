@@ -114,6 +114,41 @@ class ScriptAndCheckTests(_Env):
             ap.stage_check(self.run, self.video, self.film)
         self.assertTrue(calls[0].remix)
 
+    def test_cutaway_forwards_set_and_does_not_retry_consumed_subject(self):
+        from agents.showrunner import NoUnusedStorySets
+        calls = []
+
+        def write(angle=None, render=True, set_id=None):
+            calls.append((angle, set_id))
+            raise NoUnusedStorySets("already consumed")
+
+        with patch("agents.showrunner.run", write):
+            with self.assertRaisesRegex(ap.GiveUp, "already consumed"):
+                ap.stage_script(self.run, "cutaway", None, "nuclear_story")
+        self.assertEqual(calls, [(None, "nuclear_story")])
+
+    def test_cutaway_builds_new_story_when_library_is_exhausted(self):
+        from agents.showrunner import NoUnusedStorySets
+        calls = []
+        plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story",
+                "build_brief": "A cutaway home and ground loop."}
+
+        def write(angle=None, render=True, set_id=None):
+            calls.append(set_id)
+            if set_id is None:
+                raise NoUnusedStorySets("all consumed")
+            return self.film
+
+        accepted = {"accepted": True, "set": "heat_pump_story", "work": self.tmp}
+        with patch("agents.showrunner.run", write), \
+                patch("agents.showrunner.plan_new_story_set", return_value=plan), \
+                patch("agents.set_builder.build_story_set", return_value=accepted) as build:
+            path = ap.stage_script(self.run, "cutaway", None, None)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story"])
+        build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4)
+        self.assertEqual(self.run["generated_set"], "heat_pump_story")
+
     def test_run_record_is_resumable(self):
         self.run.set(film=self.film, render_attempts=2)
         again = ap.Run(self.run.path)

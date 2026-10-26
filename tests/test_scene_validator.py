@@ -191,6 +191,10 @@ class SetBuilderTests(unittest.TestCase):
         from agents import set_builder as sb
         self.assertEqual(sb.static_checks("bridge_evolution"), [])
 
+    def test_static_checks_pass_on_a_max_story_set(self):
+        from agents import set_builder as sb
+        self.assertEqual(sb.static_checks("boat_story", story=True), [])
+
     def test_register_adds_once(self):
         from agents import set_builder as sb
         root = tempfile.mkdtemp()
@@ -201,6 +205,17 @@ class SetBuilderTests(unittest.TestCase):
             sb.register("ship_evolution")
             sb.register("ship_evolution")
         self.assertIn('EVOLUTION = ["bridge_evolution", "ship_evolution"]', open(p).read())
+
+    def test_registers_story_in_available_once(self):
+        from agents import set_builder as sb
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "engine", "sets"))
+        p = os.path.join(root, "engine", "sets", "__init__.py")
+        open(p, "w").write('AVAILABLE = ["pool_story"]\nEVOLUTION = ["bridge_evolution"]\n')
+        with patch.object(sb, "PROJECT_ROOT", root):
+            sb.register("heat_pump_story", "AVAILABLE")
+            sb.register("heat_pump_story", "AVAILABLE")
+        self.assertIn('AVAILABLE = ["pool_story", "heat_pump_story"]', open(p).read())
 
     def test_fake_timings(self):
         from agents import set_builder as sb

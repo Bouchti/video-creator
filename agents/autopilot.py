@@ -52,6 +52,13 @@ def _int(name, default):
     return int(os.getenv(name) or default)
 
 
+def _enabled(name, default=True):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 class GiveUp(RuntimeError):
     """A failure the autopilot cannot repair (e.g. no voice credits left)."""
 
@@ -164,6 +171,7 @@ def write_notes(video, film_json):
 def stage_script(run, source, angle, set_id):
     if run["film"] and os.path.exists(run["film"]):
         return run["film"]
+    set_id = run["generated_set"] or set_id
     for attempt in range(1, 7):
         try:
             use_angle = angle if attempt <= 2 else None          # from the 3rd try: let it pick a fresh angle
@@ -171,11 +179,34 @@ def stage_script(run, source, angle, set_id):
                 from agents.evolution_writer import run as write
                 path = write(angle=use_angle, set_id=set_id, render=False)
             else:
-                from agents.showrunner import run as write
-                path = write(angle=use_angle, render=False)
+                from agents.showrunner import NoUnusedStorySets, plan_new_story_set, run as write
+                try:
+                    path = write(angle=use_angle, render=False, set_id=set_id)
+                except NoUnusedStorySets as exc:
+                    if set_id or not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True):
+                        raise GiveUp(str(exc)) from exc
+                    plan = run["new_set_plan"]
+                    if not plan:
+                        run.event("script", "all existing Max subjects are consumed; researching a new one")
+                        plan = plan_new_story_set()
+                        run.set(new_set_plan=plan)
+                    from agents.set_builder import build_story_set
+                    run.event("set", "building and visually validating a new Max set",
+                              detail=f"{plan['subject']} ({plan['set_id']})")
+                    status = build_story_set(plan["build_brief"], plan["set_id"],
+                                             rounds=_int("SET_BUILD_ROUNDS", 4))
+                    if not status.get("accepted"):
+                        raise GiveUp(f"new set '{plan['set_id']}' did not pass visual validation; "
+                                     f"continue it in {status.get('work')}")
+                    set_id = plan["set_id"]
+                    run.set(generated_set=set_id, set=set_id, set_build=status)
+                    run.event("set", "new Max set accepted and registered", detail=set_id)
+                    path = write(angle=use_angle, render=False, set_id=set_id)
             run.set(film=path)
             run.event("script", "script written", detail=os.path.basename(path))
             return path
+        except GiveUp:
+            raise
         except Exception as exc:                          # noqa: BLE001
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "script")
@@ -322,6 +353,14 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
         r.set(status="failed", error=str(exc))
         log.error(f"[autopilot] STOPPED: {exc}\n  run log: {r.path}\n  continue later with: "
                   f"python -m agents.autopilot --resume \"{r.path}\"")
+        raise
+    except KeyboardInterrupt:
+        r.set(status="interrupted", error="stopped by user")
+        log.error(f"[autopilot] INTERRUPTED\n  run log: {r.path}")
+        raise
+    except BaseException as exc:
+        r.set(status="failed", error=str(exc) or type(exc).__name__)
+        log.exception(f"[autopilot] FAILED: {exc}\n  run log: {r.path}")
         raise
 
 

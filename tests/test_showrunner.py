@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from unittest.mock import patch
 
 from engine.sets import spec
 from agents import showrunner
@@ -84,6 +85,25 @@ class HardCheckTests(unittest.TestCase):
     def test_real_numbers_allowed(self):
         for line in ("It needs 60 kilometres an hour.", "A bar every 25 centimetres.", "Double speed, four times lift."):
             self.assertIsNone(showrunner.GAG_RE.search(line), line)
+
+
+class TopicSelectionTests(unittest.TestCase):
+    def test_story_subject_is_consumed_after_first_script(self):
+        history = [{"set": "nuclear_story", "title": "old", "angle": "old"}]
+        available = showrunner.available_topic_sets(["nuclear_story", "boat_story"], history)
+        self.assertEqual(available, ["boat_story"])
+
+    def test_all_consumed_stops_before_any_ai_call(self):
+        history = [{"set": set_id} for set_id in ("pool_story", "plane_story", "nuclear_story", "boat_story")]
+        with patch.object(showrunner, "_history", return_value=history), \
+                patch.object(showrunner, "_call", side_effect=AssertionError("AI must not run")):
+            with self.assertRaisesRegex(showrunner.NoUnusedStorySets, "already been used"):
+                showrunner.pick_topic()
+
+    def test_explicit_repeat_override(self):
+        history = [{"set": "nuclear_story"}]
+        with patch.dict(os.environ, {"SHOWRUNNER_ALLOW_REPEATS": "1"}):
+            self.assertEqual(showrunner.available_topic_sets(["nuclear_story"], history), ["nuclear_story"])
 
 
 class ToFilmTests(unittest.TestCase):
