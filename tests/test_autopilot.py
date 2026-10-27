@@ -159,6 +159,7 @@ class ScriptAndCheckTests(_Env):
 
         accepted = {"accepted": True, "set": "heat_pump_story", "work": self.tmp}
         with patch("agents.showrunner.run", write), \
+                patch.dict(os.environ, {"SET_BUILD_ROUNDS": "4"}), \
                 patch("agents.showrunner.plan_new_story_set", return_value=plan), \
                 patch("agents.set_builder.build_story_set", return_value=accepted) as build:
             path = ap.stage_script(self.run, "cutaway", None, None)

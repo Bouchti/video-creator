@@ -433,14 +433,15 @@ def produce(args):
     else:
         film_json = os.path.join(films, f"{film_source}.json")
         args._film_json = film_json
+    name = args.film
     film = json.load(open(film_json, encoding="utf-8"))
     # Data-driven films (a 3D set + one action per beat) all render through a generic runner:
     # "evolution" films (no hook/rewind, e.g. bridge_evolution) through evolution_film.py.
     evolution = film.get("format") == "evolution"
     film_py = os.path.join(films, "evolution_film.py" if evolution else
-                           "cutaway_film.py" if film.get("set") else f"{args.film}_film.py")
+                           "cutaway_film.py" if film.get("set") else f"{name}_film.py")
     beats = film["beats"]
-    work = os.path.join(PROJECT_ROOT, "output", f"{args.film}_work")
+    work = os.path.join(PROJECT_ROOT, "output", f"{name}_work")
     os.makedirs(work, exist_ok=True)
 
     # ---- voice + timing ----
@@ -625,6 +626,7 @@ SFX_GAIN, WHOOSH_GAIN = 0.32, 0.45
 
 
 def _finish(args, film, beats, spans, words, total, work, voice_path, video):
+    name = os.path.basename(os.path.normpath(work))[:-len("_work")]   # the film's name (work = <name>_work)
     # ---- sound design ----
     cuts = []                                          # no whoosh on scene changes (too noisy)
     pops = [s["start"] / FPS + 0.18 for b, s in zip(beats, spans) if _overlay(b)]
@@ -654,10 +656,10 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     ass = os.path.join(work, "captions.ass")
     words_to_ass(script_word_timings(beats, words, total), ass, mode=film.get("captions", "phrase"))
     final = burn_subtitles(merged, ass)
-    out = os.path.join(get_output_dir(), f"{args.film}.mp4")
+    out = os.path.join(get_output_dir(), f"{name}.mp4")
     shutil.move(final, out)
     os.remove(merged)
-    preview = os.path.join(get_output_dir(), f"{args.film}_preview.mp4")
+    preview = os.path.join(get_output_dir(), f"{name}_preview.mp4")
     subprocess.run([FFMPEG, "-v", "error", "-y", "-i", out, "-c:v", "copy", "-c:a", "libopus", "-b:a", "128k",
                     preview], check=True)
     log.info(f"\nFILM: {out} ({get_duration(out):.1f}s)\nVS Code preview: {preview}")

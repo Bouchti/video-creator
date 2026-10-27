@@ -48,6 +48,11 @@ class Shot:
     continuity: dict[str, Any] = field(default_factory=dict)
     subject_action: str = ""
     camera_action: str = ""
+    # Place and light labels from the script: a shot opens on the last frame of the latest earlier
+    # shot with the same pair. Empty (older projects) means it always continues the previous shot.
+    scene: str = ""
+    light: str = ""
+    cast: list[str] = field(default_factory=list)
     status: str = "pending"
     backend: str | None = None
     attempts: list[dict[str, Any]] = field(default_factory=list)
@@ -142,6 +147,25 @@ class ProjectManifest:
 
 def completed_shots(manifest: ProjectManifest) -> int:
     return sum(shot.status == "accepted" and bool(shot.output) for shot in manifest.shots)
+
+
+def estimated_remaining_seconds(manifest: ProjectManifest, default_shot_seconds: float = 360.0) -> float:
+    """Remaining wall time from finished shots: every take, its review and retakes included."""
+    spent = []
+    for shot in manifest.shots:
+        if shot.status != "accepted" or not shot.attempts:
+            continue
+        total = 0.0
+        for attempt in shot.attempts:
+            started, ended = attempt.get("started_at"), attempt.get("ended_at")
+            if started is not None and ended is not None and ended > started:
+                total += float(ended) - float(started)
+            else:
+                total += float(attempt.get("generation_seconds") or 0)
+        if total > 0:
+            spent.append(total)
+    per_shot = sum(spent) / len(spent) if spent else default_shot_seconds
+    return per_shot * (len(manifest.shots) - completed_shots(manifest))
 
 
 def total_timeline_frames(manifest: ProjectManifest) -> int:

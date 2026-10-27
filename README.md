@@ -20,11 +20,10 @@ Copy-Item .env.example .env
 
 Fill in at least:
 
-- install the Codex CLI, run `codex login`, and keep `SHOWRUNNER_BACKEND=codex` to use your
-  eligible ChatGPT subscription for the Blender showrunner and visual review.
-- install Claude Code and log in once; `SHOWRUNNER_FALLBACK_BACKEND=subscription` moves the
-  remaining script, set-builder and visual-review work to Claude Code if Codex reaches its limit.
-- `ANTHROPIC_API_KEY` only if you intentionally select the paid Anthropic API backend.
+- install Claude Code and log in once; `SHOWRUNNER_BACKEND=subscription` uses it as the primary
+  script, set-builder and visual-review backend.
+- install the Codex CLI and run `codex login`; `SHOWRUNNER_FALLBACK_BACKEND=codex` moves the
+  remaining work to Codex if Claude reaches its session limit.
 - `TAVILY_API_KEY` for autonomous current-topic research.
 - one of `ELEVENLABS_API_KEY` through `ELEVENLABS_API_KEY_4` for narration.
 - the local MiniMax/Wan service settings installed by `setup.ps1`.
@@ -73,8 +72,8 @@ for showrunning, visual review and set building; both CLIs log token/cache usage
 in an isolated source mirror and copies back only the three allowed set files, so it cannot
 overwrite changes made in the real repository during a long generation.
 
-The default backend chain is Codex first, Claude Code second. A Codex quota/usage-limit response
-switches the process once and keeps Claude active for the rest of that run, avoiding repeated Codex
+The default backend chain is Claude Code first, Codex second. A Claude quota/usage-limit response
+switches the process once and keeps Codex active for the rest of that run, avoiding repeated Claude
 failures. Set `SHOWRUNNER_FALLBACK_BACKEND=` to disable this behavior.
 
 After an autonomous video passes final validation, raw Blender PNG frames and compositing caches

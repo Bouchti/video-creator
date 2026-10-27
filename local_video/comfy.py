@@ -16,6 +16,9 @@ class ComfyError(RuntimeError):
 
 
 class ComfyClient:
+    # How long status polls may keep failing before a running job is given up.
+    CONNECTION_GRACE_SECONDS = 120
+
     def __init__(self, base_url: str, timeout: int = 3600, poll_seconds: float = 2.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -86,8 +89,19 @@ class ComfyClient:
         on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self.timeout
+        last_contact = time.monotonic()
         while time.monotonic() < deadline:
-            response = requests.get(f"{self.base_url}/history/{prompt_id}", timeout=30)
+            try:
+                response = requests.get(f"{self.base_url}/history/{prompt_id}", timeout=30)
+            except requests.RequestException as exc:
+                # A busy GPU host can drop a status poll; only a sustained outage ends the job.
+                if time.monotonic() - last_contact > self.CONNECTION_GRACE_SECONDS:
+                    raise ComfyError(
+                        f"ComfyUI connection lost for over {self.CONNECTION_GRACE_SECONDS}s: {exc}"
+                    ) from exc
+                time.sleep(self.poll_seconds)
+                continue
+            last_contact = time.monotonic()
             if not response.ok:
                 raise ComfyError(f"ComfyUI history failed: HTTP {response.status_code}")
             value = response.json().get(prompt_id)

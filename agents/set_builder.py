@@ -102,7 +102,8 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
     edits made in the real repository while a long set-building turn was still running.
     """
     from agents.showrunner import (UsageLimit, _API_ENV, _capped_effort, _record_claude_usage,
-                                   activate_fallback, active_backend, codex_unavailable)
+                                   activate_fallback, active_backend, check_budget, codex_unavailable)
+    check_budget("set builder")          # the costliest call in the pipeline: never start one over budget
     backend = active_backend()
     story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
     measure_cmd = f"python -m agents.set_builder --measure {story_id}" if (story_id or "").endswith("_story") else None
@@ -155,7 +156,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             except RuntimeError as exc:
                 if codex_unavailable(exc):
                     limit = UsageLimit(str(exc)[:500])
-                    if activate_fallback(str(limit)[:180]):
+                    if activate_fallback(str(limit)[:180], failed_backend=backend):
                         backend = active_backend()
                         rules = rules_for(backend)
                     else:
@@ -186,7 +187,10 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 raise RuntimeError(f"claude -p failed: {tail[-400:]}")
             result_text = str(data.get("result") or "")
             if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
-                raise UsageLimit(result_text[:300])
+                limit = UsageLimit(result_text[:300])
+                if activate_fallback(str(limit)[:180], failed_backend=backend):
+                    return claude_agent(prompt, allowed, effort=effort, timeout=timeout)
+                raise limit
             if data.get("is_error"):
                 raise RuntimeError(f"claude -p error: {result_text[:300]}")
             _record_claude_usage(data, "set builder")
@@ -267,8 +271,11 @@ Set id: {set_id}
 {GUIDE}
 
 Design first: a ladder of 4-6 stages (the simplest version first, the most advanced last), each
-replaced because a real problem appears (problem actions between stages, like the bridge set's
-widen_* / heat / wind), 9-13 actions in total, every problem answered by the next stage, an outro.
+replaced because a real NEW LOAD OR NEED appears that the current stage cannot handle and the next one
+answers (problem actions between stages, like the bridge set's
+heavy_load / railway / heat / wind), 9-13 actions in total, every problem answered by the next stage, an outro.
+Never fake a cause (a river that widens by itself, a bridge that collapses for no reason): a viewer must
+see WHY the old design fails and how the new one fixes exactly that.
 Every stage must be buildable from simple shapes and look great from drone height; every problem
 must be VISIBLE (something sags, sinks, cracks, floods, burns, collapses...). Give each action a
 precise "shows" description, because the scene reviewer checks the render against it.
@@ -403,14 +410,31 @@ def fix_code(set_id: str, error: str, allowed=None):
 
 def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None):
     """Called by make_film (SCENE_POLICY=fix) and by the builder: the reviewer's rejected windows →
-    Claude edits the set's builder."""
+    Claude edits the set's builder.
+
+    A whole-film review can reject a dozen windows at once. The agent reads three frames per window
+    with the Read tool, and each read grows the turn it is resent with, so the worst windows are sent
+    first and the list is capped (SCENE_FIX_MAX_WINDOWS). The rest come back on the next round.
+    """
+    worst = sorted(rejected, key=lambda r: (not r.get("fatal_problems"), r.get("average_score") or 0))
+    try:                                  # a typo in .env must not break the repair path
+        cap = max(1, int(os.getenv("SCENE_FIX_MAX_WINDOWS") or 6))
+    except ValueError:
+        cap = 6
+    sent, held = worst[:cap], worst[cap:]
     lines = []
-    for r in rejected:
+    for r in sent:
         imgs = ", ".join(os.path.abspath(p) for p in r.get("images", []))
         lines.append(f"- window {r.get('window')} ({r.get('t0', 0):.1f}-{r.get('t1', 0):.1f}s), action "
                      f"'{r.get('action')}' (method a_{str(r.get('action')).split('+')[0]}): "
                      f"fatal: {r.get('fatal_problems')}; problems: {r.get('problems')}; reviewer's fix: "
                      f"{r.get('fix')}; frames: {imgs}")
+    if held:
+        log.info(f"[set_builder] {len(rejected)} window(s) rejected; repairing the worst {len(sent)} this "
+                 f"round (SCENE_FIX_MAX_WINDOWS={cap}), {len(held)} deferred to the next round")
+        lines.append("\nThese windows were ALSO rejected but are not detailed here; prefer a root-cause fix "
+                     "that covers them too over a patch for the windows above only: "
+                     + ", ".join(f"{r.get('window')} ({r.get('action')})" for r in held))
     allowed = allowed or [f"engine/sets/{set_id}.py"]
     before = _content_hashes(allowed)
     if keep:

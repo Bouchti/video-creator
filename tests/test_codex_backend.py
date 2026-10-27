@@ -9,6 +9,18 @@ from agents import codex_cli, scene_validator as sv, set_builder, showrunner
 
 
 class CodexCliTests(unittest.TestCase):
+    def test_legacy_claude_schema_is_made_strict_recursively(self):
+        schema = {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "detail": {"type": "object", "properties": {"note": {"type": "string"}}},
+        }, "required": ["name"]}
+        strict = codex_cli.strict_schema(schema)
+        self.assertEqual(strict["required"], ["name", "detail"])
+        self.assertFalse(strict["additionalProperties"])
+        self.assertEqual(strict["properties"]["detail"]["required"], ["note"])
+        self.assertFalse(strict["properties"]["detail"]["additionalProperties"])
+        self.assertNotIn("additionalProperties", schema)
+
     def test_structured_turn_uses_chatgpt_login_path_and_reports_usage(self):
         seen = {}
 
@@ -138,6 +150,18 @@ class CodexCliTests(unittest.TestCase):
             self.assertEqual(showrunner.active_backend(), "subscription")
         claude.assert_called_once()
 
+    def test_claude_usage_limit_switches_remaining_calls_to_codex(self):
+        with patch.object(showrunner, "BACKEND", "subscription"), \
+                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "codex"}), \
+                patch.object(showrunner, "_call_cli", side_effect=showrunner.UsageLimit("limit resets 1:50pm")) as claude, \
+                patch.object(showrunner, "_call_codex", return_value={"ok": True}) as codex:
+            self.assertEqual(showrunner._call("s", "p", {"type": "object"}), {"ok": True})
+            self.assertEqual(showrunner.active_backend(), "codex")
+            self.assertEqual(showrunner._call_once("s2", "p2"), {"ok": True})
+        self.assertEqual(claude.call_count, 1)
+        self.assertEqual(codex.call_count, 2)
+
 
 class CodexVisionTests(unittest.TestCase):
     def test_batch_review_returns_each_window(self):
@@ -145,7 +169,8 @@ class CodexVisionTests(unittest.TestCase):
                 "fatal_problems": [], "problems": [], "fix": ""}
         windows = [({"window": n, "beat": n, "action": "a", "part": "whole", "t0": 0, "t1": 1,
                      "shows": "thing", "text": "words"}, [("start", f"{n}.jpg")]) for n in (1, 2)]
-        with patch.object(sv, "_review_codex", return_value={"reviews": [
+        with patch.object(sv, "_backend", return_value="codex"), \
+                patch.object(sv, "_review_codex", return_value={"reviews": [
                 {"window": 1, **good}, {"window": 2, **good}]}) as review:
             result = sv.review_batch(windows, "subject")
         self.assertEqual(set(result), {1, 2})
@@ -177,6 +202,21 @@ class CodexVisionTests(unittest.TestCase):
             result = sv.review_batch(windows, "subject")
         self.assertTrue(result[1]["valid"])
         claude.assert_called_once()
+
+    def test_claude_vision_limit_falls_back_to_codex(self):
+        schema_result = {"visual_match": 8, "readability": 8, "image_quality": 8, "continuity": 8,
+                         "fatal_problems": [], "problems": [], "fix": ""}
+        with patch.object(showrunner, "BACKEND", "subscription"), \
+                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "codex",
+                                        "SCENE_REVIEW_BACKEND": ""}), \
+                patch.object(sv, "_review_cli", side_effect=showrunner.UsageLimit("limit resets 1:50pm")), \
+                patch.object(sv, "_review_codex", return_value=schema_result) as codex:
+            result = sv.review_images({"window": 1, "beat": 1, "action": "a", "part": "whole",
+                                       "t0": 0, "t1": 1, "shows": "thing", "text": "words"},
+                                      [("start", "1.jpg")], "subject")
+        self.assertTrue(result["valid"])
+        codex.assert_called_once()
 
 
 class ClaudeParityTests(unittest.TestCase):

@@ -44,6 +44,39 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(recipe["shots"][0]["camera"], "dolly_in")
         self.assertEqual(recipe["shots"][0]["archetype"], "water")
 
+    def test_the_film_stays_in_one_set_and_acts_out_its_beats(self):
+        texts = ["This lake is a battery.", "Cheap power pumps water uphill.",
+                 "At peak demand it falls through the turbine.", "Power flows to the grid.", "Two lakes, one battery."]
+        script = {"video_title": "Pumped hydro", "beats": [
+            {"text": t, "visual": {"description": "a road with a truck" if k == 3 else t}} for k, t in enumerate(texts)]}
+        recipe = build_recipe(script, 30)
+        self.assertEqual({s["archetype"] for s in recipe["shots"]}, {"water"})   # one place, not a road cut-in
+        self.assertEqual([s["action"] for s in recipe["shots"]],
+                         ["finale", "pump_up", "release_down", "power_out", "finale"])   # cold open first
+        recipe["shots"][1]["action"] = "traffic"                            # not something the water set can do
+        with self.assertRaisesRegex(ValueError, "Unsupported Unreal action"):
+            validate_recipe(recipe)
+
+    def test_ai_plans_the_actions_and_keywords_stand_in_without_a_backend(self):
+        from unreal_video.runner import plan_actions
+        recipe = build_recipe(_script(), 30)
+        with patch("unreal_video.runner.ai_router.ask", return_value={"actions": ["pump_up", "store"]}):
+            plan_actions(recipe, _script())
+        self.assertEqual([s["action"] for s in recipe["shots"]], ["pump_up", "finale"])   # the last is the payoff
+        recipe = build_recipe(_script(), 30)
+        with patch("unreal_video.runner.ai_router.ask", side_effect=RuntimeError("no backend")):
+            plan_actions(recipe, _script())
+        self.assertEqual([s["action"] for s in recipe["shots"]], ["finale", "finale"])   # cold open, payoff
+
+    def test_every_set_offered_to_the_writer_is_built_by_unreal(self):
+        import re
+        from unreal_video.planner import SET_SHOWS
+        engine = (ROOT / "unreal" / "VideoCreatorUE" / "Content" / "Python" / "build_sequence.py").read_text("utf-8")
+        built = set(re.findall(r'"([a-z]+)": set_[a-z]+', engine))
+        self.assertEqual(set(SET_SHOWS) - built, set())
+        self.assertEqual(build_recipe({"video_title": "How a rocket launch works", "beats": [
+            {"text": "Fuel flows in."}, {"text": "It lifts off."}]}, 30)["world"]["archetype"], "space")
+
     def test_recipe_rejects_embedded_audio_or_captions(self):
         recipe = build_recipe(_script(), 30)
         recipe["render"]["audio"] = True

@@ -1,5 +1,5 @@
 {
-  "title": "Every bridge is the answer to a wider river",
+  "title": "Every bridge fixes the last one's weakness",
   "set": "bridge_evolution",
   "format": "evolution",
   "voice": "energetic",
@@ -8,34 +8,84 @@
   "beat_pause": 0.35,
   "tail": 1.5,
   "beats": [
-    {"id": "plank", "action": "plank",
-     "text": "You've built a bridge: a few planks across the stream, and the village can cross."},
-    {"id": "widen_arch", "action": "widen_arch",
-     "text": "But the river gets wider, and planks that long sag and snap."},
-    {"id": "arch", "action": "arch",
-     "text": "So you curve it. Wedged stones lean on each other, the keystone locks them in, and the weight gets squeezed into the banks."},
-    {"id": "widen_truss", "action": "widen_truss",
-     "text": "Wider still? A longer arch needs piers right where the ships sail."},
-    {"id": "truss", "action": "truss",
-     "text": "So you build with triangles. Push a square and it folds flat; a triangle can't change shape. Steel triangles carry a whole train.",
-     "overlay": {"type": "label", "text": "Triangles don't fold"}},
-    {"id": "widen_suspension", "action": "widen_suspension",
-     "text": "Now it's 120 metres. Too far for any truss.",
-     "overlay": {"type": "stat", "value": "120 m", "text": "river width"}},
-    {"id": "suspension", "action": "suspension",
-     "text": "So you hang the road: two towers, two huge cables anchored in the ground, and hangers holding up the deck.",
-     "overlay": {"type": "label", "text": "Cables only pull"}},
-    {"id": "heat", "action": "heat",
-     "text": "But summer comes. Hot steel grows, and with nowhere to go, the deck buckles."},
-    {"id": "expansion_joint", "action": "expansion_joint",
-     "text": "So you add an expansion joint: steel fingers that let the deck slide in and out."},
-    {"id": "wind", "action": "wind",
-     "text": "Then the wind picks up and the thin deck twists, just like Tacoma Narrows in 1940."},
-    {"id": "stiffening", "action": "stiffening",
-     "text": "So you brace it. A deep truss stiffens the deck, and the wind just slides past."},
-    {"id": "finale", "action": "finale",
-     "text": "Today the longest span is over two kilometres. Which bridge would you trust in a storm?",
-     "overlay": {"type": "stat", "value": "2,023 m", "text": "longest span (Turkey)"}}
+    {
+      "id": "plank",
+      "action": "plank",
+      "text": "You've built a bridge: a few planks over the stream."
+    },
+    {
+      "id": "heavy_load",
+      "action": "heavy_load",
+      "text": "Then a wagon of stone rolls on. The top squeezes, the bottom stretches, and wood tears. Snap."
+    },
+    {
+      "id": "arch",
+      "action": "arch",
+      "text": "So you build an arch. Its stones only squeeze each other, and stone loves that. The wagon rolls right across."
+    },
+    {
+      "id": "railway",
+      "action": "railway",
+      "text": "Then the railway must cross the wide river, where tall ships sail. Arches here put piers in their path.",
+      "overlay": {
+        "type": "stat",
+        "value": "40 m",
+        "text": "river width"
+      }
+    },
+    {
+      "id": "truss",
+      "action": "truss",
+      "text": "So you use triangles. Push a square and it folds; a triangle can't. One light steel span carries the train.",
+      "overlay": {
+        "type": "label",
+        "text": "Triangles don't fold"
+      }
+    },
+    {
+      "id": "wide_bay",
+      "action": "wide_bay",
+      "text": "Then the city must cross a whole bay. A truss that long sags under its own weight."
+    },
+    {
+      "id": "suspension",
+      "action": "suspension",
+      "text": "So you hang the road from two towers and two huge cables. Steel wire loves being pulled.",
+      "overlay": {
+        "type": "label",
+        "text": "Cables only pull"
+      }
+    },
+    {
+      "id": "heat",
+      "action": "heat",
+      "text": "But summer comes. Hot steel grows, and the trapped deck buckles."
+    },
+    {
+      "id": "expansion_joint",
+      "action": "expansion_joint",
+      "text": "So you add steel fingers that let the deck slide in and out."
+    },
+    {
+      "id": "wind",
+      "action": "wind",
+      "text": "Then the wind twists the thin deck, like Tacoma Narrows in 1940."
+    },
+    {
+      "id": "stiffening",
+      "action": "stiffening",
+      "text": "So you brace it with a deep truss, and the wind slides past."
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "Today the longest span is over two kilometres. Which bridge would you trust in a storm?",
+      "overlay": {
+        "type": "stat",
+        "value": "2,023 m",
+        "text": "longest span (Turkey)"
+      }
+    }
   ],
   "cta": "Which bridge would you trust in a storm?"
 }

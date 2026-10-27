@@ -123,6 +123,12 @@ def _is_usage_limit(exc):
     return isinstance(exc, UsageLimit) or ("limit" in str(exc).lower() and "reset" in str(exc).lower())
 
 
+def _is_budget(exc):
+    """A spent token budget is not a transient failure: retrying only spends more."""
+    from agents.showrunner import BudgetExceeded
+    return isinstance(exc, BudgetExceeded)
+
+
 def _set_file(set_id):
     return os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py")
 
@@ -229,6 +235,8 @@ def stage_script(run, source, angle, set_id):
         except GiveUp:
             raise
         except Exception as exc:                          # noqa: BLE001
+            if _is_budget(exc):
+                raise GiveUp(str(exc)) from exc
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "script")
                 continue
@@ -290,6 +298,8 @@ def stage_render(run, film_json):
                 except RepairNotApplied:
                     raise
                 except Exception as fx:                   # noqa: BLE001
+                    if _is_budget(fx):
+                        raise GiveUp(str(fx)) from fx
                     if _is_usage_limit(fx):
                         _wait_for_claude(fx, run, "render")
                     else:
@@ -304,6 +314,8 @@ def stage_render(run, film_json):
             raise GiveUp(f"automatic scene repair could not edit the set; stopped before wasting another render: "
                          f"{exc}") from exc
         except Exception as exc:                          # noqa: BLE001
+            if _is_budget(exc):
+                raise GiveUp(str(exc)) from exc
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "render")
             elif _voice_error(exc):

@@ -20,6 +20,7 @@ env/
 
 # Generated media and runtime data
 output/
+models/
 logs/
 *.mp4
 *.mp3
@@ -38,3 +39,18 @@ Thumbs.db
 
 # Generated sound-effect library (made once with ElevenLabs, reused by every video)
 !assets/sfx/*.mp3
+
+# Machine-specific ComfyUI workflow (model filenames)
+config/*.local.json
+
+# CC0 3D asset packs (python assets/fetch_cc0.py)
+assets/cc0/
+
+# Unreal: engine caches and Fab content (re-add from your Fab library; see README)
+unreal/VideoCreatorUE/Binaries/
+unreal/VideoCreatorUE/Build/
+unreal/VideoCreatorUE/DerivedDataCache/
+unreal/VideoCreatorUE/Intermediate/
+unreal/VideoCreatorUE/Saved/
+unreal/VideoCreatorUE/Content/*
+!unreal/VideoCreatorUE/Content/Python/

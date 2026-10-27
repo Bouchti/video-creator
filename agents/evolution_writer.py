@@ -35,9 +35,13 @@ The format, beat by beat:
 - THE OPENING (beat 1): the simplest version, already built, in one plain line in the second
   person ("You've built a bridge: a few planks over a stream."). Concrete, calm, no question, no
   "Did you know". It sets up the ladder.
-- PROBLEM BEATS: the world raises the bar in one short line ("But the river gets wider.", "Wider
-  still?", "But summer comes."), then the real physical reason the current design fails, in plain
-  words. Short. A little ominous. Vary the refrain; never the same opener twice in a row.
+- PROBLEM BEATS: a NEW LOAD OR NEED arrives in one short line ("Then a wagon of stone rolls on.",
+  "Then the railway comes.", "But summer comes."), then the real physical reason the current design
+  can't handle it, in plain words. Short. A little ominous. Vary the refrain; never the same opener
+  twice in a row. Never invent a cause the model facts don't give (a river does not widen by itself).
+- CAUSAL CHAIN: every fix must answer exactly the failure just shown, and its "why it works" line
+  must name that link (the planks snapped because the bottom stretched; an arch only squeezes).
+  A viewer who misses one beat must still see why each new bridge exists.
 - SOLUTION BEATS start with "So you..." (or a close variation) and name the new design, then say
   WHY it works in ONE memorable, quotable sentence ("Push a square and it folds; a triangle
   can't."). Name what the viewer SEES on screen (stones, triangles, cables, the white drawings).
@@ -151,7 +155,8 @@ def critique(script, topic, facts, hard_problems):
     prompt = f"""You are the channel's head editor. Grade this evolution script ruthlessly (1-10 each):
 opening (calm, concrete, makes you want the next step), clarity (a 12-year-old follows every beat),
 escalation (each problem raises the stakes; refrains varied), problem_solution (each failure names
-its REAL cause and the next fix clearly answers it and says why it works), accuracy (every claim
+its REAL cause, a new load or need, never "the river gets wider", and the next fix answers exactly
+that failure and says why it works; score 4 or less if any step's logic doesn't follow), accuracy (every claim
 matches the fact sheet or model facts), pacing, visual_sync (words match what each action shows),
 learn (would a curious adult say "I didn't know that!").
 
@@ -220,7 +225,8 @@ def to_film(script, topic, facts, review=None):
             "cta": sr.closing_question(beats[-1]["text"]) if beats else None,
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
-                     "created": datetime.datetime.now().isoformat(timespec="seconds"), "model": sr.MODEL}}
+                     "created": datetime.datetime.now().isoformat(timespec="seconds"),
+                     "model": sr.CODEX_MODEL if sr.active_backend() == "codex" else sr.CLI_MODEL}}
 
 
 def run(angle=None, set_id=None, render=True, preview=False):

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
+from agents import ai_router
 from config.paths import CLAUDE_MODEL, get_env_path
 
 log = logging.getLogger("pipeline")
@@ -58,17 +59,17 @@ FINAL_REVIEW_TOOL = {
 
 def review_enabled() -> bool:
     value = os.getenv("LOCAL_VIDEO_VISION_QC", "1").strip().lower()
-    return value not in {"0", "false", "no", "off"} and bool(os.getenv("ANTHROPIC_API_KEY"))
+    return value not in {"0", "false", "no", "off"} and ai_router.available()
 
 
-def _sample_frames(path: str | Path, ratios=(0.05, 0.5, 0.95)) -> list[str]:
+def _sample_frames(path: str | Path, ratios=(0.05, 0.5, 0.95)) -> list[bytes]:
     try:
         import cv2
     except ImportError:
         return []
     capture = cv2.VideoCapture(str(path))
     count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    encoded: list[str] = []
+    encoded: list[bytes] = []
     for ratio in ratios:
         capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, round((count - 1) * ratio)))
         ok, frame = capture.read()
@@ -80,12 +81,12 @@ def _sample_frames(path: str | Path, ratios=(0.05, 0.5, 0.95)) -> list[str]:
             frame = cv2.resize(frame, (round(width * scale), round(height * scale)))
         success, data = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         if success:
-            encoded.append(base64.b64encode(data.tobytes()).decode("ascii"))
+            encoded.append(data.tobytes())
     capture.release()
     return encoded
 
 
-def _encode_still(path: str | Path) -> str | None:
+def _encode_still(path: str | Path) -> bytes | None:
     try:
         import cv2
         frame = cv2.imread(str(path))
@@ -96,70 +97,101 @@ def _encode_still(path: str | Path) -> str | None:
         if scale < 1:
             frame = cv2.resize(frame, (round(width * scale), round(height * scale)))
         success, data = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-        return base64.b64encode(data.tobytes()).decode("ascii") if success else None
+        return data.tobytes() if success else None
     except Exception:
         return None
+
+
+def _identity_stills(shot: Any, manifest: Any, start_frame: Path | None) -> list[tuple[str, bytes]]:
+    """Each on-screen character's latest accepted look, so a changed outfit is caught after a cut."""
+    stills: list[tuple[str, bytes]] = []
+    used = {start_frame.resolve()} if start_frame else set()
+    for name in getattr(shot, "cast", None) or []:
+        for prior in reversed(getattr(manifest, "shots", [])[:getattr(shot, "index", 0)]):
+            if name not in (getattr(prior, "cast", None) or []) or prior.status != "accepted" or not prior.last_frame:
+                continue
+            frame = (Path(manifest.project_dir) / prior.last_frame).resolve()
+            if frame in used or not frame.is_file():
+                break
+            data = _encode_still(frame)
+            if data:
+                used.add(frame)
+                stills.append((f"Identity reference still for {name} (an earlier accepted shot)", data))
+            break
+    return stills
 
 
 def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manifest: Any) -> dict[str, Any]:
     """Return an acceptance report. Creative review is fail-closed by default."""
     if not review_enabled():
         valid = os.getenv("LOCAL_VIDEO_ALLOW_QC_SKIP", "0") == "1"
-        return {"valid": valid, "skipped": True, "reason": "vision QC disabled or API key unavailable"}
+        return {"valid": valid, "skipped": True, "reason": "vision QC disabled or Claude Code unavailable"}
     frames = _sample_frames(path)
     if not frames:
         return {"valid": False, "skipped": True, "reason": "could not sample video frames"}
-    content: list[dict[str, Any]] = []
+    stills: list[tuple[str, bytes]] = []
     if previous_frame and previous_frame.is_file():
         prior = _encode_still(previous_frame)
         if prior:
-            content.extend([
-                {"type": "text", "text": (
-                    "Intended first-frame composition and identity reference:"
-                    if getattr(shot, "index", 0) == 0 else
-                    "Previous shot's final continuity frame:"
-                )},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": prior}},
-            ])
+            stills.append((
+                "Intended first-frame composition and identity reference"
+                if getattr(shot, "index", 0) == 0 else
+                "Start image: the final frame of an earlier shot in this place and light",
+                prior,
+            ))
+    stills.extend(_identity_stills(shot, manifest, previous_frame))
     for index, frame in enumerate(frames, 1):
-        content.extend([
-            {"type": "text", "text": f"Candidate clip frame {index} of {len(frames)}:"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": frame}},
-        ])
-    content.append({"type": "text", "text": (
+        stills.append((f"Candidate clip frame {index} of {len(frames)}", frame))
+    light = getattr(shot, "light", "")
+    cast = getattr(shot, "cast", None)
+    prompt = (
         "Review this candidate as a pragmatic film editor judging whether it works in the finished story. "
         "It must render only this assigned beat:\n"
         f"Visual action: {shot.subject_action}\nNarration meaning: {shot.narration}\n"
-        f"World and identity lock: {shot.continuity}\n"
+        + (f"Light and sky in this shot: {light}\n" if light else "")
+        + (f"Named characters on screen: {', '.join(cast) if cast else 'none (anonymous figures only)'}\n"
+           if cast is not None and getattr(shot, "scene", "") else "")
+        + f"World and identity lock: {shot.continuity}\n"
         "Fatal problems are limited to: a clearly unrelated scene or story reset, montage across multiple "
-        "locations, duplicate protagonist, seriously broken anatomy, corrupt/smeared frames, visible text or "
-        "logos, or a major identity/continuity break. Do not mark small differences in camera angle, subject "
+        "locations, duplicate protagonist (including background extras dressed as a named character: same "
+        "hair, cloak, colours or signature item), seriously broken anatomy, corrupt/smeared frames, visible text or "
+        "logos, a major identity/continuity break, a dream-like morph or dissolve from one place or time into "
+        "another inside the clip, light or sky that contradicts this shot's stated light (an eclipse, night, "
+        "storm, or fire that belongs to another moment of the story, or its absence when this shot needs it), "
+        "a named character who should not be in this shot, or a named character whose garments, headwear, "
+        "or colours clearly differ from the identity lock or their identity reference still, or opposing sides "
+        "(enemies, rival armies) shown side by side moving the same way, mixed into one crowd, or on the "
+        "wrong side of the frame for the screen geography in the lock, or a held item (shield, weapon, "
+        "prop) present or missing against the identity lock, such as a dropped shield back in a hand. "
+        "Do not mark small differences in camera angle, subject "
         "scale, body drift, visibility of minor props, or ambiguous reflections as fatal when the clip is "
         "otherwise coherent and tells the correct beat. A transparent mask or visor is still present when the "
         "face is visible behind its frame; colored light reflected in eyes or glass is not broken anatomy. "
         "Camera movement and the resulting background perspective change are intentional, not a scene reset. "
         "Large opaque bubble clumps attached to a face or body, fused equipment, and implausible effect geometry "
         "must reduce image-quality and immersion scores. "
+        "The film must look like real camera footage. A painterly, illustrated, CGI or video-game look, dreamy "
+        "haze or glow over the whole frame, waxy plastic skin, or objects that melt or morph between frames is "
+        "fatal; milder softness, oversaturation or an artificial sheen must lower the image-quality score. "
         "Reserve fatal findings for concrete, visually unambiguous failures and describe the exact visible "
-        "evidence. Judge narrative function and immersion, not pixel-perfect obedience. The candidate must "
-        "visibly advance beyond the supplied continuity frame instead of replaying its composition. A supplied "
-        "reference is an identity and opening-state guide, not a frame that must be copied throughout. Give "
-        "concise, positively worded, filmable corrections that prioritize the current beat's end-frame payoff."
-    )})
+        "evidence. Judge narrative function and immersion, not pixel-perfect obedience. A supplied start image "
+        "is the generator's first frame, so candidate frame 1 is EXPECTED to match it closely; never "
+        "penalize that. Identity reference stills show only how characters must look, not where or how lit. Judge story progression on frames 2 and 3, which must visibly advance to the new "
+        "action instead of holding the opening composition. Give "
+        "concise, positively worded, filmable corrections that prioritize the current beat's end-frame payoff. "
+        "Submit the review as the structured output."
+    )
     try:
-        import anthropic
-        response = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")).messages.create(
-            model=os.getenv("VISION_MODEL") or os.getenv("CLAUDE_MODEL") or CLAUDE_MODEL,
-            max_tokens=700,
-            tools=[REVIEW_TOOL],
-            tool_choice={"type": "tool", "name": "submit_clip_review"},
-            messages=[{"role": "user", "content": content}],
-        )
-        values = next(
-            (block.input for block in response.content
-             if getattr(block, "type", None) == "tool_use" and block.name == "submit_clip_review"),
-            None,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            images = []
+            for index, (label, data) in enumerate(stills):
+                still = Path(tmp) / f"{index}.jpg"
+                still.write_bytes(data)
+                images.append((label, still))
+            values = ai_router.ask(
+                "You are a film editor reviewing generated video clips.", prompt, REVIEW_TOOL["input_schema"],
+                model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=images,
+            )
         if not isinstance(values, dict):
             raise ValueError("vision reviewer returned no structured result")
         score_names = ("visual_match", "continuity", "image_quality", "anatomy", "immersion", "story_progression")
@@ -201,36 +233,41 @@ def review_final_video(path: str | Path, manifest: Any) -> dict[str, Any]:
     frames = _sample_frames(path, ratios=(0.02, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 0.98))
     if len(frames) < 6:
         return {"valid": False, "skipped": True, "reason": "could not sample enough final-video frames"}
-    content: list[dict[str, Any]] = [{"type": "text", "text": (
+    unreal = getattr(manifest, "preferred_backend", "") == "unreal"
+    review_rules = (
+        "This is a schematic Unreal Engine engineering diorama built from simple geometric components. "
+        "Do not expect people, photorealism, exact landmarks, or literal on-screen numbers. Judge whether the "
+        "stages consistently depict one mechanism, progress from input through process to output, remain clean "
+        "and readable, and end on the complete working system. Captions must be readable. Reject corrupt frames, "
+        "unrelated stage families, broken continuity, or an ending with no mechanical payoff."
+        if unreal else
+        "The story must have a clear hook, causal progression and visible payoff; the same characters, wardrobe, "
+        "props and geography must persist; captions must be readable and stay away from interface edges. Reject "
+        "repeated shots, random objects, obvious identity changes, illegible captions, montage-like non sequiturs, "
+        "or an ending that does not pay off the opening. It must read as real camera footage: reject a "
+        "painterly, dreamy, glowing or CGI look and shapes that melt or morph."
+    )
+    prompt = (
         "Review these chronological frames from the complete vertical social video. Judge the whole edit, "
-        "not isolated beauty frames. The story must have a clear hook, causal progression and visible payoff; "
-        "the same characters, wardrobe, props and geography must persist; captions must be readable and stay "
-        "away from interface edges. Reject repeated shots, random objects, obvious identity changes, illegible "
-        "captions, montage-like non sequiturs, or an ending that does not pay off the opening.\n\n"
+        f"not isolated beauty frames. {review_rules}\n\n"
         f"Title: {manifest.script.get('video_title', manifest.concept)}\n"
         f"Premise: {manifest.script.get('story_premise', manifest.concept)}\n"
         f"Goal: {manifest.script.get('protagonist_goal', '')}\n"
-        f"Expected payoff: {manifest.script.get('ending_payoff', '')}"
-    )}]
-    for index, frame in enumerate(frames, 1):
-        content.extend([
-            {"type": "text", "text": f"Chronological final-video frame {index} of {len(frames)}:"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": frame}},
-        ])
+        f"Expected payoff: {manifest.script.get('ending_payoff', '')}\n"
+        "Submit the review as the structured output."
+    )
     try:
-        import anthropic
-        response = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")).messages.create(
-            model=os.getenv("VISION_MODEL") or os.getenv("CLAUDE_MODEL") or CLAUDE_MODEL,
-            max_tokens=800,
-            tools=[FINAL_REVIEW_TOOL],
-            tool_choice={"type": "tool", "name": "submit_final_video_review"},
-            messages=[{"role": "user", "content": content}],
-        )
-        values = next(
-            (block.input for block in response.content
-             if getattr(block, "type", None) == "tool_use" and block.name == "submit_final_video_review"),
-            None,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            images = []
+            for index, frame in enumerate(frames, 1):
+                still = Path(tmp) / f"final_{index:02d}.jpg"
+                still.write_bytes(frame)
+                images.append((f"Chronological final-video frame {index} of {len(frames)}", still))
+            values = ai_router.ask(
+                "You are a film editor reviewing a finished short video.", prompt,
+                FINAL_REVIEW_TOOL["input_schema"], model=os.getenv("VISION_MODEL") or CLAUDE_MODEL,
+                images=images,
+            )
         if not isinstance(values, dict):
             raise ValueError("final reviewer returned no structured result")
         names = ("story_coherence", "continuity", "visual_quality", "pacing", "caption_readability")

@@ -13,7 +13,7 @@ from PIL import Image
 from agents import scene_validator as sv
 
 FILM = {"title": "t", "set": "bridge_evolution", "format": "evolution",
-        "beats": [{"action": "plank", "text": "a"}, {"action": "widen_arch", "text": "b"},
+        "beats": [{"action": "plank", "text": "a"}, {"action": "heavy_load", "text": "b"},
                   {"actions": ["heat", "expansion_joint"], "text": "c"}]}
 SPANS = [{"start": 0, "end": 179}, {"start": 180, "end": 239}, {"start": 240, "end": 419}]
 
@@ -155,6 +155,36 @@ class WatcherTests(unittest.TestCase):
             report = watcher.finish()
         self.assertTrue(report["complete"])
         self.assertEqual(calls, [[1, 2, 3, 4], [5]])
+
+    def test_fix_policy_reviews_every_window_so_one_repair_turn_gets_them_all(self):
+        """policy=fix must NOT stop at the first rejection: one AI repair turn per render, not per
+        rejected window (stopping early cost one agentic fix + one full re-render per bad window)."""
+        self._write(1, 420)
+        with patch.dict(os.environ, {"SCENE_POLICY": "fix", "SCENE_REVIEW_BATCH_SIZE": "1",
+                                     "SCENE_FIX_ABORT_EARLY": "0"}), \
+                patch.object(sv, "review_images", self._stub(reject_beat=2)), \
+                patch.object(sv, "window_ready", lambda w, d, settle=2.0: _ready(w, d)):
+            w = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False)
+            w.start()
+            rep = w.finish()
+        self.assertFalse(w.should_abort())            # Blender was allowed to finish the film
+        self.assertTrue(rep["complete"])
+        self.assertEqual(rep["checked"], rep["planned"])
+        self.assertEqual([r["beat"] for r in rep["rejected"]], [2])
+
+    def test_fix_policy_can_still_abort_early_when_asked(self):
+        with patch.dict(os.environ, {"SCENE_POLICY": "fix", "SCENE_REVIEW_BATCH_SIZE": "1",
+                                     "SCENE_FIX_ABORT_EARLY": "1"}), \
+                patch.object(sv, "review_images", self._stub(reject_beat=2)), \
+                patch.object(sv, "window_ready", lambda w, d, settle=2.0: _ready(w, d)):
+            w = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False)
+            w.start()
+            self._write(1, 240)
+            t0 = time.time()
+            while not w.should_abort() and time.time() - t0 < 20:
+                time.sleep(0.2)
+            self.assertTrue(w.should_abort())
+            w.finish()
 
 
 def _ready(w, frames_dir):

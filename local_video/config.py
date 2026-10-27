@@ -23,6 +23,15 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 BACKENDS = {"auto", "minimax", "wan"}
+# Assembly slows a clip by at most this factor before it has to freeze the last frame,
+# and the longest transition (crossfade) borrows this much extra footage from a shot.
+MAX_CLIP_STRETCH = 1.12
+MAX_TRANSITION_SECONDS = 4 / 30
+
+
+def minimum_clip_seconds(shot_seconds: float) -> float:
+    """Shortest generated clip that fills a shot without a frozen tail."""
+    return (shot_seconds + MAX_TRANSITION_SECONDS) / MAX_CLIP_STRETCH
 
 
 def env_int(name: str, default: int, minimum: int = 0, maximum: int | None = None) -> int:
@@ -159,16 +168,18 @@ class PipelineConfig:
     minimax_width: int = field(default_factory=lambda: env_int("MINIMAX_WIDTH", 544, 256, 4096))
     minimax_height: int = field(default_factory=lambda: env_int("MINIMAX_HEIGHT", 960, 256, 4096))
     minimax_seconds: float = field(default_factory=lambda: env_float("MINIMAX_SECONDS", 3.0, 1.625))
-    wan_width: int = field(default_factory=lambda: env_int("WAN_WIDTH", 320, 128, 2048))
-    wan_height: int = field(default_factory=lambda: env_int("WAN_HEIGHT", 576, 128, 2048))
+    wan_width: int = field(default_factory=lambda: env_int("WAN_WIDTH", 480, 128, 2048))
+    wan_height: int = field(default_factory=lambda: env_int("WAN_HEIGHT", 832, 128, 2048))
     wan_frames: int = field(default_factory=lambda: env_int("WAN_FRAMES", 33, 5, 1001))
     wan_fps: int = field(default_factory=lambda: env_int("WAN_FPS", 16, 1, 120))
-    wan_steps: int = field(default_factory=lambda: env_int("WAN_STEPS", 8, 1, 100))
+    wan_steps: int = field(default_factory=lambda: env_int("WAN_STEPS", 20, 1, 100))
     wan_cfg: float = field(default_factory=lambda: env_float("WAN_CFG", 5.0, 0.0))
     wan_model: str = field(default_factory=lambda: os.getenv("WAN_MODEL", "Wan2.2-TI2V-5B-Q5_K_M.gguf"))
     wan_encoder: str = field(default_factory=lambda: os.getenv("WAN_ENCODER", "umt5-xxl-encoder-Q4_K_M.gguf"))
     wan_vae: str = field(default_factory=lambda: os.getenv("WAN_VAE", "wan2.2_vae.safetensors"))
     upscale_filter: str = field(default_factory=lambda: os.getenv("LOCAL_VIDEO_UPSCALE_FILTER", "lanczos").lower())
+    # Render the next shot while Claude reviews the current one; cancelled if the review rejects it.
+    speculative_next_shot: bool = field(default_factory=lambda: env_int("LOCAL_VIDEO_SPECULATIVE", 1, 0, 1) == 1)
     ffmpeg: str = FFMPEG
     ffprobe: str = FFPROBE
 

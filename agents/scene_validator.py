@@ -17,19 +17,22 @@ failed scene is known minutes into a render instead of at the end. make_film use
 
   SCENE_VALIDATE=1|0          on by default for evolution films, off for cutaway films
   SCENE_POLICY=stop           stop Blender at the first rejected window (default)
-               fix            stop, let Claude fix the set's code (agents/set_builder.fix_scenes), resume
+               fix            render the whole film, then let Claude fix EVERY rejected window in one
+                              turn (agents/set_builder.fix_scenes) and resume
                report         render everything, then fail with the list of rejected windows
                warn           render everything, log rejections, assemble the video anyway
+  SCENE_FIX_ABORT_EARLY=0     policy "fix": stop at the first rejection again (one window per AI turn,
+                              which costs one repair turn and one full re-render per bad window)
   SCENE_WINDOW_SECONDS=3      window length
   SCENE_MIN_SCORE=6           acceptance threshold (1-10)
   SCENE_FIX_ATTEMPTS=2        auto-fix rounds per render (policy "fix")
-  SCENE_REVIEW_BACKEND        "codex" (default), "subscription" (claude -p), or "api"
+  SCENE_REVIEW_BACKEND        "subscription" (default) or "codex"
+  SCENE_REVIEW_CLI_MODEL      optional Claude subscription model override
 
 Re-check an existing render without rendering:  python -m agents.scene_validator <film name or JSON>
 """
 from __future__ import annotations
 
-import base64
 import io
 import json
 import logging
@@ -238,31 +241,8 @@ def _backend():
     from agents.showrunner import active_backend
     explicit = (os.getenv("SCENE_REVIEW_BACKEND") or "").strip().lower()
     active = active_backend()
-    # A process-wide Codex fallback also moves review work; do not probe exhausted Codex again.
-    return active if not explicit or (explicit == "codex" and active != "codex") else explicit
-
-
-def _review_api(prompt, images, schema=REVIEW_SCHEMA):
-    import anthropic
-    content = []
-    for label, p in images:
-        content += [{"type": "text", "text": label + ":"},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                                 "data": base64.b64encode(open(p, "rb").read()).decode()}}]
-    content.append({"type": "text", "text": prompt})
-    batch = schema is BATCH_REVIEW_SCHEMA
-    tool = {"name": "submit_scene_reviews" if batch else "submit_scene_review",
-            "description": "Submit the review of these render windows." if batch else
-                           "Submit the review of this render window.",
-            "input_schema": schema}
-    model = os.getenv("SCENE_REVIEW_MODEL") or os.getenv("VISION_MODEL") or "claude-opus-5-5"
-    resp = anthropic.Anthropic().messages.create(model=model, max_tokens=3200 if batch else 900, tools=[tool],
-                                                 tool_choice={"type": "tool", "name": tool["name"]},
-                                                 messages=[{"role": "user", "content": content}])
-    for b in resp.content:
-        if getattr(b, "type", None) == "tool_use":
-            return dict(b.input)
-    raise RuntimeError("no structured review returned")
+    # A process-wide usage-limit fallback moves review work too.
+    return active if not explicit or active != explicit else explicit
 
 
 def _review_cli(prompt, images, schema=REVIEW_SCHEMA):
@@ -272,7 +252,8 @@ def _review_cli(prompt, images, schema=REVIEW_SCHEMA):
     if not exe:
         raise RuntimeError("Claude Code CLI not found")
     from agents.showrunner import (UsageLimit, _API_ENV, CLI_MODEL, _capped_effort,
-                                   _record_claude_usage)
+                                   _record_claude_usage, check_budget)
+    check_budget("scene review")
     env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
     with tempfile.TemporaryDirectory() as tmp:
         names = []
@@ -322,16 +303,16 @@ def _review_codex(prompt, images, schema=REVIEW_SCHEMA):
 
 
 def _review_dispatch(prompt, images, schema=REVIEW_SCHEMA):
-    """Use the active reviewer and move the rest of the process to Claude after a Codex limit."""
+    """Use the active reviewer and switch the process after a subscription usage limit."""
     from agents.showrunner import UsageLimit, activate_fallback, active_backend
     backend = _backend()
     try:
-        return (_review_api(prompt, images, schema) if backend == "api" else
-                _review_codex(prompt, images, schema) if backend == "codex" else
+        return (_review_codex(prompt, images, schema) if backend == "codex" else
                 _review_cli(prompt, images, schema))
     except UsageLimit as exc:
-        if backend == "codex" and activate_fallback(str(exc)[:180]):
-            return (_review_api(prompt, images, schema) if active_backend() == "api" else
+        if activate_fallback(str(exc)[:180], failed_backend=backend):
+            fallback = active_backend()
+            return (_review_codex(prompt, images, schema) if fallback == "codex" else
                     _review_cli(prompt, images, schema))
         raise
 
@@ -609,7 +590,11 @@ class SceneWatcher:
         scores = "" if r.get("skipped") else f" (avg {r.get('average_score')})"
         log.info(f"[scenes] window {w['window']:02d} {w['t0']:5.1f}-{w['t1']:5.1f}s [{w['action']} {w['part']}] "
                  f"{verdict}{scores}{detail}")
-        if not r.get("valid") and self.policy in ("stop", "fix"):
+        # policy "fix": keep rendering and reviewing so ONE repair turn receives every rejected
+        # window. Aborting at the first rejection made each AI fix address a single window and then
+        # re-render and re-review the whole film, multiplying AI cost by the number of bad windows.
+        if not r.get("valid") and (self.policy == "stop"
+                                   or (self.policy == "fix" and _env_flag("SCENE_FIX_ABORT_EARLY", "0"))):
             self._abort.set()
 
     def report(self) -> dict:

@@ -42,6 +42,22 @@ def _model_fallbacks(primary: str) -> list[str]:
     return [m for m in dict.fromkeys(x.strip() for x in raw.split(",")) if m and m != primary]
 
 
+def strict_schema(value):
+    """Return a Codex-compatible strict copy of a Claude-style JSON schema."""
+    if isinstance(value, list):
+        return [strict_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: strict_schema(item) for key, item in value.items()}
+    properties = result.get("properties")
+    if result.get("type") == "object" or isinstance(properties, dict):
+        properties = properties or {}
+        result["properties"] = properties
+        result["required"] = list(properties)
+        result["additionalProperties"] = False
+    return result
+
+
 def _effort(requested: str, cap_env: str = "SHOWRUNNER_CODEX_EFFORT_CAP") -> str:
     """Cap expensive reasoning while preserving an explicit lower setting."""
     order = ("low", "medium", "high", "xhigh", "max")
@@ -132,7 +148,7 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
                 _grant_current_user(os.path.abspath(cwd))
         if schema is not None:
             schema_path = os.path.join(tmp, "schema.json")
-            Path(schema_path).write_text(json.dumps(schema), encoding="utf-8")
+            Path(schema_path).write_text(json.dumps(strict_schema(schema)), encoding="utf-8")
             cmd += ["--output-schema", schema_path]
         for path in images or []:
             cmd += ["--image", os.path.abspath(path)]

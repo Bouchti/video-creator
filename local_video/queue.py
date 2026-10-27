@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
-import re
 import shutil
 import subprocess
+import threading
 import time
 from contextlib import AbstractContextManager
 from dataclasses import replace
@@ -15,14 +16,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agents.audio_fx import pick_music
+from agents.media import get_duration
 from agents.voice import generate_voiceover
 from config.paths import PROJECT_ROOT
 
 from .assembly import assemble_project
-from .backends import BackendAdapter, GenerationResult, _remove_generated_audio, build_backends
+from .backends import BackendAdapter, GenerationResult, MiniMaxAdapter, _remove_generated_audio, build_backends
+from .freevideo import ensure_minimax
+from .keyframes import prepare_keyframes, usable_keyframe
 from .config import PipelineConfig, resolve_within
-from .models import ProjectManifest, ProjectState, completed_shots
-from .planner import MINIMAX_SUFFIX, WAN_SUFFIX, reseed
+from .models import ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
+from .planner import (
+    MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, continuation_source, payoff_of, reseed,
+)
 from .project import load_project
 from .preflight import run_preflight
 from .validation import extract_last_frame, ffprobe, media_metadata, validate_clip, validate_final
@@ -30,6 +36,11 @@ from .visual_review import review_clip, review_final_video
 
 log = logging.getLogger("pipeline")
 
+# Breathing room after the last spoken word before the video ends.
+NARRATION_TAIL_SECONDS = 0.6
+
+
+TIKTOK_MIN_SECONDS = 61                # TikTok pays (Creator Rewards) only on videos over 1 minute
 
 class QueueBusyError(RuntimeError):
     pass
@@ -141,12 +152,11 @@ def _prompt_for_backend(shot, backend: str):
 
 def _retake_prompt(shot, correction: str, has_reference: bool) -> str:
     """Prioritize visible story progression when retrying a short generated clip."""
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", shot.subject_action) if part.strip()]
-    payoff = sentences[-1] if sentences else shot.subject_action
+    payoff = payoff_of(shot.subject_action)
     reference_direction = (
-        "The supplied image is the exact opening continuity anchor only. Match the character, equipment, "
-        "lighting, and geography, then leave its camera composition immediately. Do not replay or linger on "
-        "the previous shot's action."
+        "The supplied image is the clip's first frame. Start from it, keep its character, equipment, "
+        "lighting, and geography, and move on to the new action within the first second. Do not replay or "
+        "linger on the previous shot's action."
         if has_reference else
         "Establish the current beat immediately; do not add an earlier setup or unrelated establishing shot."
     )
@@ -171,6 +181,7 @@ def _is_infrastructure_failure(exc: Exception) -> bool:
         "cuda error", "acceleratorerror", "worker exited", "generation timeout",
         "timed out", "connection error", "connection aborted", "connection refused",
         "service unavailable", "remote end closed", "comfyui generation failed",
+        "connection lost", "max retries exceeded", "actively refused",
     ))
 
 
@@ -196,21 +207,18 @@ class QueueRunner:
         self.final_reviewer = final_reviewer
         self.preflight = preflight
         self.progress = progress
+        self._speculation: dict[str, Any] | None = None
+        self._selected: set[int] | None = None
 
     def _emit(self, manifest: ProjectManifest, backend: str | None = None, error: str | None = None) -> None:
         done = completed_shots(manifest)
-        times = [
-            float(attempt.get("generation_seconds") or 0)
-            for shot in manifest.shots for attempt in shot.attempts if attempt.get("status") == "accepted"
-        ]
-        average = sum(times) / len(times) if times else 300.0
         value = {
             "state": manifest.state,
             "active_shot": manifest.active_shot,
             "completed": done,
             "total": len(manifest.shots),
             "elapsed_seconds": round(manifest.elapsed_seconds, 1),
-            "estimated_remaining_seconds": round(average * (len(manifest.shots) - done), 1),
+            "estimated_remaining_seconds": round(estimated_remaining_seconds(manifest), 1),
             "backend": backend,
             "error": error,
         }
@@ -239,18 +247,28 @@ class QueueRunner:
             return ["minimax", "wan"]
         return [manifest.preferred_backend]
 
+    @staticmethod
+    def _reference_source(manifest: ProjectManifest, index: int) -> int | None:
+        return continuation_source(
+            [(s.scene.lower(), s.light.lower()) for s in manifest.shots], index, [s.cast for s in manifest.shots],
+        )
+
     def _reference_for(self, manifest: ProjectManifest, index: int) -> Path | None:
-        if index > 0:
-            previous = manifest.shots[index - 1]
+        source = self._reference_source(manifest, index)
+        if source is not None:
+            previous = manifest.shots[source]
             if previous.last_frame:
                 candidate = resolve_within(manifest.project_dir, previous.last_frame)
                 if candidate.is_file():
                     return candidate
+        if index > 0 and manifest.shots[index].scene:
+            # A hard cut opens fresh; a shared reference image would drag every cut back to one frame.
+            return usable_keyframe(manifest, manifest.shots[index])
         if manifest.reference_image:
             candidate = resolve_within(manifest.project_dir, manifest.reference_image)
             if candidate.is_file():
                 return candidate
-        return None
+        return usable_keyframe(manifest, manifest.shots[index])
 
     def _generate_shot(self, manifest: ProjectManifest, index: int) -> bool:
         shot = manifest.shots[index]
@@ -331,6 +349,8 @@ class QueueRunner:
                     manifest.save()
 
                 reference = self._reference_for(manifest, index)
+                if reference is not None and reference.parent.name == "keyframes":
+                    attempt["keyframe"] = True
                 candidate_shot = _prompt_for_backend(shot, backend_name)
                 if revision_notes:
                     best_correction = max(revision_notes, key=lambda item: item[0])[1]
@@ -338,7 +358,18 @@ class QueueRunner:
                         candidate_shot,
                         prompt=_retake_prompt(candidate_shot, best_correction, reference is not None),
                     )
-                result: GenerationResult = backend.generate(candidate_shot, target, reference, submitted)
+                job = None if revision_notes else self._take_speculation(manifest, index, backend_name, shot.seed)
+                if job:
+                    attempt.update(started_at=job["started_at"], speculative=True)
+                    if job["prompt_id"]:
+                        attempt["prompt_id"] = job["prompt_id"]
+                    if job["error"]:
+                        raise job["error"]
+                    result: GenerationResult = job["result"]
+                else:
+                    result = backend.generate(candidate_shot, target, reference, submitted)
+                if self._control_state(manifest) not in {ProjectState.PAUSED.value, ProjectState.CANCELLED.value}:
+                    self._start_speculation(manifest, index, result.path, backend_name)
                 attempt.update({
                     "prompt_id": result.prompt_id,
                     "generation_seconds": round(result.elapsed_seconds, 3),
@@ -354,7 +385,7 @@ class QueueRunner:
                 manifest.save()
                 width = self.config.minimax_width if backend_name == "minimax" else self.config.wan_width
                 height = self.config.minimax_height if backend_name == "minimax" else self.config.wan_height
-                seconds = self.config.minimax_seconds if backend_name == "minimax" else self.config.wan_frames / self.config.wan_fps
+                seconds = backend.clip_seconds(shot)
                 report = self.validator(result.path, self.config, width, height, seconds)
                 visual_report = self.visual_reviewer(result.path, shot, reference, manifest)
                 report["semantic_review"] = visual_report
@@ -380,6 +411,7 @@ class QueueRunner:
                     manifest.record("continuity_frame_failed", shot=shot.id, error=str(frame_error))
                 shot.status = "accepted"
                 attempt["status"] = "accepted"
+                attempt["ended_at"] = time.time()
                 attempt["validation"] = report
                 manifest.record("shot_accepted", shot=shot.id, backend=backend_name, attempt=attempt["number"])
                 latest_control = self._control_state(manifest)
@@ -393,6 +425,8 @@ class QueueRunner:
                 self._emit(manifest, backend_name)
                 return True
             except Exception as exc:
+                # The next shot was rendering from this take's last frame; that frame is now wrong.
+                self._cancel_speculation(manifest, f"{shot.id} attempt {attempt['number']} failed")
                 last_error = str(exc)
                 attempt.update(status="failed", error=last_error, ended_at=time.time())
                 transient = _is_infrastructure_failure(exc)
@@ -402,6 +436,8 @@ class QueueRunner:
                         "infrastructure_retry", shot=shot.id, backend=backend_name,
                         retry=infrastructure_failures, limit=infrastructure_retry_limit,
                     )
+                    if backend_name == "minimax":
+                        self._restart_minimax(manifest)
                 else:
                     creative_failures += 1
                 retries_left = creative_failures < total_attempts and attempt_index + 1 < maximum_attempts
@@ -426,53 +462,178 @@ class QueueRunner:
                 self._emit(manifest, backend_name, last_error)
                 if requested_stop in {ProjectState.PAUSED.value, ProjectState.CANCELLED.value}:
                     return False
-        reference = self._reference_for(manifest, index)
-        if reference and manifest.settings.get("allow_still_replacement", False):
-            replacement = Path(manifest.project_dir) / "shots" / f"{shot.id}-still-replacement.mp4"
-            duration = shot.duration_seconds
-            frames = max(1, round(duration * 30))
-            video_filter = (
-                f"scale={self.config.minimax_width}:{self.config.minimax_height}:"
-                "force_original_aspect_ratio=increase:flags=lanczos,"
-                f"crop={self.config.minimax_width}:{self.config.minimax_height},"
-                f"zoompan=z='min(zoom+0.0008,1.08)':d={frames}:"
-                f"s={self.config.minimax_width}x{self.config.minimax_height}:fps=30,format=yuv420p"
-            )
-            command = [
-                self.config.ffmpeg, "-y", "-loop", "1", "-i", str(reference),
-                "-vf", video_filter, "-t", f"{duration:.6f}", "-an", "-c:v", "libx264",
-                "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", str(replacement),
-            ]
-            process = subprocess.run(command, capture_output=True, text=True, timeout=300)
-            if process.returncode == 0 and replacement.is_file():
-                try:
-                    report = self.validator(
-                        replacement, self.config, self.config.minimax_width,
-                        self.config.minimax_height, duration,
-                    )
-                    shot.backend = "still-replacement"
-                    shot.validation = report
-                    shot.output = str(replacement.relative_to(manifest.project_dir))
-                    shot.status = "accepted"
-                    shot.error = None
-                    frame_path = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
-                    try:
-                        self.extractor(replacement, frame_path, self.config)
-                        shot.last_frame = str(frame_path.relative_to(manifest.project_dir))
-                    except Exception:
-                        pass
-                    manifest.record("shot_replaced_with_animated_still", shot=shot.id, reference=str(reference))
-                    manifest.save()
-                    self._emit(manifest, "still-replacement")
-                    return True
-                except Exception as replacement_error:
-                    last_error = f"{last_error}; still replacement failed: {replacement_error}"
-            elif process.returncode != 0:
-                last_error = f"{last_error}; still replacement failed: {process.stderr[-500:]}"
+        if self._accept_fallback(manifest, index, last_error):
+            return True
         shot.status = "failed"
         shot.error = last_error
         manifest.error = f"{shot.id}: {last_error}"
         manifest.save()
+        return False
+
+    def _start_speculation(self, manifest: ProjectManifest, index: int, clip: Path, backend_name: str) -> None:
+        """Render the next shot while this take is reviewed, from this take's last frame.
+
+        Only a fresh next shot on the primary backend is started, with exactly the prompt, seed,
+        reference and target its first attempt would use, so an accepted take loses nothing.
+        """
+        following = index + 1
+        if (not self.config.speculative_next_shot or following >= len(manifest.shots)
+                or (self._selected is not None and following + 1 not in self._selected)):
+            return
+        shot = manifest.shots[following]
+        if shot.attempts or shot.status == "accepted" or backend_name != self._backend_sequence(manifest)[0]:
+            return
+        if self._reference_source(manifest, following) == index:
+            frame = Path(manifest.project_dir) / "shots" / f"{manifest.shots[index].id}-candidate-last.jpg"
+            try:
+                self.extractor(clip, frame, self.config)
+            except Exception:
+                return
+        else:
+            frame = self._reference_for(manifest, following)  # a cut: it never opens on this take
+        backend = self.backends[backend_name]
+        candidate = _prompt_for_backend(shot, backend_name)
+        job: dict[str, Any] = {
+            "index": following, "backend": backend_name, "seed": shot.seed, "started_at": time.time(),
+            "target": Path(manifest.project_dir) / "shots" / f"{shot.id}-attempt-01.mp4",
+            "prompt_id": None, "result": None, "error": None,
+        }
+
+        def work() -> None:
+            try:
+                job["result"] = backend.generate(candidate, job["target"], frame,
+                                                 lambda prompt_id: job.__setitem__("prompt_id", prompt_id))
+            except Exception as exc:
+                job["error"] = exc
+
+        job["thread"] = threading.Thread(target=work, name=f"speculative-{shot.id}", daemon=True)
+        job["thread"].start()
+        self._speculation = job
+        manifest.record("speculative_shot_started", shot=shot.id)
+
+    def _take_speculation(self, manifest: ProjectManifest, index: int, backend_name: str, seed: int):
+        """Hand over the next shot's early render if it matches this attempt, waiting for it to finish."""
+        job = self._speculation
+        if not job:
+            return None
+        if (job["index"], job["backend"], job["seed"]) != (index, backend_name, seed):
+            self._cancel_speculation(manifest, "the plan for that shot changed")
+            return None
+        self._speculation = None
+        job["thread"].join()
+        return job
+
+    def _cancel_speculation(self, manifest: ProjectManifest, reason: str) -> None:
+        job, self._speculation = self._speculation, None
+        if not job:
+            return
+        thread = job["thread"]
+        deadline = time.monotonic() + 60
+        while thread.is_alive() and not job["prompt_id"] and time.monotonic() < deadline:
+            thread.join(0.5)  # it needs a prompt id before it can be cancelled
+        if thread.is_alive() and job["prompt_id"]:
+            self.backends[job["backend"]].cancel(job["prompt_id"])
+        thread.join(300)
+        try:
+            job["target"].unlink(missing_ok=True)
+        except OSError:
+            pass
+        manifest.record("speculative_shot_cancelled", shot=manifest.shots[job["index"]].id, reason=reason)
+        manifest.save()
+
+    def _finish_fallback(self, manifest: ProjectManifest, shot, path: Path, report: dict[str, Any],
+                         backend: str, event: str, **details: Any) -> bool:
+        shot.backend = backend
+        shot.validation = report
+        shot.output = str(path.relative_to(manifest.project_dir))
+        shot.status = "accepted"
+        shot.error = None
+        frame_path = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
+        try:
+            self.extractor(path, frame_path, self.config)
+            shot.last_frame = str(frame_path.relative_to(manifest.project_dir))
+        except Exception as frame_error:
+            manifest.record("continuity_frame_failed", shot=shot.id, error=str(frame_error))
+        manifest.record(event, shot=shot.id, **details)
+        manifest.save()
+        log.warning("Local AI %s: no take passed review; %s so the video can continue.",
+                    shot.id, event.replace("_", " "))
+        self._emit(manifest, backend)
+        return True
+
+    def _restore_take(self, manifest: ProjectManifest, shot, attempt: dict[str, Any], event: str) -> bool:
+        source = resolve_within(manifest.project_dir, attempt["rejected_output"])
+        target = Path(manifest.project_dir) / "shots" / source.name
+        try:
+            shutil.move(str(source), str(target))
+        except OSError:
+            return False
+        attempt["status"] = "accepted"
+        attempt.pop("rejected_output", None)
+        review = attempt["validation"].get("semantic_review") or {}
+        return self._finish_fallback(
+            manifest, shot, target, attempt["validation"], attempt.get("backend") or "minimax", event,
+            attempt=attempt.get("number"), score=review.get("average_score"),
+            fatal_problems=review.get("fatal_problems") or [],
+        )
+
+    def _still_replacement(self, manifest: ProjectManifest, shot, reference: Path) -> bool:
+        replacement = Path(manifest.project_dir) / "shots" / f"{shot.id}-still-replacement.mp4"
+        duration = shot.duration_seconds
+        frames = max(1, round(duration * 30))
+        video_filter = (
+            f"scale={self.config.minimax_width}:{self.config.minimax_height}:"
+            "force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={self.config.minimax_width}:{self.config.minimax_height},"
+            f"zoompan=z='min(zoom+0.0008,1.08)':d={frames}:"
+            f"s={self.config.minimax_width}x{self.config.minimax_height}:fps=30,format=yuv420p"
+        )
+        command = [
+            self.config.ffmpeg, "-y", "-loop", "1", "-i", str(reference),
+            "-vf", video_filter, "-t", f"{duration:.6f}", "-an", "-c:v", "libx264",
+            "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", str(replacement),
+        ]
+        try:
+            process = subprocess.run(command, capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            manifest.record("still_replacement_failed", shot=shot.id, error=str(exc))
+            return False
+        if process.returncode != 0 or not replacement.is_file():
+            manifest.record("still_replacement_failed", shot=shot.id, error=process.stderr[-500:])
+            return False
+        try:
+            report = self.validator(replacement, self.config, self.config.minimax_width,
+                                    self.config.minimax_height, duration)
+        except Exception as exc:
+            manifest.record("still_replacement_failed", shot=shot.id, error=str(exc))
+            return False
+        return self._finish_fallback(manifest, shot, replacement, report, "still-replacement",
+                                     "shot_replaced_with_animated_still", reference=str(reference))
+
+    def _accept_fallback(self, manifest: ProjectManifest, index: int, last_error: str) -> bool:
+        """When every take was rejected, keep the video going with the least bad option.
+
+        Order: the best reviewed take without fatal problems, then a slow push-in on the previous
+        shot's last frame, then the best reviewed take even with fatal problems. Takes that failed
+        technical validation (black, frozen, wrong size) are never used.
+        """
+        shot = manifest.shots[index]
+        takes = []
+        for attempt in shot.attempts:
+            review = (attempt.get("validation") or {}).get("semantic_review")
+            relative = attempt.get("rejected_output")
+            if not review or not relative or not resolve_within(manifest.project_dir, relative).is_file():
+                continue
+            takes.append((float(review.get("average_score") or 0), bool(review.get("fatal_problems")), attempt))
+        takes.sort(key=lambda take: take[0], reverse=True)
+        clean = [take for take in takes if not take[1]]
+        if clean and self._restore_take(manifest, shot, clean[0][2], "shot_accepted_best_take"):
+            return True
+        reference = self._reference_for(manifest, index)
+        if reference and self._still_replacement(manifest, shot, reference):
+            return True
+        if takes and self._restore_take(manifest, shot, takes[0][2], "shot_accepted_flawed_take"):
+            return True
         return False
 
     def _narration(self, manifest: ProjectManifest) -> Path | None:
@@ -486,6 +647,70 @@ class QueueRunner:
         manifest.record("narration_created", duration=duration, path=str(target.relative_to(manifest.project_dir)))
         manifest.save()
         return target
+
+    def _prepare_minimax(self, manifest: ProjectManifest) -> None:
+        """Start FreeVideo when MiniMax is wanted, and never fall back to Wan silently."""
+        if "minimax" not in self._backend_sequence(manifest) or not isinstance(self.backends.get("minimax"), MiniMaxAdapter):
+            return
+        available, detail = ensure_minimax(self.config)
+        if available:
+            self.backends["minimax"] = MiniMaxAdapter(self.config)
+            return
+        if manifest.preferred_backend == "minimax":
+            raise RuntimeError(f"MiniMax H3 was requested but is unavailable: {detail}")
+        manifest.record("minimax_unavailable_at_start", reason=detail)
+        manifest.save()
+        log.warning("=" * 70)
+        log.warning("MiniMax H3 is UNAVAILABLE: %s", detail)
+        log.warning("Every shot of this video will use the Wan 2.2 fallback.")
+        log.warning("=" * 70)
+
+    def _restart_minimax(self, manifest: ProjectManifest) -> None:
+        """After a crash or lost connection, bring FreeVideo back before the retry."""
+        if not isinstance(self.backends.get("minimax"), MiniMaxAdapter):
+            return
+        available, detail = ensure_minimax(self.config)
+        manifest.record("minimax_restart_check", available=available, detail=detail)
+        if available:
+            self.backends["minimax"] = MiniMaxAdapter(self.config)
+
+    def _fit_to_narration(self, manifest: ProjectManifest, narration: Path) -> None:
+        """Retime the shot plan to the real voiceover so the final cut never truncates it.
+
+        The script only targets a word count; the spoken length is known once ElevenLabs
+        has read it. Shot prompts are unchanged; only their on-screen durations move.
+        """
+        spoken = get_duration(str(narration))
+        needed = spoken + NARRATION_TAIL_SECONDS
+        if needed > MAX_DURATION:
+            raise ValueError(
+                f"Narration is {spoken:.1f}s; local AI videos are at most {MAX_DURATION}s. "
+                "Shorten the script and resume."
+            )
+        # asked for over a minute (TikTok's Creator Rewards threshold): never end up just under it
+        floor = TIKTOK_MIN_SECONDS if manifest.duration_seconds > 60 else MIN_DURATION
+        target = max(MIN_DURATION, floor, math.ceil(needed))
+        if target == manifest.duration_seconds:
+            return
+        beats = [b for b in manifest.script.get("beats") or [] if isinstance(b, dict)]
+        try:
+            frames = (allocate_story_frames(target, [str(b.get("text") or "") for b in beats], manifest.fps)
+                      if len(beats) == len(manifest.shots) else allocate_frames(target, len(manifest.shots), manifest.fps))
+        except ValueError:
+            if needed <= manifest.duration_seconds:
+                return  # cannot shorten this plan further; a quiet tail is harmless
+            raise ValueError(
+                f"Narration is {spoken:.1f}s, which {len(manifest.shots)} shots cannot cover "
+                f"(project is {manifest.duration_seconds}s). Shorten the script and resume."
+            )
+        for shot, count in zip(manifest.shots, frames):
+            shot.duration_frames = count
+        manifest.record("timeline_fitted_to_narration", narration_seconds=round(spoken, 3),
+                        from_seconds=manifest.duration_seconds, to_seconds=target)
+        log.info("Local AI timeline fitted to narration: %.1fs voice -> %ss video (was %ss)",
+                 spoken, target, manifest.duration_seconds)
+        manifest.duration_seconds = target
+        manifest.save()
 
     def _silence_accepted_clips(self, manifest: ProjectManifest) -> None:
         """Upgrade legacy accepted clips so native model audio can never reach assembly."""
@@ -518,9 +743,26 @@ class QueueRunner:
 
     def run(self, project: str | Path | ProjectManifest, shots: set[int] | None = None) -> ProjectManifest:
         manifest = project if isinstance(project, ProjectManifest) else load_project(project, self.config)
+        self._selected = shots
+        try:
+            return self._run(manifest, shots)
+        finally:
+            # A pause, cancel or failure must not leave a render running on the GPU.
+            self._cancel_speculation(manifest, "the run stopped")
+
+    def _run(self, manifest: ProjectManifest, shots: set[int] | None) -> ProjectManifest:
         lock_path = self.config.output_root / ".gpu-generation.lock"
         with FileLock(lock_path):
             self._silence_accepted_clips(manifest)
+            # Start FreeVideo before preflight checks the backends: a stopped server is not a
+            # missing one. A missing model or a failed/too-long voiceover stops the run before GPU work.
+            try:
+                self._prepare_minimax(manifest)
+            except Exception as exc:
+                manifest.error = f"backend: {exc}"
+                manifest.set_state(ProjectState.FAILED, stage="backend", error=str(exc))
+                manifest.save()
+                return manifest
             try:
                 manifest.settings["preflight"] = self.preflight(
                     manifest, self.config, self.backends,
@@ -540,6 +782,20 @@ class QueueRunner:
             manifest.error = None
             manifest.set_state(ProjectState.QUEUED, resumed=completed_shots(manifest) > 0)
             manifest.save()
+            try:
+                narration = self._narration(manifest)
+                if narration:
+                    self._fit_to_narration(manifest, narration)
+            except Exception as exc:
+                manifest.error = f"narration: {exc}"
+                manifest.set_state(ProjectState.FAILED, stage="narration", error=str(exc))
+                manifest.save()
+                return manifest
+            if isinstance(self.backends.get("minimax"), MiniMaxAdapter):
+                try:
+                    prepare_keyframes(manifest, self.config, shots)
+                except Exception as exc:     # keyframes only improve the look; never block the run
+                    log.warning("Keyframes skipped: %s", exc)
             for index, shot in enumerate(manifest.shots):
                 if shots is not None and index + 1 not in shots:
                     continue

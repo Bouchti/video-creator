@@ -82,10 +82,10 @@ class LengthTests(unittest.TestCase):
     def test_length_feedback_is_exact_and_graceful(self):
         msg = evaluator.length_feedback(272, 153, 206, 25)
         self.assertIn("272 words", msg)
-        self.assertIn("Cut about 93 words", msg)
+        self.assertIn("Cut at least 66 words", msg)
         self.assertIsNone(evaluator.length_feedback(180, 153, 206, 25))
         self.assertIsNone(evaluator.length_feedback(241, 153, 206, 25, grace=0.2))
-        self.assertIn("Add about", evaluator.length_feedback(100, 153, 206, 25))
+        self.assertIn("Add at least 53", evaluator.length_feedback(100, 153, 206, 25))
 
     def test_retry_revises_previous_draft(self):
         long_script = {k: "v" for k in evaluator.REQUIRED_KEYS}
@@ -200,12 +200,6 @@ class PhotoTests(unittest.TestCase):
 
 
 class VisionTests(unittest.TestCase):
-    @staticmethod
-    def _response(matches):
-        block = type("Block", (), {"type": "tool_use", "name": "submit_matches",
-                                   "input": {"matches": matches}})()
-        return type("Response", (), {"content": [block]})()
-
     def _images(self, tmp, n):
         from PIL import Image
         paths = []
@@ -216,14 +210,13 @@ class VisionTests(unittest.TestCase):
         return paths
 
     def test_rank_returns_valid_unique_indices(self):
-        client = type("C", (), {})()
-        client.messages = type("M", (), {})()
-        client.messages.create = lambda **kw: self._response([2, 0, 2, 9, "x"])
-        with tempfile.TemporaryDirectory() as tmp, patch.object(vision, "_get_client", return_value=client):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch("agents.claude_cli.ask", return_value={"matches": [2, 0, 2, 9, "x"]}) as ask:
             self.assertEqual([2, 0], vision.rank_images("desc", "line", self._images(tmp, 3)))
+        self.assertEqual(3, len(ask.call_args.kwargs["images"]))
 
     def test_vision_can_be_disabled(self):
-        with patch.dict(os.environ, {"VISION_CHECK": "0", "ANTHROPIC_API_KEY": "k"}):
+        with patch.dict(os.environ, {"VISION_CHECK": "0"}):
             self.assertFalse(vision.vision_enabled())
 
 

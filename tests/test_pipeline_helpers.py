@@ -40,21 +40,54 @@ class EditorHelperTests(unittest.TestCase):
 
 
 class EvaluatorTests(unittest.TestCase):
-    @staticmethod
-    def _tool_response(verdict_input):
-        block = type("Block", (), {"type": "tool_use", "name": "submit_verdict", "input": verdict_input})()
-        return type("Response", (), {"content": [block]})()
+    def test_local_ai_documentary_uses_object_led_review(self):
+        with patch("agents.ai_router.ask", return_value={"verdict": "PASS", "issues": []}) as ask:
+            evaluator.evaluate_script({"spoken_script": "A sample enters the chamber.",
+                                       "content_mode": "documentary"}, source="local-ai")
+        self.assertIs(ask.call_args.args[0], evaluator.LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT)
 
-    def test_evaluate_script_accepts_tool_verdict(self):
-        response = self._tool_response({"verdict": "PASS"})
-        with patch.object(evaluator.client.messages, "create", return_value=response):
+    def test_evaluate_script_accepts_structured_verdict(self):
+        with patch("agents.ai_router.ask", return_value={"verdict": "PASS"}) as ask:
             result = evaluator.evaluate_script({"spoken_script": "test"})
 
         self.assertEqual("PASS", result["verdict"])
+        self.assertEqual(evaluator.VERDICT_TOOL["input_schema"], ask.call_args.args[2])
+
+    def test_all_issues_become_one_revision_brief(self):
+        issues = [{"beat": 1, "severity": "blocking", "fix": "Correct the year to 1943."},
+                  {"beat": 20, "severity": "minor", "fix": "Add service medals to the veterans."}]
+        with patch("agents.ai_router.ask", return_value={"verdict": "FAIL", "issues": issues}):
+            result = evaluator.evaluate_script({"spoken_script": "test"})
+        self.assertIn("Beat 1 [blocking]", result["feedback"])
+        self.assertIn("Beat 20 [minor]", result["feedback"])
+        self.assertFalse(result["minor_only"])
+
+    def test_minor_issues_only_never_cost_a_rewrite(self):
+        script = {key: "value" for key in evaluator.REQUIRED_KEYS}
+        script["spoken_script"] = " ".join(["word"] * 180)
+        script["beats"] = [
+            {"text": "scene one", "visual": {"kind": "footage", "description": "one", "queries": ["a"]}},
+            {"text": "scene two", "visual": {"kind": "footage", "description": "two", "queries": ["b"]}},
+        ]
+        minor = {"verdict": "FAIL", "feedback": "polish", "minor_only": True, "issues": []}
+        blocking = dict(minor, minor_only=False)
+        with patch("agents.script.generate_script", return_value=script), \
+                patch.object(evaluator, "evaluate_script", side_effect=[blocking, minor]):
+            self.assertIs(script, evaluator.evaluate_with_retry("topic", max_retries=2))
+        with patch("agents.script.generate_script", return_value=script) as generate, \
+                patch.object(evaluator, "evaluate_script", side_effect=[minor, blocking]):
+            self.assertIs(script, evaluator.evaluate_with_retry("topic", max_retries=2))
+        self.assertEqual(1, generate.call_count)
+        with patch("agents.script.generate_script", return_value=script), \
+                patch.object(evaluator, "evaluate_script", side_effect=[blocking, blocking]):
+            self.assertIsNone(evaluator.evaluate_with_retry("topic", max_retries=2))
+
+    def test_local_ai_tolerates_small_length_overage(self):
+        self.assertIsNone(evaluator.length_feedback(151, 100, 150, 10, grace=evaluator.LOCAL_AI_LENGTH_GRACE))
+        self.assertIn("Cut at least 20", evaluator.length_feedback(170, 100, 150, 10))
 
     def test_evaluate_script_rejects_unknown_verdict(self):
-        response = self._tool_response({"verdict": "MAYBE"})
-        with patch.object(evaluator.client.messages, "create", return_value=response):
+        with patch("agents.ai_router.ask", return_value={"verdict": "MAYBE"}):
             with self.assertRaisesRegex(ValueError, "PASS or FAIL"):
                 evaluator.evaluate_script({"spoken_script": "test"})
 

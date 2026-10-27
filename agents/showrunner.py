@@ -7,7 +7,7 @@ bar, saves a data-driven film JSON, and (optionally) renders it with engine/make
     python -m agents.showrunner --no-render      # stop after the script (review it first)
     python -m agents.showrunner --angle "why pools are never drained in spring"
 
-Stages (Codex subscription by default; Claude/API remain available):
+Stages (Claude subscription by default; Codex is the usage-limit fallback):
   1. pick_topic   brainstorm angles per available set, score them, avoid repeats
                   (also logs great topics that need a NEW set → output/set_wishlist.json)
   2. research     web search for verified facts + numbers (falls back to model knowledge)
@@ -23,7 +23,6 @@ import os
 import re
 import threading
 
-import anthropic
 from dotenv import load_dotenv
 
 from config.paths import get_env_path, get_output_dir
@@ -32,7 +31,6 @@ from engine import sets
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
 
-MODEL = os.getenv("SHOWRUNNER_MODEL", "claude-opus-5-5")
 WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 words → 82.8 s (pauses)
 TARGET_WORDS = (140, 192)              # ≈ 60–80 s with this voice (incl. the closing question)
 HOOK_MAX_WORDS = 13
@@ -45,16 +43,6 @@ FACTS_MAX_AGE_DAYS = 30
 HISTORY = os.path.join(get_output_dir(), "explainer_history.json")
 WISHLIST = os.path.join(get_output_dir(), "set_wishlist.json")
 FILMS_DIR = os.path.join(get_output_dir(), "films")
-
-_client = None
-
-
-def client():
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic()
-    return _client
-
 
 # ------------------- the house style (shared by writer + editor) -------------------
 
@@ -147,12 +135,10 @@ def _style(set_id):
 # ------------------- low-level call -------------------
 #
 # Three backends:
-#   codex (default): Codex CLI headless mode on the logged-in ChatGPT plan.
-#   subscription: Claude Code's headless mode (`claude -p`) on Claude Pro/Max
-#       login — no API bill; it counts against the plan's usage limits instead.
-#   api: the Anthropic API (pay per token, ~$2 per video). SHOWRUNNER_BACKEND=api to opt in.
+#   subscription (default): Claude Code's headless mode (`claude -p`) on Claude Pro/Max.
+#   codex: Codex CLI headless mode on the logged-in ChatGPT plan (the default fallback).
 
-BACKEND = os.getenv("SHOWRUNNER_BACKEND", "codex").strip().lower()
+BACKEND = os.getenv("SHOWRUNNER_BACKEND", "subscription").strip().lower()
 CLI_MODEL = os.getenv("SHOWRUNNER_CLI_MODEL", "opus")
 CODEX_MODEL = os.getenv("SHOWRUNNER_CODEX_MODEL", "gpt-5.6-sol")
 _API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
@@ -165,22 +151,23 @@ _BACKEND_LOCK = threading.Lock()
 
 
 def active_backend():
-    """Backend currently serving this process; changes once after a Codex usage limit."""
+    """Backend currently serving this process; changes once after a usage limit."""
     return _ACTIVE_BACKEND[0] or BACKEND
 
 
-def activate_fallback(reason="Codex usage limit reached"):
-    """Switch this process from Codex to the configured fallback. Returns True if switched."""
+def activate_fallback(reason="Primary backend usage limit reached", failed_backend=None):
+    """Switch this process to the configured fallback. Returns True if switched."""
     fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
     if fallback == "claude":
         fallback = "subscription"
     current = active_backend()
-    if current == fallback and fallback in ("subscription", "api"):
-        return True
-    if current != "codex" or fallback not in ("subscription", "api"):
+    # Another worker may already have switched the process while this request was in flight.
+    if failed_backend and current != failed_backend:
+        return current == fallback
+    if fallback not in ("codex", "subscription") or current == fallback:
         return False
     with _BACKEND_LOCK:
-        if active_backend() != "codex":
+        if active_backend() != current:
             return True
         _ACTIVE_BACKEND[0] = fallback
         log.warning("[showrunner] %s; switching all remaining AI work to %s", reason, fallback)
@@ -212,12 +199,18 @@ def _record_claude_usage(data, label="claude"):
     for key in CLAUDE_USAGE:
         if key != "calls":
             CLAUDE_USAGE[key] += int(usage.get(key) or 0)
-    if usage:
-        log.info("[claude] %s usage: %s input (%s cache-read, %s cache-write), %s output", label,
-                 f"{int(usage.get('input_tokens') or 0):,}",
-                 f"{int(usage.get('cache_read_input_tokens') or 0):,}",
-                 f"{int(usage.get('cache_creation_input_tokens') or 0):,}",
-                 f"{int(usage.get('output_tokens') or 0):,}")
+    # Always log, even when the CLI reported nothing: a silent expensive call (the set-builder agent
+    # turns are the costliest in the pipeline) is how a subscription gets spent unnoticed.
+    log.info("[claude] %s usage: %s input (%s cache-read, %s cache-write), %s output%s", label,
+             f"{int(usage.get('input_tokens') or 0):,}",
+             f"{int(usage.get('cache_read_input_tokens') or 0):,}",
+             f"{int(usage.get('cache_creation_input_tokens') or 0):,}",
+             f"{int(usage.get('output_tokens') or 0):,}",
+             "" if usage else "  (NOT REPORTED by the CLI; this call is unmetered)")
+    budget = token_budget()
+    if budget:
+        log.info("[claude] budget: %s / %s tokens used this run (%.0f%%)",
+                 f"{tokens_used():,}", f"{budget:,}", 100.0 * tokens_used() / budget)
 
 
 def claude_usage_summary():
@@ -227,10 +220,37 @@ def claude_usage_summary():
             f"{u['cache_creation_input_tokens']:,} cache-write), {u['output_tokens']:,} output tokens")
 
 
+class BudgetExceeded(RuntimeError):
+    """The CLAUDE_TOKEN_BUDGET for this process is spent; retrying cannot help."""
+
+
+def token_budget() -> int:
+    """Token ceiling for one process. 0 / unset = no ceiling."""
+    try:
+        return max(0, int(os.getenv("CLAUDE_TOKEN_BUDGET") or 0))
+    except ValueError:
+        return 0
+
+
+def tokens_used() -> int:
+    u = CLAUDE_USAGE
+    return (u["input_tokens"] + u["cache_read_input_tokens"]
+            + u["cache_creation_input_tokens"] + u["output_tokens"])
+
+
+def check_budget(label="claude"):
+    """Refuse a new Claude call once the run's budget is spent. Checked before the call so work is
+    never abandoned half-done, and only for the Claude subscription (Codex has its own quota)."""
+    budget = token_budget()
+    if budget and active_backend() != "codex" and tokens_used() >= budget:
+        raise BudgetExceeded(
+            f"CLAUDE_TOKEN_BUDGET reached before the {label} call: {tokens_used():,} of {budget:,} "
+            f"tokens used by {CLAUDE_USAGE['calls']} call(s). Raise CLAUDE_TOKEN_BUDGET, switch "
+            f"SHOWRUNNER_BACKEND to codex, or resume the run later.")
+
+
 def _call_once(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
     backend = active_backend()
-    if backend == "api":
-        return _call_api(system, prompt, schema, effort, tools, max_tokens)
     if backend == "codex":
         return _call_codex(system, prompt, schema, effort, web=bool(tools))
     return _call_cli(system, prompt, schema, effort, web=bool(tools))
@@ -274,10 +294,11 @@ def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=160
     """Call the selected backend; on a usage limit, wait up to SHOWRUNNER_MAX_WAIT
     minutes) and retries once, so an unattended run finishes instead of dying."""
     import time as _t
+    backend = active_backend()
     try:
         return _call_once(system, prompt, schema, effort, tools, max_tokens)
     except UsageLimit as e:
-        if activate_fallback(str(e)[:180]):
+        if activate_fallback(str(e)[:180], failed_backend=backend):
             try:
                 return _call_once(system, prompt, schema, effort, tools, max_tokens)
             except UsageLimit as fallback_error:
@@ -300,10 +321,10 @@ def _call_cli(system, prompt, schema=None, effort="high", web=False):
     import subprocess
     import tempfile
 
+    check_budget("showrunner")
     exe = shutil.which("claude")
     if not exe:
-        raise RuntimeError("Claude Code CLI not found (install it and run `claude` once to log in), "
-                           "or set SHOWRUNNER_BACKEND=api to use the paid API")
+        raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
     env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
     tools = ["WebSearch", "WebFetch"] if web else [""]
     with tempfile.TemporaryDirectory() as tmp:
@@ -350,32 +371,6 @@ def _call_codex(system, prompt, schema=None, effort="high", web=False):
         if codex_unavailable(exc):
             raise UsageLimit(str(exc)[:500]) from exc
         raise
-
-
-def _call_api(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    """One Opus call. With `schema`: returns parsed JSON (structured output); otherwise text.
-    Server-side fallbacks keep a false-positive refusal from killing a daily run."""
-    kw = dict(model=MODEL, max_tokens=max_tokens, system=system,
-              messages=[{"role": "user", "content": prompt}],
-              thinking={"type": "adaptive"}, output_config={"effort": effort},
-              betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-    if schema is not None:
-        kw["output_config"]["format"] = {"type": "json_schema", "schema": schema}
-    if tools:
-        kw["tools"] = tools
-    messages = kw["messages"]
-    for _ in range(6):                                   # server tools may pause long turns
-        resp = client().beta.messages.create(**kw)
-        if resp.stop_reason == "refusal":
-            cat = getattr(resp.stop_details, "category", None) if resp.stop_details else None
-            raise RuntimeError(f"Claude declined the request (category: {cat})")
-        if resp.stop_reason != "pause_turn":
-            break
-        messages.append({"role": "assistant", "content": resp.content})
-    if resp.stop_reason == "max_tokens":
-        raise RuntimeError("response hit max_tokens")
-    text = "".join(b.text for b in resp.content if b.type == "text").strip()
-    return json.loads(text) if schema is not None else text
 
 
 def _obj(props, required=None):
@@ -639,7 +634,7 @@ sources. Include 2-3 surprising details that would delight a viewer."""
                       tools=tools, effort="medium")
     except UsageLimit:
         raise
-    except (anthropic.BadRequestError, RuntimeError) as e:  # web search unavailable / failed
+    except RuntimeError as e:  # web search unavailable / failed
         log.warning(f"[showrunner] web search failed ({str(e)[:100]}); using model knowledge")
         facts = _call("You are a meticulous fact-checker for an engineering explainer channel.",
                       prompt.replace("Search the web and return", "From reliable knowledge, return"), effort="medium")
@@ -979,7 +974,7 @@ def to_film(script, topic, facts, review=None):
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),
-                     "model": CODEX_MODEL if backend == "codex" else (MODEL if backend == "api" else CLI_MODEL)}}
+                     "model": CODEX_MODEL if backend == "codex" else CLI_MODEL}}
 
 
 def slug(text):
@@ -990,11 +985,10 @@ def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on
     import time
     t0 = time.time()
     backend = active_backend()
-    detail = (f"codex exec, model {CODEX_MODEL}" if backend == "codex" else
-              f"claude -p, model {CLI_MODEL}" if backend != "api" else f"Anthropic API, model {MODEL}")
+    detail = f"codex exec, model {CODEX_MODEL}" if backend == "codex" else f"claude -p, model {CLI_MODEL}"
     fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
     log.info(f"[showrunner] backend: {backend} ({detail}), quality: {QUALITY}"
-             + (f", fallback: {fallback}" if fallback and backend == "codex" else ""))
+             + (f", fallback: {fallback}" if fallback else ""))
     needed = ("title", "angle", "hook_line", "hook_action", "payoff", "trend_signal", "trend_source_url")
     hint_is_filmable = (topic_hint and set_id and all(topic_hint.get(k) for k in needed)
                         and topic_hint.get("hook_action") in sets.spec(set_id).ACTIONS)

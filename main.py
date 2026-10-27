@@ -58,6 +58,14 @@ DEFAULT_SOURCE = "local-ai"
 
 OUTPUT_DIR = get_output_dir()
 
+# Older names for a source that now runs through another pipeline.
+SOURCE_ALIASES = {"comfy": "local-ai"}
+
+
+def normalize_source(source: str) -> str:
+    """Map legacy source names onto the pipeline that now handles them."""
+    return SOURCE_ALIASES.get(source, source)
+
 
 def write_post_notes(video_path: str, script: dict, credits: list) -> str:
     """Write title/description/hashtags + photo credits next to the video.
@@ -86,7 +94,7 @@ def run_pipeline(
     source: str = DEFAULT_SOURCE,
     tone: str = None,
     voice: str = DEFAULT_VOICE,
-    duration: int = 75,
+    duration: int = 65,
     backend: str = "auto",
     visual_style: str = None,
     reference_image: str = None,
@@ -98,6 +106,18 @@ def run_pipeline(
     publish_live: bool = False,
 ) -> dict:
     started = datetime.now()
+    if source in SOURCE_ALIASES:
+        log.info(f"Source '{source}' runs through '{normalize_source(source)}' "
+                 f"(MiniMax H3 first, Wan fallback).")
+        source = normalize_source(source)
+    if source == "local-ai":
+        # Fail before the paid script step, not after it.
+        from local_video.planner import validate_duration
+        try:
+            validate_duration(duration)
+        except ValueError as e:
+            log.error(str(e))
+            return {"success": False, "stage_failed": "duration", "error": str(e)}
     log.info("=" * 70)
     log.info(f"PIPELINE START | {started.strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 70)
@@ -122,7 +142,7 @@ def run_pipeline(
         log.info("\n[STAGE 0] Leader Agent: trending topic discovery")
         from agents.leader import find_todays_topic
         try:
-            selection = find_todays_topic()
+            selection = find_todays_topic(source=source)
             topic = selection["topic"]
             tone = tone or selection["tone"]
             log.info(f"Selected topic: {topic}")
@@ -148,7 +168,7 @@ def run_pipeline(
 
     log.info("\n[STAGE 1] Script generation + evaluation")
     from agents.evaluator import evaluate_with_retry
-    mode = "local-ai" if source in ("local-ai", "unreal") else "footage"
+    mode = "unreal" if source == "unreal" else "local-ai" if source == "local-ai" else "footage"
     angle = selection.get("angle") if selection else None
     script = evaluate_with_retry(topic, tone=tone, max_retries=3, target_seconds=duration, mode=mode,
                                  source=source, angle=angle, research=research)
@@ -281,7 +301,8 @@ if __name__ == "__main__":
                                                     "are rejected unless repeats are explicitly enabled")
     parser.add_argument("--tone", default=None, help="Script tone")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help="Voice style")
-    parser.add_argument("--duration", type=int, default=75,
+    # 65 s: over TikTok's 1-minute Creator Rewards threshold, still short enough for Shorts completion
+    parser.add_argument("--duration", type=int, default=65,
                         help="Target video length in seconds (30-90). Scales narration + scene count.")
     parser.add_argument("--backend", choices=["auto", "minimax", "wan"], default="auto",
                         help="Backend for --source local-ai (Auto prefers MiniMax H3 and records Wan fallback)")

@@ -11,7 +11,7 @@ from .config import (
     AUDIO_EXTENSIONS, BACKENDS, IMAGE_EXTENSIONS, PipelineConfig, resolve_within,
     slugify, validate_input_file,
 )
-from .models import ProjectManifest, ProjectState
+from .models import ProjectManifest, ProjectState, estimated_remaining_seconds
 from .planner import build_visual_screenplay, plan_shots, validate_duration
 
 
@@ -128,8 +128,7 @@ def create_project(
             "final": {"width": 1080, "height": 1920, "fps": 30, "video_codec": "h264", "audio_codec": "aac"},
             "prompt_strategy": "single-beat+frame-reference",
             "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
-            "allow_still_replacement": False,
-        },
+            },
     )
     music_source = Path(music).expanduser()
     if music_source.exists():
@@ -291,7 +290,6 @@ def replan_project(project: str | Path, config: PipelineConfig | None = None) ->
     manifest.settings.update({
         "prompt_strategy": "single-beat+frame-reference",
         "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
-        "allow_still_replacement": False,
     })
     export_screenplay(manifest)
     manifest.record("project_replanned", archive=str(archive.relative_to(root)), archived_files=archived_files,
@@ -314,9 +312,10 @@ def refresh_project_from_shot(
     archive.mkdir(parents=True, exist_ok=False)
     shutil.copy2(root / "project.json", archive / "project-before-refresh.json")
     archived: list[str] = []
+    # Same shot count as the existing plan, so earlier accepted shots keep their place.
     planned, continuity = plan_shots(
         manifest.script, manifest.concept, manifest.duration_seconds, manifest.visual_style,
-        manifest.preferred_backend, manifest.ambience, manifest.fps,
+        manifest.preferred_backend, manifest.ambience, manifest.fps, shot_count=len(manifest.shots),
     )
     archive_shots = archive / "shots"
     for index in range(from_shot - 1, len(manifest.shots)):
@@ -347,7 +346,6 @@ def refresh_project_from_shot(
             "minimum_score": 7,
             "story_progression_required": True,
         },
-        "allow_still_replacement": False,
     })
     export_screenplay(manifest)
     manifest.record(
@@ -361,12 +359,6 @@ def refresh_project_from_shot(
 
 def project_status(manifest: ProjectManifest) -> dict[str, Any]:
     completed = sum(s.status == "accepted" for s in manifest.shots)
-    generation_times = [
-        float(a.get("generation_seconds") or 0)
-        for shot in manifest.shots for a in shot.attempts if a.get("status") == "accepted"
-    ]
-    average = sum(generation_times) / len(generation_times) if generation_times else 300.0
-    remaining = max(0, len(manifest.shots) - completed)
     return {
         "project": manifest.id,
         "state": manifest.state,
@@ -374,7 +366,7 @@ def project_status(manifest: ProjectManifest) -> dict[str, Any]:
         "completed": completed,
         "total": len(manifest.shots),
         "elapsed_seconds": round(manifest.elapsed_seconds, 1),
-        "estimated_remaining_seconds": round(average * remaining, 1),
+        "estimated_remaining_seconds": round(estimated_remaining_seconds(manifest), 1),
         "preferred_backend": manifest.preferred_backend,
         "last_error": manifest.error,
         "outputs": manifest.outputs,

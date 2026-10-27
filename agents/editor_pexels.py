@@ -54,6 +54,11 @@ from agents.media import (
 from agents.transcription import transcribe_with_whisper, words_to_srt
 from agents.voice import generate_voiceover
 
+# Narration-aligned stock queries: one on-topic query per clip so the footage
+# follows what the voiceover is actually saying (not generic mood b-roll).
+from agents.comfy_prompts import narration_beats_for_clips
+from agents.stock_queries import generate_stock_queries
+
 
 def _duration_ok(dur, min_duration: int) -> bool:
     """Accept unknown (None) durations; otherwise enforce the min/max window."""
@@ -355,6 +360,23 @@ def download_clip(url: str, clip_num: int) -> str:
     return path
 
 
+def _per_clip_queries(script: dict, num_clips: int) -> tuple:
+    """Return (clip_queries, clip_beats): one narration-aligned stock query per clip.
+
+    Falls back to (None, beats) so the caller can use the proportional scene-query
+    mapping when Claude is unavailable.
+    """
+    clip_beats = narration_beats_for_clips(script, num_clips)
+    log.info("[2a/5] Writing narration-aligned stock queries (Claude)...")
+    try:
+        clip_queries = generate_stock_queries(script, num_clips, clip_beats)
+        log.info(f"  Got {len(clip_queries)} story-aligned stock queries")
+        return clip_queries, clip_beats
+    except Exception as e:
+        log.warning(f"  Stock query generation failed ({e}) — using scene-query mapping")
+        return None, clip_beats
+
+
 def fetch_stock_footage(script: dict, num_clips: int, per_clip_duration: float = 6.0) -> list:
     """Pull num_clips clips across all enabled stock sources, each >= per_clip_duration."""
     log.info(f"\n[2/5] Fetching {num_clips} stock clips (min {per_clip_duration:.0f}s each) "
@@ -364,26 +386,43 @@ def fetch_stock_footage(script: dict, num_clips: int, per_clip_duration: float =
     title_fallbacks = title_terms(script)
     generic = ["cinematic abstract", "slow motion nature", "atmospheric mood", "abstract texture"]
 
+    # Per-clip queries tied to the narration beat that plays over each clip, so the
+    # footage follows the STORY in order rather than generic mood b-roll.
+    clip_queries, clip_beats = _per_clip_queries(script, num_clips)
+
     paths = []
     used_urls = set()  # dedupe across queries
 
     for i in range(num_clips):
-        # Map each clip slot back to a scene query so the cuts follow the story
-        # IN ORDER, even when we cut more often than there are scenes. With e.g.
-        # 24 clips over 12 scenes this yields 2 consecutive clips per scene
-        # (both matching that scene's query) instead of dumping every extra clip
-        # onto the last scene.
-        scene_idx = (i * len(queries)) // max(num_clips, 1)
-        primary_query = queries[min(scene_idx, len(queries) - 1)]
-        chosen = None
+        beat = clip_beats[i] if i < len(clip_beats) else ""
+        if clip_queries:
+            # On-topic query for THIS clip's narration, then its neighbours (same
+            # world), then the rest, the script's scene queries, title terms, generic.
+            primary_query = clip_queries[i]
+            neighbours = [clip_queries[j] for j in (i - 1, i + 1)
+                          if 0 <= j < len(clip_queries) and clip_queries[j] != primary_query]
+            others = [q for q in clip_queries if q != primary_query and q not in neighbours]
+            candidate_queries = ([primary_query] + neighbours + others
+                                 + queries + title_fallbacks + generic)
+        else:
+            # Fallback: map each clip slot back to a scene query proportionally so the
+            # cuts still follow the story IN ORDER even without per-clip queries.
+            scene_idx = (i * len(queries)) // max(num_clips, 1)
+            primary_query = queries[min(scene_idx, len(queries) - 1)]
+            neighbours = [queries[j] for j in (scene_idx - 1, scene_idx + 1)
+                          if 0 <= j < len(queries) and queries[j] != primary_query]
+            others = [q for q in queries if q != primary_query and q not in neighbours]
+            candidate_queries = [primary_query] + neighbours + others + title_fallbacks + generic
 
-        # Stay on-topic as long as possible: this scene's query, then NEIGHBOURING
-        # scene queries (same world), the rest, title-derived terms, and only then
-        # generic stock.
-        neighbours = [queries[j] for j in (scene_idx - 1, scene_idx + 1)
-                      if 0 <= j < len(queries) and queries[j] != primary_query]
-        other_queries = [q for q in queries if q != primary_query and q not in neighbours]
-        candidate_queries = [primary_query] + neighbours + other_queries + title_fallbacks + generic
+        # De-dupe while preserving order so we don't search the same term twice.
+        _seen_q = set()
+        candidate_queries = [
+            q for q in candidate_queries if q and not (q in _seen_q or _seen_q.add(q))
+        ]
+
+        chosen = None
+        if beat:
+            log.info(f"  Clip {i+1}/{num_clips} | VO: {beat[:55]}{'...' if len(beat) > 55 else ''}")
 
         for query in candidate_queries:
             log.info(f"  Clip {i+1}: trying '{query}' (need {per_clip_duration:.0f}s+)")

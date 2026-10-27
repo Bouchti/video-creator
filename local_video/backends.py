@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import subprocess
 import time
@@ -11,8 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import requests
+
 from .comfy import ComfyClient
-from .config import PipelineConfig, probe_model
+from .config import PipelineConfig, minimum_clip_seconds, probe_model
 from .models import Shot
 
 
@@ -43,6 +46,25 @@ class BackendAdapter:
         on_submitted: Callable[[str], None] | None = None,
     ) -> GenerationResult:
         raise NotImplementedError
+
+    def clip_seconds(self, shot: Shot) -> float:
+        """Length of the clip this backend generates for the shot."""
+        return shot.duration_seconds
+
+    def cancel(self, prompt_id: str) -> bool:
+        """Stop a queued or running generation. Best effort."""
+        client = getattr(self, "client", None)
+        return bool(client and client.cancel(prompt_id))
+
+    def free_other_servers(self, own_url: str | None) -> list[str]:
+        """Ask every other configured ComfyUI to unload its models so this backend gets the GPU.
+
+        MiniMax and Wan (or Flux) usually run in separate ComfyUI servers sharing one GPU;
+        models left loaded in the idle one starve the active one of VRAM. Best effort.
+        """
+        own = (own_url or "").rstrip("/")
+        others = {url.rstrip("/") for url in (self.config.minimax_url, self.config.wan_url) if url} - {own}
+        return [url for url in sorted(others) if ComfyClient(url, 30, self.config.poll_seconds).free_memory()]
 
 
 def _remove_generated_audio(path: Path, ffmpeg: str) -> None:
@@ -78,12 +100,27 @@ class MiniMaxAdapter(BackendAdapter):
             return False, f"FreeVideoGenerate is not installed at {self.client.base_url}"
         return True, self.client.base_url
 
+    def clip_seconds(self, shot: Shot) -> float:
+        # Long enough to fill the shot without freezing; rounded up to 1/8 s.
+        needed = max(self.config.minimax_seconds, minimum_clip_seconds(shot.duration_seconds))
+        return math.ceil(needed * 8 - 1e-9) / 8
+
+    def cancel(self, prompt_id: str) -> bool:
+        # FreeVideo's own route stops its worker cleanly; plain ComfyUI interrupt is the fallback.
+        if self.client:
+            try:
+                requests.post(f"{self.client.base_url}/freevideo/cancel",
+                              json={"prompt_id": prompt_id, "node_id": "1"}, timeout=10)
+            except requests.RequestException:
+                pass
+        return super().cancel(prompt_id)
+
     def workflow(self, shot: Shot, reference_image: Path | None = None) -> dict[str, Any]:
         inputs: dict[str, Any] = {
             "text": shot.prompt,
             "width": self.config.minimax_width,
             "height": self.config.minimax_height,
-            "seconds": self.config.minimax_seconds,
+            "seconds": self.clip_seconds(shot),
             "seed": shot.seed,
             "two_pass": True,
             "base_steps": 8,
@@ -108,10 +145,11 @@ class MiniMaxAdapter(BackendAdapter):
         ok, reason = self.available()
         if not ok or not self.client:
             raise RuntimeError(reason)
+        self.free_other_servers(self.client.base_url)
         self.client.free_memory()
         settings = {
             "resolution": [self.config.minimax_width, self.config.minimax_height],
-            "seconds": self.config.minimax_seconds,
+            "seconds": self.clip_seconds(shot),
             "quality": "light",
             "two_pass": True,
             "base_steps": 8,
@@ -162,6 +200,14 @@ class WanAdapter(BackendAdapter):
     def _load_workflow(self) -> dict[str, Any]:
         return json.loads(self.config.wan_workflow.read_text(encoding="utf-8"))
 
+    def frames_for(self, shot: Shot) -> int:
+        """Frame count that fills the shot without freezing; Wan requires 4n+1 frames."""
+        needed = max(self.config.wan_frames, math.ceil(minimum_clip_seconds(shot.duration_seconds) * self.config.wan_fps))
+        return (needed - 1 + 3) // 4 * 4 + 1
+
+    def clip_seconds(self, shot: Shot) -> float:
+        return self.frames_for(shot) / self.config.wan_fps
+
     @staticmethod
     def _first_id(workflow: dict[str, Any], class_type: str) -> str | None:
         return next((node_id for node_id, node in workflow.items() if node.get("class_type") == class_type), None)
@@ -191,7 +237,7 @@ class WanAdapter(BackendAdapter):
             elif class_type == "Wan22ImageToVideoLatent":
                 latent_id = node_id
                 inputs.update(width=self.config.wan_width, height=self.config.wan_height,
-                              length=self.config.wan_frames, batch_size=1)
+                              length=self.frames_for(shot), batch_size=1)
             elif class_type == "KSampler":
                 sampler_id = node_id
                 inputs.update(seed=shot.seed, steps=self.config.wan_steps, cfg=self.config.wan_cfg,
@@ -238,9 +284,10 @@ class WanAdapter(BackendAdapter):
         ok, reason = self.available()
         if not ok or not self.client:
             raise RuntimeError(reason)
+        self.free_other_servers(self.client.base_url)
         settings = {
             "resolution": [self.config.wan_width, self.config.wan_height],
-            "frames": self.config.wan_frames,
+            "frames": self.frames_for(shot),
             "fps": self.config.wan_fps,
             "steps": self.config.wan_steps,
             "cfg": self.config.wan_cfg,

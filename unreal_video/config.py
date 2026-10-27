@@ -22,6 +22,8 @@ def find_unreal_editor() -> Path | None:
         r"C:\Program Files\Epic Games\UE_*\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
         r"D:\Epic Games\UE_*\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
         r"D:\Unreal Engine\UE_*\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
+        # installed straight onto a drive root, e.g. D:\UE_5.8
+        *(rf"{drive}:\UE_*\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" for drive in "CDEF"),
     ]
     for pattern in patterns:
         candidates.extend(Path(value) for value in sorted(glob.glob(pattern), reverse=True))
