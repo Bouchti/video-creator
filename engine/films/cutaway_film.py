@@ -120,6 +120,14 @@ elif "--qa" in args:
         spec = importlib.import_module(f"engine.sets.{film['set']}_spec")
         qual = qa.quality(scene, chars, getattr(spec, "HERO", None), labelled, render_frame,
                           step=int(os.getenv("QA_QUALITY_STEP", "5")))
+        # the things each action must SHOW (spec ACTIONS[a]["must_see"]), measured where the reviewer looks
+        acts_of = getattr(spec, "beat_actions", lambda b: [b["action"]])
+        shown = [b for b in beats if b["action"] != "rewind"]
+        wanted = [(lbl, b0, b1, [n for a in acts_of(b) for n in spec.ACTIONS.get(a, {}).get("must_see", [])])
+                  for (lbl, b0, b1), b in zip(labelled, shown)]
+        for lbl, items in qa.must_see(scene, chars, wanted, render_frame).items():
+            qual["beats"].setdefault(lbl, []).extend(items)
+            qual["count"] += len(items)
         for beat, items in qual["beats"].items():
             for it in items:
                 print(f"QA {beat} f{it['frames'][0]}: {it['issue']}")

@@ -72,6 +72,8 @@ class Run:
         if path and os.path.exists(path):
             self.path = path
             self.data = json.load(open(path, encoding="utf-8"))
+            from agents.showrunner import carry_tokens
+            carry_tokens(self.data.get("claude_tokens"))   # the budget covers the whole run, across resumes
         else:
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             self.path = os.path.join(RUNS_DIR, f"{stamp}_{meta.get('source', 'run')}.json")
@@ -92,6 +94,8 @@ class Run:
         self.save()
 
     def save(self):
+        from agents.showrunner import tokens_used
+        self.data["claude_tokens"] = tokens_used()
         tmp = self.path + ".tmp"
         json.dump(self.data, open(tmp, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
         os.replace(tmp, self.path)
@@ -237,6 +241,11 @@ def stage_script(run, source, angle, set_id):
         except Exception as exc:                          # noqa: BLE001
             if _is_budget(exc):
                 raise GiveUp(str(exc)) from exc
+            from agents.set_builder import RepairNotApplied
+            if isinstance(exc, RepairNotApplied):
+                # A set repair that changed nothing would get the same inputs again on a retry: stop instead.
+                raise GiveUp(f"the set repair made no changes; retrying would repeat the same paid turn: "
+                             f"{exc}") from exc
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "script")
                 continue

@@ -37,7 +37,7 @@ class CodexCliTests(unittest.TestCase):
         schema = {"type": "object", "properties": {"ok": {"type": "boolean"}},
                   "required": ["ok"], "additionalProperties": False}
         with patch.object(codex_cli.shutil, "which", return_value="codex"), \
-                patch.object(codex_cli.subprocess, "run", side_effect=fake_run), \
+                patch.object(codex_cli, "_run_process", side_effect=fake_run), \
                 patch.dict(os.environ, {"OPENAI_API_KEY": "must-not-leak"}):
             out, usage = codex_cli.run("test", schema=schema, effort="high")
         self.assertEqual(out, {"ok": True})
@@ -62,7 +62,7 @@ class CodexCliTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with patch.object(codex_cli.shutil, "which", return_value="codex"), \
-                patch.object(codex_cli.subprocess, "run", side_effect=fake_run), \
+                patch.object(codex_cli, "_run_process", side_effect=fake_run), \
                 patch.object(codex_cli, "_PREFERRED_MODELS", {}), \
                 patch.dict(os.environ, {"SHOWRUNNER_CODEX_FALLBACK_MODELS": "gpt-6.1-sol"}):
             self.assertEqual(codex_cli.run("test", model="gpt-5.6-sol")[0], "done")
@@ -77,7 +77,7 @@ class CodexCliTests(unittest.TestCase):
             json.dumps({"type": "turn.failed", "error": {"message": "stream disconnected before completion"}}),
         ])
         with patch.object(codex_cli.shutil, "which", return_value="codex"), \
-                patch.object(codex_cli.subprocess, "run",
+                patch.object(codex_cli, "_run_process",
                              return_value=subprocess.CompletedProcess(["codex"], 1, stdout, "")):
             with self.assertRaises(RuntimeError) as ctx:
                 codex_cli.run("build")
@@ -97,7 +97,7 @@ class CodexCliTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with patch.object(codex_cli.shutil, "which", return_value="codex"), \
-                patch.object(codex_cli.subprocess, "run", side_effect=fake_run):
+                patch.object(codex_cli, "_run_process", side_effect=fake_run):
             codex_cli.run("test", cwd=root)
         self.assertEqual(seen["cmd"][seen["cmd"].index("-C") + 1], os.path.abspath(root))
 
@@ -114,6 +114,7 @@ class CodexCliTests(unittest.TestCase):
 
         root = tempfile.mkdtemp()
         with patch.object(codex_cli.shutil, "which", return_value="codex"), \
+                patch.object(codex_cli, "_run_process", side_effect=fake_run), \
                 patch.object(codex_cli.subprocess, "run", side_effect=fake_run), \
                 patch.object(codex_cli.os, "name", "nt"):
             codex_cli.run("write", cwd=root, sandbox="workspace-write")

@@ -344,6 +344,65 @@ def _longest_still(track, fps):
     return longest
 
 
+MUST_MIN = 0.05          # a must-see thing has to span at least this share of the frame (width or height)
+MUST_IN = 0.6            # ...with at least this share of its on-screen box inside the frame
+
+
+def _named(scene, characters, name):
+    """Visible renderable objects a spec's must_see `name` refers to: a character (by name prefix, so
+    "Max" covers MaxPilot), or every object whose name starts with `name` (case-insensitive), with the
+    children of a matching empty (labels are an empty + letters)."""
+    key = name.lower()
+    for cname, root in characters.items():
+        if cname.lower().startswith(key):
+            return [o for o in [root] + list(root.children_recursive) if o.type == "MESH" and _visible(o)]
+    found = []
+    for o in scene.objects:
+        if not o.name.lower().startswith(key):
+            continue
+        for x in [o] + list(o.children_recursive):
+            if x.type in ("MESH", "FONT", "CURVE") and _visible(x) and x not in found:
+                found.append(x)
+    return found
+
+
+def must_see(scene, characters, beats, frame_map):
+    """The beat's MUST-SEE things (spec ACTIONS[action]["must_see"]) at the middle and 7/8 of the beat,
+    the moments the reviewer judges: each must be on screen, readable in size and mostly in frame.
+    beats: [(label, f0, f1, [names])]. Returns {label: [{"frames", "issue"}]}."""
+    cam = scene.camera
+    issues = {}
+    for label, b0, b1, names in beats:
+        if not names:
+            continue
+        hits = []
+        for part, f in (("middle", (b0 + b1) // 2), ("end", b1 - max(2, (b1 - b0) // 8))):
+            scene.frame_set(frame_map(f))
+            for name in names:
+                objs = _named(scene, characters, name)
+                if not objs:
+                    hits.append((f, f"must_see: '{name}' is not visible at the {part} of the beat (no visible object "
+                                    f"named '{name}*'; show it, or fix the name in the spec's must_see)"))
+                    continue
+                box = _screen_box(scene, cam, objs)
+                if not _on_screen(box):
+                    hits.append((f, f"must_see: '{name}' is out of frame at the {part} of the beat; frame it with "
+                                    "studio.frame_all"))
+                    continue
+                w, h = box[2] - box[0], box[3] - box[1]
+                cw = min(1.0, box[2]) - max(0.0, box[0])
+                ch = min(1.0, box[3]) - max(0.0, box[1])
+                if w * h > 0 and (cw * ch) / (w * h) < MUST_IN:
+                    hits.append((f, f"must_see: '{name}' is cut by the frame edge at the {part} of the beat "
+                                    f"(only {cw * ch / (w * h):.0%} inside); frame it with studio.frame_all"))
+                elif max(cw, ch) < MUST_MIN:
+                    hits.append((f, f"must_see: '{name}' is too small at the {part} of the beat ({max(cw, ch):.0%} "
+                                    f"of the frame, needs >= {MUST_MIN:.0%}); frame it closer (studio.frame_all)"))
+        if hits:
+            issues[label] = [{"frames": [f, f], "issue": m} for f, m in hits]
+    return issues
+
+
 def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=None):
     """The channel's quality gates, per beat (pure geometry, no rendering):
       hero_small   Max (the hero) is under HERO_MIN of the frame height for most of the beat

@@ -229,7 +229,14 @@ class SetBuilderTests(unittest.TestCase):
 
     def test_static_checks_pass_on_a_max_story_set(self):
         from agents import set_builder as sb
-        self.assertEqual(sb.static_checks("boat_story", story=True), [])
+        # hand-built sets predate must_see (they are never rebuilt); everything else must pass
+        self.assertEqual([e for e in sb.static_checks("boat_story", story=True) if "must_see" not in e], [])
+
+    def test_a_built_story_set_must_name_what_each_action_shows(self):
+        from agents import set_builder as sb
+        errs = sb.static_checks("boat_story", story=True)
+        self.assertTrue(errs and all("must_see" in e for e in errs))
+        self.assertFalse(any("'rewind'" in e for e in errs))
 
     def test_register_adds_once(self):
         from agents import set_builder as sb
@@ -316,3 +323,14 @@ class VoidTests(unittest.TestCase):
             report = sv.technical_check([bad])
         self.assertFalse(report["valid"])
         self.assertIn("void", report["fatal_problems"][0])
+
+
+class PreviewRubricTests(unittest.TestCase):
+    def test_whole_beat_previews_do_not_judge_the_setup_still_for_the_payoff(self):
+        w = {"beat": 3, "action": "promise", "t0": 0.0, "t1": 3.0, "shows": "x", "text": "y"}
+        self.assertIn("never fault the absence", sv._instructions({**w, "part": "whole beat"}, "levee", None))
+        self.assertNotIn("never fault the absence", sv._instructions({**w, "part": "1/2"}, "levee", None))
+
+    def test_reviewer_never_asks_for_post_production_text(self):
+        w = {"beat": 12, "action": "finale", "part": "whole beat", "t0": 0.0, "t1": 3.0, "shows": "", "text": ""}
+        self.assertIn("added in post-production", sv._instructions(w, "levee", None))

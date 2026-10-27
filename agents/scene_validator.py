@@ -191,6 +191,13 @@ SCORES = ("visual_match", "readability", "image_quality", "continuity")
 
 def _instructions(w, subject, previous):
     extra = " (plus the previous window's end frame, for continuity)" if previous else ""
+    if w.get("part") == "whole beat":
+        # Set previews: the stills sit at 1/8, 1/2 and 7/8 of the beat, and every beat opens on Max making his
+        # change before the mechanism and its result are shown. Faulting the opening still for the payoff
+        # rejected almost every beat of the first auto-built levee set.
+        extra += (". These stills are at 1/8, 1/2 and 7/8 of the WHOLE beat: the START still is the setup "
+                  "(Max making his change, close up), so never fault the absence of labels, arrows, the result "
+                  "or the payoff there; judge the required content on the MIDDLE and END stills")
     return f"""You are the director checking a 3D render (Blender, stylised but realistic, vertical 9:16)
 of a short explainer film, one ~3 second window at a time, BEFORE the rest of the film is finished.
 
@@ -221,6 +228,8 @@ label is too small to read on a phone or cut off by the frame edge; an empty bla
 ends. Put those failures in fatal_problems, not merely problems.
 Do NOT call stylised low-poly trees, simple models, missing fine detail, motion blur, depth of field or
 a camera angle you would have chosen differently fatal. Line drawings in white/orange are intentional.
+Captions of the narration, the closing question and stat stickers are added in post-production, over
+the render: never ask for spoken words or the question as on-screen text, and never fault their absence.
 Do not transfer a narrated comparison or external record onto an in-world display. For example, if
 the hero's object is on a scale while narration separately cites a world record, the scale should show
 the hero's result unless the action explicitly requires the record number.
@@ -310,7 +319,7 @@ def _review_dispatch(prompt, images, schema=REVIEW_SCHEMA):
         return (_review_codex(prompt, images, schema) if backend == "codex" else
                 _review_cli(prompt, images, schema))
     except UsageLimit as exc:
-        if activate_fallback(str(exc)[:180], failed_backend=backend):
+        if activate_fallback(str(exc), failed_backend=backend):
             fallback = active_backend()
             return (_review_codex(prompt, images, schema) if fallback == "codex" else
                     _review_cli(prompt, images, schema))

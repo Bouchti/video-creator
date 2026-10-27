@@ -292,9 +292,18 @@ def _scene_verdict(args, film, watcher, spans, work):
         return None
     attempt = getattr(args, "_scene_attempt", 0)
     if watcher.policy == "fix" and attempt < int(os.getenv("SCENE_FIX_ATTEMPTS") or "2"):
-        from agents.set_builder import fix_scenes
+        from agents.set_builder import fix_scenes, freeze_methods, restore_methods
         log.info(f"Auto-fix round {attempt + 1}: asking Claude to fix {len(rep['rejected'])} rejected window(s)")
-        fix_scenes(film["set"], rep["rejected"])
+        # beats whose every window passed keep their code exactly (a repair must not break them), and the
+        # repair turn gets a few windows at a time so it finishes within its token cap
+        bad_beats = {r["beat"] for r in rep["rejected"]}
+        keep = sorted({r["action"] for r in rep["windows"] if r.get("valid") and r["beat"] not in bad_beats})
+        frozen = freeze_methods(film["set"], [a for k in keep for a in k.split("+")])
+        fix_scenes(film["set"], rep["rejected"], keep=keep,
+                   max_windows=int(os.getenv("SET_FIX_MAX_WINDOWS") or 3))
+        restored = restore_methods(film["set"], frozen)
+        if restored:
+            log.info(f"Kept the accepted scenes as they were: put back {', '.join(restored)}")
         first = min(r["beat"] for r in rep["rejected"]) - 1    # re-render from the first rejected beat on
         frames_dir = os.path.join(work, "frames")
         for p in glob.glob(os.path.join(frames_dir, "f_*.png")):
@@ -654,7 +663,9 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     fx_path = _write_wav(os.path.join(work, "fx_all.wav"), fx)
     music = None
     if film.get("music") == "synth":                       # generated bed (no licensed tracks needed)
-        music = _write_wav(os.path.join(work, "music.wav"), sfx.music(min(total, 60.0)))
+        # the whole film's length: a shorter bed is looped by the mixer, and its fade-out/in plus the
+        # chord jump at the seam were audible ~60 s into every 90 s film
+        music = _write_wav(os.path.join(work, "music.wav"), sfx.music(total + 0.5))
     mixed = mix_audio(voice_path, fx_path, os.path.join(work, "mix.m4a"), total, music=music)
     merged = merge_audio_video(video, mixed)
 

@@ -1,0 +1,76 @@
+{
+  "title": "Max builds a levee (the duck got in four times)",
+  "set": "levee_story_earthen_river_le_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "burrow_hook",
+      "action": "burrow_hook",
+      "video": "epilogue",
+      "text": "A squirrel just blasted Max's rubber duck through his levee."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Rewind to a sunny day, when the river was low."
+    },
+    {
+      "id": "promise",
+      "action": "promise",
+      "text": "Max promised his kids a backyard that never floods. Sand wall, done!"
+    },
+    {
+      "id": "fail_sand",
+      "action": "fail_sand",
+      "text": "The river rises, water slips between the sand grains, and the soaked wall slumps. Duck through!"
+    },
+    {
+      "id": "fix_core",
+      "action": "fix_core",
+      "text": "So Max adds a clay core; its tiny grains barely let water move. And gentle slopes, wider than tall.",
+      "overlay": {"type": "label", "text": "Clay core"}
+    },
+    {
+      "id": "fail_boil",
+      "action": "fail_boil",
+      "text": "It holds, but water sneaks under, through buried sand, and pushes up. A sand boil! Sandbags, fast."
+    },
+    {
+      "id": "fix_berm",
+      "action": "fix_berm",
+      "text": "A heavy seepage berm holds the ground down. Relief wells bleed the pressure safely into a ditch.",
+      "overlay": {"type": "label", "text": "Seepage berm"}
+    },
+    {
+      "id": "fail_overtop",
+      "action": "fail_overtop",
+      "text": "Then a huge storm pours over the top, scouring the bare dirt. Duck surfing!"
+    },
+    {
+      "id": "fix_armor",
+      "action": "fix_armor",
+      "text": "That's how most Katrina levees failed. So Max raises the crest three feet above the hundred-year flood, plus grass and riprap.",
+      "overlay": {"type": "stat", "value": "3 ft", "text": "above the 100-year flood"}
+    },
+    {
+      "id": "fail_burrow",
+      "action": "fail_burrow",
+      "text": "Perfect, until a squirrel digs in. Floodwater follows, carries soil away, and the hole widens: piping."
+    },
+    {
+      "id": "fix_maintain",
+      "action": "fix_maintain",
+      "text": "Burrows average 8.2 metres. So Max mows short, inspects, packs holes, and moves the squirrel out.",
+      "overlay": {"type": "stat", "value": "8.2 m", "text": "average burrow"}
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "Next storm, everything stays riverside. Now picture 3,787 miles of levee. Which failure would you fix first?"
+    }
+  ]
+}

@@ -65,6 +65,73 @@ class CostTests(unittest.TestCase):
         claude.assert_not_called()
         self.assertIn("SET_BUILDER_CLAUDE_FALLBACK", str(ctx.exception))
 
+    def _stopped_agent(self, files, write):
+        def fake(cmd, stdin_text, workspace, env, timeout, cap_tokens=0):
+            for rel in files[:write]:
+                path = os.path.join(workspace, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                open(path, "w").write("# written before the cap\n")
+            return None, "", {"cache_read_input_tokens": 2_600_000}, True
+        return fake
+
+    def test_agent_stopped_at_its_cap_keeps_the_files_it_wrote(self):
+        files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
+        with tempfile.TemporaryDirectory() as root, patch.object(sb, "PROJECT_ROOT", root), \
+                patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "0"}), \
+                patch("shutil.which", return_value="claude"), patch.object(showrunner, "_record_claude_usage"), \
+                patch.object(sb, "_run_claude_streaming", side_effect=self._stopped_agent(files, 3)):
+            out = sb.claude_agent("design", files)
+            self.assertIn("token cap", out)
+            for rel in files:
+                self.assertTrue(os.path.isfile(os.path.join(root, rel)), rel)
+
+    def test_design_call_rewrites_instead_of_patching(self):
+        files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
+        seen = {}
+
+        def fake(cmd, stdin_text, workspace, env, timeout, cap_tokens=0):
+            seen["tools"] = cmd[cmd.index("--tools") + 1:cmd.index("--allowedTools")]
+            seen["prompt"] = stdin_text
+            return self._stopped_agent(files, 3)(cmd, stdin_text, workspace, env, timeout, cap_tokens)
+
+        with tempfile.TemporaryDirectory() as root, patch.object(sb, "PROJECT_ROOT", root), \
+                patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "0"}), \
+                patch("shutil.which", return_value="claude"), patch.object(showrunner, "_record_claude_usage"), \
+                patch.object(sb, "_run_claude_streaming", side_effect=fake):
+            sb.claude_agent("design", files, allow_edit=False)
+            self.assertNotIn("Edit", seen["tools"])
+            self.assertIn("no Edit tool", seen["prompt"])
+            sb.claude_agent("fix", files)
+            self.assertIn("Edit", seen["tools"])
+
+    def test_agent_stopped_before_writing_every_file_is_a_budget_stop(self):
+        files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
+        with tempfile.TemporaryDirectory() as root, patch.object(sb, "PROJECT_ROOT", root), \
+                patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "0"}), \
+                patch("shutil.which", return_value="claude"), patch.object(showrunner, "_record_claude_usage"), \
+                patch.object(sb, "_run_claude_streaming", side_effect=self._stopped_agent(files, 1)):
+            with self.assertRaises(showrunner.BudgetExceeded):
+                sb.claude_agent("design", files)
+            self.assertFalse(os.path.exists(os.path.join(root, files[0])))
+
+    def test_blocked_build_after_an_earlier_fallback_still_knows_the_codex_reset(self):
+        files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
+        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.object(showrunner, "_PRIMARY_RESET", [None]), \
+                patch.dict(os.environ, {"SET_BUILDER_CLAUDE_FALLBACK": "0",
+                                        "SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
+                patch.object(sb, "_run_claude_streaming") as claude:
+            # the showrunner hit the Codex limit first (a long message: the reset is at its very end)
+            showrunner.activate_fallback("codex exec failed (exit 1): You've hit your usage limit. " + "x" * 300
+                                         + " or try again at Nov 2nd, 2026 10:48 AM.", failed_backend="codex")
+            with self.assertRaises(showrunner.UsageLimit) as ctx:
+                sb.claude_agent("design", files)
+        claude.assert_not_called()
+        self.assertEqual((ctx.exception.reset.month, ctx.exception.reset.day), (11, 2))
+
 
 
 class ResetParsingTests(unittest.TestCase):

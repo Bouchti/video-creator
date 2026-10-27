@@ -1030,6 +1030,59 @@ def orbit(rig, f0, f1, center, radius, ang0, ang1, z0, z1, lens=24.0, cut=False,
     rig.track(f0, f1, keys, lens=lens, cut=cut, fstop=fstop)
 
 
+def _frame_points(things, frames):
+    """World bounding-box corners of `things` (objects, Characters, or (x, y, z) points) as they RENDER at
+    each of `frames`; hidden objects are skipped (a parked, hidden prop must not widen the shot)."""
+    scene = bpy.context.scene
+    keep = scene.frame_current
+    pts = []
+    try:
+        for f in frames:
+            scene.frame_set(f)
+            dg = bpy.context.evaluated_depsgraph_get()
+            for t in things:
+                if isinstance(t, (tuple, list, Vector)) and len(t) == 3 and all(
+                        isinstance(x, (int, float)) for x in t):
+                    pts.append(tuple(t))
+                    continue
+                root = getattr(t, "root", t)
+                for o in [root] + list(root.children_recursive):
+                    if o.type not in ("MESH", "FONT", "CURVE"):
+                        continue
+                    p, hidden = o, False
+                    while p is not None and not hidden:
+                        hidden, p = p.hide_render, p.parent
+                    if hidden:
+                        continue
+                    mw = o.evaluated_get(dg).matrix_world
+                    pts += [tuple(mw @ V(c)) for c in o.bound_box]
+    finally:
+        scene.frame_set(keep)
+    return pts
+
+
+def frame_all(rig, f0, f1, things, angle=-90.0, rise=0.18, lens=28.0, margin=0.12, push=0.06, swing=6.0,
+              cut=False, fstop=8.0, sample=None):
+    """A MOVING shot that keeps EVERY one of `things` (objects, Characters, (x, y, z) points: the mechanism,
+    its label, the result meter, Max) fully inside the 9:16 frame from f0 to f1: the camera distance is
+    solved from their real bounds (engine/framing.py), then it pushes in by `push` and swings `swing`
+    degrees so the shot never holds still. Use it for every shot that must SHOW something named in the
+    narration; list only what must be seen (each extra far-away thing makes the shot wider)."""
+    from engine import framing
+    mid = (f0 + f1) // 2
+    pts = _frame_points(things, sample or (f0, mid, f1))
+    if not pts:
+        raise ValueError(f"frame_all({f0}-{f1}): none of the things is visible")
+    keys, dist = [], 0.0
+    for f in list(range(f0, f1, 3)) + [f1]:
+        t = smooth((f - f0) / max(1, f1 - f0))
+        cam, aim, dist = framing.solve(pts, angle - swing / 2 + swing * t, rise, lens, margin)
+        cam = V(aim) + (V(cam) - V(aim)) * (1.0 + push * (1.0 - t))      # push in to the solved framing
+        keys.append((f, cam, V(aim)))
+    rig.track(f0, f1, keys, lens=lens, fstop=fstop, cut=cut)
+    return dist
+
+
 def establish(rig, f0, f1, center, dist0, dist1, angle=-90.0, height=0.25, lens=24.0, cut=False):
     """A wide shot that slowly pushes in from dist0 to dist1 (use it briefly, then go close)."""
     a = R(angle)

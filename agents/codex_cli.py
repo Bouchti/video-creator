@@ -127,7 +127,7 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
     primary = model or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
     model = _PREFERRED_MODELS.get(primary, primary)
     env = {k: v for k, v in os.environ.items() if k not in OPENAI_API_ENV}
-    with tempfile.TemporaryDirectory(prefix="video_creator_codex_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="video_creator_codex_", ignore_cleanup_errors=True) as tmp:
         answer = os.path.join(tmp, "answer.txt")
         cmd = [exe, "--ask-for-approval", "never"]
         if web:
@@ -153,8 +153,7 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
         for path in images or []:
             cmd += ["--image", os.path.abspath(path)]
         cmd.append("-")
-        result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                                cwd=cwd or tmp, env=env, timeout=timeout)
+        result = _run_process(cmd, input=prompt, cwd=cwd or tmp, env=env, timeout=timeout)
         usage = _usage(result.stdout)
         if usage:
             log.info("[codex] usage: %s input (%s cached), %s output, %s reasoning",
@@ -193,6 +192,12 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
         return json.loads(text), usage
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Codex returned invalid structured output: {text[-500:]}") from exc
+
+
+def _run_process(cmd, input=None, cwd=None, env=None, timeout=None):
+    """One codex exec; a timeout stops the agent and every command it started (Blender builds)."""
+    from agents.proc import run_tree
+    return run_tree(cmd, input, cwd, env, timeout, label="codex exec")
 
 
 def usage_summary() -> str:

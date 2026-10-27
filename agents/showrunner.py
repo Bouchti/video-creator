@@ -147,6 +147,7 @@ _notional = [0.0]
 CLAUDE_USAGE = {"calls": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
                 "cache_creation_input_tokens": 0, "output_tokens": 0}
 _ACTIVE_BACKEND = [None]
+_PRIMARY_RESET = [None]                # when the primary backend's usage limit lifts (from its error text)
 _BACKEND_LOCK = threading.Lock()
 
 
@@ -170,8 +171,14 @@ def activate_fallback(reason="Primary backend usage limit reached", failed_backe
         if active_backend() != current:
             return True
         _ACTIVE_BACKEND[0] = fallback
-        log.warning("[showrunner] %s; switching all remaining AI work to %s", reason, fallback)
+        _PRIMARY_RESET[0] = parse_reset(str(reason))
+        log.warning("[showrunner] %s; switching all remaining AI work to %s", str(reason)[:180], fallback)
     return True
+
+
+def primary_reset():
+    """When the backend this process fell back from becomes available again (None = unknown)."""
+    return _PRIMARY_RESET[0]
 
 
 def _capped_effort(requested, env_name="SHOWRUNNER_CLAUDE_EFFORT_CAP", default="medium"):
@@ -232,9 +239,18 @@ def token_budget() -> int:
         return 0
 
 
+_CARRIED = [0]                         # tokens an interrupted run already spent before this process resumed it
+
+
+def carry_tokens(n):
+    """Count tokens spent by earlier processes of the same run (autopilot --resume) against the budget,
+    so stopping and resuming a run never hands it a fresh CLAUDE_TOKEN_BUDGET."""
+    _CARRIED[0] = max(0, int(n or 0))
+
+
 def tokens_used() -> int:
     u = CLAUDE_USAGE
-    return (u["input_tokens"] + u["cache_read_input_tokens"]
+    return (_CARRIED[0] + u["input_tokens"] + u["cache_read_input_tokens"]
             + u["cache_creation_input_tokens"] + u["output_tokens"])
 
 
@@ -318,7 +334,7 @@ def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=160
     try:
         return _call_once(system, prompt, schema, effort, tools, max_tokens)
     except UsageLimit as e:
-        if activate_fallback(str(e)[:180], failed_backend=backend):
+        if activate_fallback(str(e), failed_backend=backend):
             try:
                 return _call_once(system, prompt, schema, effort, tools, max_tokens)
             except UsageLimit as fallback_error:
@@ -408,10 +424,30 @@ class NoUnusedStorySets(RuntimeError):
 
 
 def _history():
+    """Logged scripts plus any film JSON in FILMS_DIR the log missed (e.g. a film written or
+    rendered by hand), so a subject already filmed is never offered again as unused."""
     try:
-        return json.load(open(HISTORY, encoding="utf-8"))
+        hist = json.load(open(HISTORY, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
+        hist = []
+    known = {os.path.normcase(os.path.abspath(h["film"])) for h in hist if h.get("film")}
+    try:
+        names = sorted(n for n in os.listdir(FILMS_DIR) if n.endswith(".json"))
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(FILMS_DIR, name)
+        if os.path.normcase(os.path.abspath(path)) in known:
+            continue
+        try:
+            film = json.load(open(path, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(film, dict) and film.get("set"):
+            meta = film.get("meta") or {}
+            hist.append({"title": film.get("title", ""), "angle": meta.get("angle", ""),
+                         "set": film["set"], "film": path, "date": str(meta.get("created", ""))[:10]})
+    return hist
 
 
 def available_topic_sets(set_ids=None, history=None):
@@ -709,7 +745,8 @@ def _rules(set_id):
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "50 tons", text like "of dirt": a REAL measurement only); "label" = a short badge naming a real
   part or idea, no numbers (e.g. "Planes turn by banking"). Use "none" on most beats,
-  at most 6 stickers in total, never on the hook.
+  at most 6 stickers in total, never on the hook. Never repeat a label the action already shows in
+  the scene (its "shows" text names labels like 7 m TUNNEL or 285-315 rpm): the two overlap on screen.
 - Numbers must match the model facts: what is ON SCREEN is the model."""
 
 
@@ -922,6 +959,8 @@ def develop(topic, facts):
         log.warning(f"[showrunner] {e}; the best draft already passes, so revision is skipped")
     script, problems, review = best
     if problems:
+        script, problems = repair_rules(script, topic["set"], problems)
+    if problems:
         raise RuntimeError(f"no renderable script: {problems}")
     if not revised and QUALITY == "best":              # efficient mode avoids a redundant third call
         try:
@@ -935,6 +974,38 @@ def develop(topic, facts):
             f"best script remained below the publication bar after revision: {json.dumps(review['scores'])}"
         )
     return script, review
+
+
+def repair_rules(script, set_id, problems, attempts=2):
+    """Minimal edits for mechanical rule breaks (word budget, hook length, a missing closing question...)
+    of an otherwise finished script. A script one word over the budget used to fail the whole stage and
+    restart drafting from scratch; this is one small call instead. Returns (script, remaining problems)."""
+    for attempt in range(attempts):
+        prompt = f"""{_rules(set_id)}
+
+This finished script breaks these automatic rules:
+{json.dumps(problems, ensure_ascii=False, indent=1)}
+
+SCRIPT:
+{json.dumps(script, ensure_ascii=False, indent=1)}
+
+Return the same script with the SMALLEST edits that fix every rule above: keep every beat, its actions,
+its overlay and every line that is not involved exactly as it is. When a word budget is exceeded, cut
+a few filler words so the total lands well inside the limit (not on the boundary)."""
+        try:
+            fixed = _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort="low")
+        except (UsageLimit, BudgetExceeded):
+            raise
+        except Exception as exc:                         # noqa: BLE001  the unrepaired script still fails loudly
+            log.warning(f"[showrunner] rule repair failed: {exc}")
+            break
+        fixed_problems = hard_checks(fixed, set_id)
+        log.info(f"[showrunner] rule repair {attempt + 1}: {fixed_problems or 'all rules pass'}")
+        if len(fixed_problems) < len(problems) or not fixed_problems:
+            script, problems = fixed, fixed_problems
+        if not problems:
+            break
+    return script, problems
 
 
 def _revise(topic, facts, script, problems, review, best):

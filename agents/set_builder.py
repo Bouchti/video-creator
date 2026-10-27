@@ -89,14 +89,20 @@ def _call_token_cap():
     return cap
 
 
+def _kill_tree(p):
+    from agents.proc import kill_tree
+    kill_tree(p)
+
+
 def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout, cap_tokens=0):
     """Run `claude -p --output-format stream-json`, logging each tool call as it happens (so a long
     build visibly progresses) and KILLING the agent as soon as its running token usage passes
     cap_tokens (0 = no cap). Returns (result event or None, raw output tail, usage so far, stopped)."""
     import threading
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True, encoding="utf-8", errors="replace", cwd=workspace, env=env)
-    timer = threading.Timer(timeout, p.kill)
+                         text=True, encoding="utf-8", errors="replace", cwd=workspace, env=env,
+                         start_new_session=os.name != "nt")
+    timer = threading.Timer(timeout, _kill_tree, args=(p,))
     timer.start()
     result, tail, per_message, stopped = None, [], {}, False
     try:
@@ -125,7 +131,8 @@ def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout, cap_tokens=0
                     stopped = True
                     log.warning(f"[set_builder] Claude agent passed its token cap ({spent:,} > {cap_tokens:,}); "
                                 "stopping it")
-                    p.kill()
+                    _kill_tree(p)
+                    break                             # stop reading: nothing after the cap is used
         p.wait()
     finally:
         timer.cancel()
@@ -133,21 +140,26 @@ def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout, cap_tokens=0
     return (None if stopped else result), "".join(tail), spent, stopped
 
 
-def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400) -> str:
+def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400, allow_edit: bool = True) -> str:
     """Run the selected coding subscription in an isolated source mirror.
 
     Only allowed files are copied back. This avoids the old snapshot/fence race that could undo
     edits made in the real repository while a long set-building turn was still running.
+    allow_edit=False (Claude only) withholds the Edit tool, so changes are made as full rewrites: a design
+    agent otherwise patches its 1,000-line file with dozens of one-line edits after measuring, each one
+    re-sending its whole context (24 edits cost ~1.4M tokens; one rewrite ~15k).
     """
     from agents.showrunner import (UsageLimit, _API_ENV, _capped_effort, _record_claude_usage,
-                                   activate_fallback, active_backend, check_budget, codex_unavailable)
+                                   activate_fallback, active_backend, check_budget, codex_unavailable,
+                                   primary_reset)
     check_budget("set builder")          # the costliest call in the pipeline: never start one over budget
     backend = active_backend()
     story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
     measure_cmd = f"python -m agents.set_builder --measure {story_id}" if (story_id or "").endswith("_story") else None
     measures = ("(about 3 minutes; it prints collisions, floating characters, Max's on-screen size, static camera, "
-                "flat surfaces, small labels and flicker sources per beat) and fix everything it prints; run it again "
-                "until it prints no measured problems or only problems you cannot fix.")
+                "flat surfaces, small labels and flicker sources per beat) ONCE, fix everything it prints in one pass (one "
+                "Write or a few large Edits), then finish: the pipeline measures again after you and sends back "
+                "whatever is left, so a second measurement here only re-pays your whole context.")
 
     def rules_for(kind):
         text = ("\n\nYou may create or edit ONLY these files: " + ", ".join(allowed) +
@@ -155,7 +167,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 "WORK ECONOMICALLY (every step re-sends everything you have read so far): never read a whole "
                 "file longer than ~300 lines; grep for the definitions you need and read only those ranges; read "
                 "each file once; write each file in ONE full write (or a few large edits), never dozens of "
-                "one-line edits; measure at most 3 times. ")
+                "one-line edits; measure only once. ")
         if kind == "codex":
             from engine.make_film import BLENDER
             text += ("When inspecting files, issue one simple read/search command at a time; never chain PowerShell "
@@ -170,10 +182,15 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                      f"files are written, run it {measures}")
         else:
             text += "You cannot run commands."
+        if kind != "codex" and not allow_edit:
+            text += (" You have no Edit tool: to change a file you already wrote, Write it again in full, ONCE, "
+                     "with every change included.")
         return text
 
     rules = rules_for(backend)
-    with tempfile.TemporaryDirectory(prefix="video_creator_set_agent_") as tmp:
+    # ignore_cleanup_errors: a file still open in the mirror (Windows) must not fail a turn whose
+    # results were already copied back
+    with tempfile.TemporaryDirectory(prefix="video_creator_set_agent_", ignore_cleanup_errors=True) as tmp:
         workspace = os.path.join(tmp, "repo")
         os.makedirs(workspace)
         ignored = shutil.ignore_patterns(".git", ".env", "venv", "output", "logs", "__pycache__",
@@ -203,7 +220,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                                          "back to the Claude subscription: one design can use millions of "
                                          "tokens. Resume after the Codex reset, or set "
                                          "SET_BUILDER_CLAUDE_FALLBACK=1 to allow it.") from exc
-                    if activate_fallback(str(limit)[:180], failed_backend=backend):
+                    if activate_fallback(str(limit), failed_backend=backend):
                         backend = active_backend()
                         rules = rules_for(backend)
                     else:
@@ -212,14 +229,18 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                     raise
         if backend != "codex":
             if not _claude_building_allowed():
-                raise UsageLimit("Codex is unavailable and set building does not fall back to the Claude "
-                                 "subscription (SET_BUILDER_CLAUDE_FALLBACK=0). Resume after the Codex reset.")
+                reset = primary_reset()
+                limit = UsageLimit("Codex is out of quota and set building does not fall back to the Claude "
+                                   "subscription (SET_BUILDER_CLAUDE_FALLBACK=0). Resume after the Codex reset"
+                                   + (f" ({reset:%b %d %H:%M})" if reset else "") + ".")
+                limit.reset = reset       # lets the autopilot wait for a near reset instead of stopping blind
+                raise limit
             check_budget("set builder")      # again: the check above ran while the backend was still Codex
             exe = shutil.which("claude")
             if not exe:
                 raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
             env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
-            tools = ["Read", "Glob", "Grep", "Write", "Edit"]
+            tools = ["Read", "Glob", "Grep", "Write"] + (["Edit"] if allow_edit else [])
             permitted = list(tools)
             if measure_cmd:                       # one exact command: everything else needs approval = denied
                 tools.append("Bash")
@@ -238,20 +259,27 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             if stopped:
                 from agents.showrunner import BudgetExceeded
                 _record_claude_usage({"usage": spent}, "set builder (stopped at its token cap)")
-                raise BudgetExceeded(f"the set-builder agent was stopped at its token cap ({cap:,} tokens, counting "
-                                     "cache reads); nothing was copied back. Raise SET_BUILDER_CALL_TOKENS / "
-                                     "CLAUDE_TOKEN_BUDGET, or build the set on Codex.")
+                missing = [r for r in allowed if not os.path.isfile(os.path.join(workspace, os.path.normpath(r)))]
+                if missing:
+                    raise BudgetExceeded(f"the set-builder agent was stopped at its token cap ({cap:,} tokens, "
+                                         f"counting cache reads) before writing {', '.join(missing)}. Raise "
+                                         "SET_BUILDER_CALL_TOKENS / CLAUDE_TOKEN_BUDGET, or build the set on Codex.")
+                # The paid work is in the files: keep it. Static checks, the preview render and the fix
+                # rounds verify whatever state the agent left (a 2.6M-token design was once discarded here).
+                log.warning("[set_builder] keeping the files the stopped agent wrote; the build loop checks them")
+                data = {"result": "(stopped at the token cap before finishing; files copied back as they were)"}
             if data is None:
                 raise RuntimeError(f"claude -p failed: {tail[-400:]}")
             result_text = str(data.get("result") or "")
             if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
                 limit = UsageLimit(result_text[:300])
-                if activate_fallback(str(limit)[:180], failed_backend=backend):
-                    return claude_agent(prompt, allowed, effort=effort, timeout=timeout)
+                if activate_fallback(str(limit), failed_backend=backend):
+                    return claude_agent(prompt, allowed, effort=effort, timeout=timeout, allow_edit=allow_edit)
                 raise limit
             if data.get("is_error"):
                 raise RuntimeError(f"claude -p error: {result_text[:300]}")
-            _record_claude_usage(data, "set builder")
+            if not stopped:                       # a stopped agent's usage was recorded above
+                _record_claude_usage(data, "set builder")
             out = result_text.strip()
 
         for relative in allowed:
@@ -359,7 +387,13 @@ batt_story.py (grep a method by name; never read it whole).
   moves). It already follows every quality rule below; extend it in your set, never re-invent it.
 
 The spec is pure data and must define SET_ID, SUBJECT, HERO = "Max", MODEL_FACTS, STORY_ORDER,
-ACTIONS, beat_actions(), min_seconds() and validate(). It needs two hook actions, then rewind,
+ACTIONS, beat_actions(), min_seconds() and validate(). Each action's "shows" names only what a viewer
+must see: the mechanism and its visible result, at most 3 elements. The reviewer requires EVERY element
+named there (and in the beat's narration) on screen at the beat's middle and 7/8, so never list a gag,
+a reaction or a secondary prop there. Each action also lists "must_see": the 2-4 scene objects behind
+those elements, as object-name prefixes the Blender module really uses (e.g. ["levee_core", "duck",
+"Max"]; a character by its name). The pipeline MEASURES them at the beat's middle and 7/8 (on screen,
+>= 5% of the frame, not cut by an edge) before any reviewer looks. It needs two hook actions, then rewind,
 then a 7-10 action trial-and-error ladder that alternates visible failures with real engineering
 fixes and ends in a happy finale with Max's two children. Each action needs kind, shows and seconds.
 The validator must require one hook first, rewind second, and every STORY_ORDER action exactly once.
@@ -408,8 +442,27 @@ VISUAL AND SAFETY RULES:
   * An emptied reservoir uses studio.Reservoir.empty(f) (wet floor + puddle); a thin water sheet reads as
     a FULL basin. Refill with .fill(f).
   * Screens, monitors and displays show a picture (procedural shapes), never a blank glowing white.
-  * Max's gestures (pointing, thumbs up, wiping his brow) are raised to the SIDE so they read from the
-    front; an arm raised straight at the camera is invisible.
+  * Max's gestures read from the front: point and wipe his brow with the arm raised to the SIDE; for
+    success use BOTH arms up in a V (the rig's straight arm + tiny thumb makes a one-arm "thumbs up" read
+    as thumbs DOWN); for disappointment a shrug (arms out), never a facepalm (the hat brim hides the face).
+- HOW A VIEWER UNDERSTANDS A BEAT (the lesson of the first auto-built film: "it's good, but I don't
+  understand what is happening"). Every fail/fix beat is told in readable shots, in this order:
+  1. the CHANGE Max makes (close on Max and the thing he builds), the first ~30% of the beat;
+  2. WHY it works or fails AND its RESULT, together, for the rest of the beat: close on the mechanism with
+     its fact label/arrow (the viewer must SEE the cause, e.g. the two water levels side by side), with the
+     one recurring result meter (a bulb that is dim / flickers / blazes / dies, a gauge...) placed BESIDE
+     the mechanism, inside that same shot, and Max reacting in it. One frame shows cause and outcome.
+     Shoot it with studio.frame_all(rig, f0, f1, [the action's must_see objects]): it solves the camera
+     from their real bounds so all of them stay in frame (never hand-place this camera). Keep the
+     must_see things near each other, so the solved shot stays close and Max stays big.
+  3. NEVER end a beat on a separate meter-only or Max-only shot: the reviewer checks the beat's middle
+     AND 7/8, and the first build of this rule (the result shown last, in its own shot) had every beat
+     rejected for "the mechanism is not visible at the end". The thing the narration names stays on
+     screen through the end of the beat.
+  4. optionally the running gag (the kids) for <= 1.5 s, never in the beat's last quarter.
+  Show things where they are: if the narration says the water goes up the tunnel or the top runs dry,
+  the camera follows that water / frames that basin big. Never explain with a far wide shot where the
+  key object is a speck; never keep a big sticker over the place the shot is about.
 - The reference film JSON names this set, uses captions "word", one beat per required action, 140-192
   spoken words, a <=13-word hook and a final question. It exists for preview validation; the
   showrunner writes the production script after the set passes.
@@ -474,6 +527,121 @@ def method_map(set_id) -> str:
         elif isinstance(node, ast.FunctionDef):
             rows.append(f"{node.name} (module level): lines {node.lineno}-{node.end_lineno}")
     return "\n".join(rows)
+
+
+_MUST_SEE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["actions"], "properties": {
+    "actions": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["action", "must_see"],
+        "properties": {"action": {"type": "string"},
+                       "must_see": {"type": "array", "items": {"type": "string"}}}}}}}
+
+
+def insert_must_see(spec_src, values) -> str:
+    """Add "must_see": [...] to each action's dict in the spec's ACTIONS literal (source edit, so comments
+    and layout survive). Raises ValueError when ACTIONS is not a plain dict literal."""
+    import ast
+    tree = ast.parse(spec_src)
+    node = next((n.value for n in tree.body if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "ACTIONS" for t in n.targets)), None)
+    if not isinstance(node, ast.Dict):
+        raise ValueError("ACTIONS is not a dict literal")
+    lines = spec_src.splitlines(keepends=True)
+    edits = []
+    for key, val in zip(node.keys, node.values):
+        if not (isinstance(key, ast.Constant) and isinstance(val, ast.Dict)) or key.value not in values:
+            continue
+        if any(isinstance(k, ast.Constant) and k.value == "must_see" for k in val.keys):
+            continue
+        line = lines[val.lineno - 1]
+        col = len(line.encode("utf-8")[:val.col_offset].decode("utf-8"))      # ast offsets are UTF-8 bytes
+        edits.append((val.lineno - 1, col + 1, f'"must_see": {json.dumps(values[key.value])}, '))
+    for row, col, text in sorted(edits, reverse=True):
+        lines[row] = lines[row][:col] + text + lines[row][col:]
+    out = "".join(lines)
+    ast.parse(out)
+    return out
+
+
+def backfill_must_see(set_id) -> bool:
+    """A set written without must_see gets it from ONE structured call over its own source (the scene
+    objects it creates) instead of an agentic turn: an agent spent 900k tokens exploring the engine
+    for this. Returns True when the spec now passes the must_see check."""
+    from agents.showrunner import _call
+    spec_path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}_spec.py")
+    spec_src = open(spec_path, encoding="utf-8").read()
+    builder = open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
+    prompt = f"""For every action of this 3D story set, list the 1-4 scene objects a viewer MUST SEE on screen for
+the action to read (the mechanism, its visible result, the hero when he acts; never a gag, weather or a
+background prop). Give each as an object-name PREFIX exactly as the builder names the objects (the name
+strings it passes when it creates them); a character by its name (e.g. "Max"). Skip the rewind action.
+
+SPEC (engine/sets/{set_id}_spec.py):
+```python
+{spec_src}
+```
+
+BUILDER (engine/sets/{set_id}.py):
+```python
+{builder}
+```"""
+    try:
+        values = _call("You map a 3D set's story actions to the names of the scene objects that show them.",
+                       prompt, _MUST_SEE_SCHEMA, effort="low")
+        found = {v["action"]: [x for x in v["must_see"] if x][:4] for v in values.get("actions", [])
+                 if v.get("must_see")}
+        new = insert_must_see(spec_src, found)
+    except Exception as exc:                          # noqa: BLE001  the agent path still handles it
+        from agents.showrunner import BudgetExceeded, UsageLimit
+        if isinstance(exc, (BudgetExceeded, UsageLimit)):
+            raise
+        log.warning(f"[set_builder] must_see backfill failed ({str(exc)[:200]}); leaving it to the agent")
+        return False
+    open(spec_path, "w", encoding="utf-8").write(new)
+    log.info(f"[set_builder] must_see filled in for {len(found)} actions from the set's own object names")
+    return True
+
+
+def _set_methods(src):
+    """{method name: (first line, last line)} (1-based, decorators included) of the set class."""
+    import ast
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.ClassDef) and node.name.endswith("Set"):
+            return {m.name: (min([m.lineno] + [d.lineno for d in m.decorator_list]), m.end_lineno)
+                    for m in node.body if isinstance(m, ast.FunctionDef)}
+    return {}
+
+
+def freeze_methods(set_id, actions) -> dict:
+    """Source of the a_<action> methods of ACCEPTED beats, to be put back after a repair turn."""
+    path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py")
+    src = open(path, encoding="utf-8").read()
+    lines, spans = src.splitlines(keepends=True), _set_methods(src)
+    return {f"a_{a}": "".join(lines[spans[f"a_{a}"][0] - 1:spans[f"a_{a}"][1]])
+            for a in dict.fromkeys(actions) if f"a_{a}" in spans}
+
+
+def restore_methods(set_id, frozen) -> list:
+    """Put frozen methods back where a repair changed them (an accepted beat must not regress through a
+    direct edit). Returns the restored method names; a no-op when nothing changed."""
+    path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py")
+    restored = []
+    for name, body in frozen.items():
+        src = open(path, encoding="utf-8").read()
+        spans = _set_methods(src)
+        if name not in spans:
+            continue
+        lines = src.splitlines(keepends=True)
+        a, b = spans[name]
+        if "".join(lines[a - 1:b]) == body:
+            continue
+        new = "".join(lines[:a - 1]) + body + "".join(lines[b:])
+        try:
+            compile(new, path, "exec")
+        except SyntaxError:
+            continue
+        open(path, "w", encoding="utf-8").write(new)
+        restored.append(name)
+    return restored
 
 
 def _example_spec():
@@ -541,8 +709,15 @@ by line range; never the whole file):
 {method_map(set_id)}
 
 Fix the cause in the set's code; look at a listed image only when the text does not tell you enough.
+A "must_see" problem (a thing out of frame, cut by the edge or too small) is fixed by shooting that part
+of the beat with studio.frame_all(rig, f0, f1, [the must_see objects]) instead of a hand-placed camera.
 Keep every action name and the spec's STAGE_ORDER unchanged unless a problem says the spec itself is
-wrong. Finish with one line per problem saying what you changed."""
+wrong. The reviewer treats every element named in an action's "shows" (and in that beat's narration in
+the reference film) as REQUIRED on screen at the beat's middle and end. When a beat fails on an
+incidental element (a reaction, a gag, a secondary prop, weather), and the files you may edit include
+the spec and the reference film, cut that element from "shows" and the narration instead of crowding the
+shot. Never cut the mechanism that teaches the beat's principle or its visible result.
+Finish with one line per problem saying what you changed."""
 
 
 def fix_code(set_id: str, error: str, allowed=None):
@@ -557,7 +732,7 @@ def fix_code(set_id: str, error: str, allowed=None):
     return out
 
 
-def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None):
+def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None, max_windows=None):
     """Called by make_film (SCENE_POLICY=fix) and by the builder: the reviewer's rejected windows →
     Claude edits the set's builder.
 
@@ -567,7 +742,7 @@ def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None):
     """
     worst = sorted(rejected, key=lambda r: (not r.get("fatal_problems"), r.get("average_score") or 0))
     try:                                  # a typo in .env must not break the repair path
-        cap = max(1, int(os.getenv("SCENE_FIX_MAX_WINDOWS") or 6))
+        cap = max(1, int(max_windows or os.getenv("SCENE_FIX_MAX_WINDOWS") or 6))
     except ValueError:
         cap = 6
     sent, held = worst[:cap], worst[cap:]
@@ -626,6 +801,11 @@ def static_checks(set_id, story=False) -> list:
                       if story else
                       "assert getattr(sp, 'FORMAT', '') == 'evolution', 'spec FORMAT must be \"evolution\"'; ")
     story_check = (f"from agents.showrunner import hard_checks; e += hard_checks(f, {set_id!r}); "
+                   # every shown action names what must be on screen: the measured must_see gate needs it
+                   "e += [f'action {a!r} needs \"must_see\": a list of 1-4 object-name prefixes the viewer must see' "
+                   "for a, v in sp.ACTIONS.items() if v.get('kind') != 'rewind' and not ("
+                   "isinstance(v.get('must_see'), list) and 1 <= len(v['must_see']) <= 4 "
+                   "and all(isinstance(x, str) and x for x in v['must_see']))]; "
                    if story else "")
     film_path = _film_file(set_id)
     code = (f"import json; from engine.sets import {set_id}_spec as sp; "
@@ -988,21 +1168,31 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
     if not exists:
         log.info(f"[set_builder] designing and writing '{set_id}' for: {subject}")
         prompt = story_design_prompt(subject, set_id) if story else design_prompt(subject, set_id)
-        log.info(claude_agent(prompt, files)[-1500:])
+        log.info(claude_agent(prompt, files, allow_edit=False)[-1500:])
     else:
         log.info(f"[set_builder] '{set_id}' already exists: checking and improving it")
     status = {"set": set_id, "accepted": False, "rounds": 0, "work": work}
     # Keep fixing past `rounds` while it still improves (patience: rounds without a new best), up to a cap.
     # A round that accepts fewer beats than the best draft is rolled back to that draft before fixing.
     max_rounds = max(rounds, int(os.getenv("SET_BUILD_MAX_ROUNDS") or "8"))
-    patience = int(os.getenv("SET_BUILD_PATIENCE") or "2")
+    patience = int(os.getenv("SET_BUILD_PATIENCE") or "3")
     best, best_reports, stale = -1, None, 0
     best_dir = os.path.join(work, "best_draft")
+    set_path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py")
+    # Small repair turns: an agent given 6 windows re-read so much that it hit its token cap before its
+    # first edit; 3 windows per turn finish, and the rest come back next round.
+    try:
+        fix_windows = max(1, int(os.getenv("SET_FIX_MAX_WINDOWS") or 3))
+    except ValueError:
+        fix_windows = 3
+    undo, idle = None, 0               # undo: the agent's own version, if a method restore broke the build
     rnd = 0
     while rnd < max_rounds:
         rnd += 1
         status["rounds"] = rnd
         errs = static_checks(set_id, story=story)
+        if errs and story and all('needs "must_see"' in e for e in errs) and backfill_must_see(set_id):
+            errs = static_checks(set_id, story=story)
         if errs:
             log.info(f"[set_builder] round {rnd}: {len(errs)} static problem(s); sending back to Claude")
             claude_agent(fix_prompt(set_id, "\n".join(f"- {e}" for e in errs),
@@ -1010,8 +1200,18 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
             continue
         log.info(f"[set_builder] round {rnd}: preview render (3 stills per beat)")
         err = preview_render(set_id, work)
+        if err and undo is not None:
+            # the accepted beats' methods were put back after the last repair and no longer fit the shared
+            # code the agent changed: take the agent's version as it wrote it (no paid turn needed)
+            log.info(f"[set_builder] round {rnd}: restored accepted-beat methods broke the build; keeping the "
+                     "repair as the agent wrote it")
+            open(set_path, "w", encoding="utf-8").write(undo)
+            undo = None
+            continue
+        undo = None
         if err:
-            log.info(f"[set_builder] round {rnd}: Blender error; sending the traceback to Claude")
+            tb = err[err.rfind("Traceback"):] if "Traceback" in err else err
+            log.info(f"[set_builder] round {rnd}: Blender error; sending the traceback to Claude:\n{tb[-800:]}")
             claude_agent(fix_prompt(set_id, f"Blender crashed while building or rendering the set:\n{err}",
                                     "The preview render failed."), files)
             continue
@@ -1028,6 +1228,9 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
                      f"  python main.py --source {source} --set {set_id}")
             return status
         accepted = len(reports) - len(rejected)
+        # repairs take a few windows per turn, so every rejected window needs its turn before the round
+        # limit can end the build (the token budget, not the round count, bounds what it costs)
+        max_rounds = max(max_rounds, rnd + -(-len(rejected) // fix_windows) + patience)
         if accepted > best:
             best, best_reports, stale = accepted, reports, 0
             _snapshot(files, best_dir)
@@ -1041,8 +1244,23 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
         if rnd >= rounds and stale >= patience:
             break
         if rnd < max_rounds:
-            fix_scenes(set_id, rejected, allowed=files,
-                       keep=[r["action"] for r in reports if r.get("valid")])
+            keep = [r["action"] for r in reports if r.get("valid")]
+            frozen = freeze_methods(set_id, [a for k in keep for a in k.split("+")])
+            try:
+                fix_scenes(set_id, rejected, allowed=files, keep=keep, max_windows=fix_windows)
+                idle = 0
+            except RepairNotApplied as exc:
+                idle += 1
+                if idle >= 2:                      # twice in a row: the same inputs would only repeat it
+                    raise
+                log.warning(f"[set_builder] round {rnd}: the repair changed nothing ({str(exc)[:160]}); "
+                            "trying again next round")
+                continue
+            agent_version = open(set_path, encoding="utf-8").read()
+            restored = restore_methods(set_id, frozen)
+            if restored:
+                undo = agent_version
+                log.info(f"[set_builder] kept the accepted beats as they were: put back {', '.join(restored)}")
     status["contact_sheet"] = os.path.join(work, f"contact_round{status['rounds']}.png")
     log.warning(f"[set_builder] NOT accepted after {status['rounds']} rounds: '{set_id}' stays a draft (not registered). "
                 f"See {os.path.join(work, 'build_review.json')}; run again to continue improving it.")

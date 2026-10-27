@@ -101,6 +101,16 @@ class TopicSelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(showrunner.NoUnusedStorySets, "already been used"):
                 showrunner.pick_topic()
 
+    def test_film_rendered_outside_the_log_still_consumes_its_subject(self):
+        root = tempfile.mkdtemp()
+        films = os.path.join(root, "films")
+        os.makedirs(films)
+        with open(os.path.join(films, "by_hand.json"), "w", encoding="utf-8") as f:
+            json.dump({"title": "By hand", "set": "boat_story", "meta": {"angle": "a"}}, f)
+        with patch.object(showrunner, "HISTORY", os.path.join(root, "missing.json")), \
+                patch.object(showrunner, "FILMS_DIR", films):
+            self.assertEqual(showrunner.available_topic_sets(["nuclear_story", "boat_story"]), ["nuclear_story"])
+
     def test_explicit_repeat_override(self):
         history = [{"set": "nuclear_story"}]
         with patch.dict(os.environ, {"SHOWRUNNER_ALLOW_REPEATS": "1"}):
@@ -137,6 +147,32 @@ class RevisionTests(unittest.TestCase):
         self.assertIs(best[2], high)
         self.assertTrue(showrunner._ships(best[2], best[1]))
         grade.assert_called_once_with(fixed, topic, "facts", [])
+
+
+class RuleRepairTests(unittest.TestCase):
+    def test_one_word_over_budget_is_trimmed_not_redrafted(self):
+        over = {"title": "t", "beats": _beats(GOOD, words=12)}            # 192 words
+        over["beats"][0]["text"] = "An empty pool can float right out of the ground."
+        over["beats"][3]["text"] += " extra extra extra"
+        trimmed = json.loads(json.dumps(over))
+        trimmed["beats"][3]["text"] = " ".join(["word"] * 12)
+        problems = showrunner.hard_checks(over, "pool")
+        self.assertTrue(any("total narration" in p for p in problems))
+        with patch.object(showrunner, "_call", return_value=trimmed) as call:
+            script, left = showrunner.repair_rules(over, "pool", problems)
+        self.assertEqual(left, [])
+        self.assertIs(script, trimmed)
+        self.assertEqual(call.call_args.kwargs["effort"], "low")
+
+    def test_a_repair_that_breaks_more_rules_is_not_taken(self):
+        over = {"title": "t", "beats": _beats(GOOD, words=12)}
+        over["beats"][3]["text"] += " extra extra extra"
+        worse = {"title": "t", "beats": _beats(GOOD[:3], words=40)}
+        problems = showrunner.hard_checks(over, "pool")
+        with patch.object(showrunner, "_call", return_value=worse):
+            script, left = showrunner.repair_rules(over, "pool", problems)
+        self.assertIs(script, over)
+        self.assertEqual(left, problems)
 
 
 class ToFilmTests(unittest.TestCase):

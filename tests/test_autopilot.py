@@ -145,6 +145,23 @@ class ScriptAndCheckTests(_Env):
                 ap.stage_script(self.run, "cutaway", None, "nuclear_story")
         self.assertEqual(calls, [(None, "nuclear_story")])
 
+    def test_set_repair_without_changes_stops_instead_of_retrying(self):
+        from agents.set_builder import RepairNotApplied
+        from agents.showrunner import NoUnusedStorySets
+        plan = {"subject": "levee", "set_id": "levee_story", "build_brief": "brief"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            raise NoUnusedStorySets("all consumed")
+
+        with patch("agents.showrunner.run", write), \
+                patch("agents.showrunner.plan_new_story_set", return_value=plan), \
+                patch("agents.set_builder.build_story_set",
+                      side_effect=RepairNotApplied("AI repair made no source changes")) as build, \
+                patch.object(ap.time, "sleep", side_effect=AssertionError("must not wait to retry")):
+            with self.assertRaisesRegex(ap.GiveUp, "made no changes"):
+                ap.stage_script(self.run, "cutaway", None, None)
+        build.assert_called_once()
+
     def test_cutaway_builds_new_story_when_library_is_exhausted(self):
         from agents.showrunner import NoUnusedStorySets
         calls = []
@@ -223,3 +240,22 @@ class ScriptAndCheckTests(_Env):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BudgetAcrossResumeTests(_Env):
+    def test_a_resumed_run_keeps_counting_its_earlier_spend(self):
+        from agents import showrunner
+        with patch.dict(showrunner.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 2_500_000,
+                                                  "cache_creation_input_tokens": 0, "output_tokens": 0}):
+            self.run.event("set", "a costly turn")
+            self.assertEqual(json.load(open(self.run.path, encoding="utf-8"))["claude_tokens"], 2_500_000)
+        try:
+            with patch.dict(showrunner.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 0,
+                                                      "cache_creation_input_tokens": 0, "output_tokens": 0}), \
+                    patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "2000000"}),                     patch.object(showrunner, "BACKEND", "subscription"),                     patch.object(showrunner, "_ACTIVE_BACKEND", [None]):
+                ap.Run(self.run.path)                    # a new process resumes the run
+                self.assertEqual(showrunner.tokens_used(), 2_500_000)
+                with self.assertRaises(showrunner.BudgetExceeded):
+                    showrunner.check_budget("next call")
+        finally:
+            showrunner.carry_tokens(0)
