@@ -531,6 +531,20 @@ labels, logos, or written numbers.
 9. Do not invent a discovery, person, place, quotation, artifact, experiment, scientific mechanism,
    or historical event. When the evidence cannot support a scene, simplify to a neutral illustrative
    view of the supported object instead of filling the gap with fiction.
+10. EVERY VISUAL MUST BE FILMABLE BY THIS GENERATOR. Accuracy binds the narration; the shots must
+   also be renderable, or the clip is rejected and the shot becomes a frozen still. Therefore:
+   - Do not name a real vehicle, vessel, craft, spacecraft or instrument in a visual. Describe it
+     generically and plainly: "the deck of a research ship at sea", never "RV Investigator". The
+     narration may still name it.
+   - Do not stage a shot that depends on sustained underwater, submerged, aerial-only, microscopic,
+     satellite or archival imagery. A generated clip drifts out of such a setting within three
+     seconds, typically to dry land under a bright sky. Film the evidence where a camera can stand:
+     the object on a bench, the core on a table, the coastline from the shore, the machine in a hall.
+   - Do not stage instrument readouts, sonar traces, scans, screens or data displays; they come out
+     as forbidden on-screen text. Show the physical thing the reading is about.
+   - Prefer ordinary air and daylight (or plain, motivated interior light). If the evidence's real
+     setting cannot be filmed, show a supported object from that work instead, and let narration
+     carry the location.
 
 """
 
@@ -602,6 +616,15 @@ def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 
     limits = (f"LIMITS: {min_words}-{max_words} words TOTAL across all beat texts, "
               f"about {num_beats} beats of {lo}-{hi} words each.")
     evidence = json.dumps(research or [], ensure_ascii=False, indent=2)
+    # The topic line is written by the topic scout BEFORE the sources are fetched, so it routinely
+    # asserts specifics the evidence never backs (a height, a date, a collapse). Handed over as plain
+    # fact it becomes the story's spine, and the evaluator then blocks every beat that rests on it.
+    topic_caveat = ("\nTREAT THE TOPIC LINE AS A LEAD, NOT A SOURCE. It was written before these sources were "
+                    "read. Any specific in it that SOURCE EVIDENCE does not support — a height, a date, a "
+                    "collapse, a record, a measurement — must be DROPPED, not retold or softened, and must "
+                    "not carry a beat, the title, the premise or the ending. A shorter arc that is fully "
+                    "sourced beats a richer one built on an unsupported claim."
+                    if content_mode == "documentary" else "")
 
     if previous and feedback:
         draft = {k: v for k, v in previous.items() if k not in ("spoken_script", "credits")}
@@ -612,7 +635,7 @@ def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 
 
 Fix exactly those problems. Keep the story, facts, and visuals otherwise as close as possible —
 shorten or merge beats if the narration is too long.
-TOPIC: {topic}
+TOPIC: {topic}{topic_caveat}
 FRAMING ANGLE: {angle or 'choose the strongest truthful framing'}
 CONTENT MODE: {content_mode}
 TONE: {tone}
@@ -638,7 +661,7 @@ Submit the corrected FULL script as the structured output."""
             "things,\ndiagram for numbers/dates/processes/comparisons, footage for generic filmable actions.")
         prompt = f"""Create a viral {target_seconds}-second video about:
 
-TOPIC: {topic}
+TOPIC: {topic}{topic_caveat}
 FRAMING ANGLE: {angle or 'choose the strongest truthful framing'}
 CONTENT MODE: {content_mode}. In documentary mode, do not invent events or discoveries.
 TONE: {tone}

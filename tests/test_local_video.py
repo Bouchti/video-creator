@@ -23,7 +23,9 @@ from local_video.planner import (
     QUALITY_BAN, allocate_frames, allocate_story_frames, continuation_source, plan_shots,
     shot_count_for_duration,
 )
-from local_video.project import create_project, project_status, refresh_project_from_shot, replan_project
+from local_video.project import (
+    create_project, project_status, refresh_project_from_shot, replan_project, reset_shot,
+)
 from local_video.preflight import run_preflight
 from local_video.queue import FileLock, QueueBusyError, QueueRunner, _retake_prompt
 from local_video.validation import ffprobe, media_metadata, validate_clip, validate_final
@@ -678,7 +680,7 @@ class QueueTests(unittest.TestCase):
                 {"valid": False, "average_score": 6.0, "fatal_problems": ["visible text"], "revision_prompt": "a"},
             ])
             with patch.object(QueueRunner, "_still_replacement", return_value=False) as still, \
-                    patch.object(QueueRunner, "_reference_for", return_value=Path(folder) / "ref.jpg"):
+                    patch.object(QueueRunner, "_still_source", return_value=Path(folder) / "ref.jpg"):
                 result = runner.run(project, shots={1})
             still.assert_called_once()
             self.assertEqual("accepted", result.shots[0].status)
@@ -1062,6 +1064,207 @@ class KeyframeTests(unittest.TestCase):
                     patch.object(keyframes.ComfyClient, "submit") as submit:
                 self.assertEqual(0, keyframes.prepare_keyframes(project, make_test_config(folder)))
             submit.assert_not_called()
+
+
+class DegradationGuardTests(unittest.TestCase):
+    """A salvaged shot is marked, never chained into another still, and ends a hopeless run.
+
+    Accepting the least bad take keeps a run alive, but each one costs the final creative review its
+    story, continuity and pacing scores. Unbounded, it renders for hours to build a video that gate
+    always rejects, and chained still push-ins manufacture the very repetition it rejects.
+    """
+
+    def _runner_and_project(self, folder, **config_values):
+        config = make_test_config(folder, **config_values)
+        project = create_project("desert city", 60, "35mm nocturne", "auto", narration_enabled=False,
+                                 config=config, script=sample_script())
+        runner = QueueRunner(config, {"minimax": FakeBackend(config, "minimax", []),
+                                      "wan": FakeBackend(config, "wan", [])},
+                             validator=fake_validator, extractor=fake_extractor)
+        return runner, project
+
+    @staticmethod
+    def _give_frames(project, count):
+        for shot in project.shots[:count]:
+            frame = Path(project.project_dir) / "shots" / f"{shot.id}-last.jpg"
+            frame.parent.mkdir(parents=True, exist_ok=True)
+            frame.write_bytes(b"frame")
+            shot.last_frame = str(frame.relative_to(project.project_dir))
+
+    _chain = staticmethod(lambda manifest, index: index - 1 if index else None)
+
+    def test_a_still_is_built_from_the_nearest_real_frame(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder)
+            self._give_frames(project, 3)
+            project.shots[1].degraded = "still"               # shot 2 is itself a push-in
+            with patch.object(QueueRunner, "_reference_source", staticmethod(self._chain)):
+                source = runner._still_source(project, 2)
+            self.assertIsNotNone(source)
+            self.assertEqual(Path(project.shots[0].last_frame).name, source.name)
+
+    def test_no_still_is_made_when_every_candidate_is_itself_a_still(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder)
+            self._give_frames(project, 3)
+            project.shots[0].degraded = "still"
+            project.shots[1].degraded = "still"
+            with patch.object(QueueRunner, "_reference_source", staticmethod(self._chain)):
+                self.assertIsNone(runner._still_source(project, 2))
+
+    def test_a_genuinely_passed_shot_is_a_valid_still_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder)
+            self._give_frames(project, 2)
+            with patch.object(QueueRunner, "_reference_source", staticmethod(self._chain)):
+                source = runner._still_source(project, 1)
+            self.assertEqual(Path(project.shots[0].last_frame).name, source.name)
+
+    def test_the_run_continues_while_salvage_stays_inside_the_budget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder, max_degraded_percent=50)
+            for shot in project.shots:
+                shot.status = "accepted"
+            project.shots[0].degraded = "still"
+            self.assertIsNone(runner._degradation_stop(project, None))
+
+    def test_the_run_stops_once_salvage_passes_the_budget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder, max_degraded_percent=25)
+            for shot in project.shots:
+                shot.status = "accepted"
+            for shot in project.shots:                        # every shot salvaged: hopeless
+                shot.degraded = "still"
+            message = runner._degradation_stop(project, None)
+            self.assertIsNotNone(message)
+            self.assertIn("still push-in", message)
+            self.assertIn("25% budget", message)
+            self.assertIn(str(project.project_dir), message)
+            self.assertIn("--shots", message)
+
+    def test_a_hundred_percent_budget_restores_the_old_never_stop_behaviour(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder, max_degraded_percent=100)
+            for shot in project.shots:
+                shot.status, shot.degraded = "accepted", "still"
+            self.assertIsNone(runner._degradation_stop(project, None))
+
+    def test_the_budget_counts_only_the_selected_shots_on_a_partial_rerun(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder, max_degraded_percent=25)
+            project.shots[0].status, project.shots[0].degraded = "accepted", "still"
+            for shot in project.shots[1:]:                    # untouched shots must not count
+                shot.status, shot.degraded = "accepted", "still"
+            self.assertIsNotNone(runner._degradation_stop(project, {1}))
+
+    def test_the_recovery_hint_names_the_project_and_the_shots_to_redo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder)
+            hint = runner._recovery_hint(project, [project.shots[0], project.shots[2]])
+            self.assertIn(str(project.project_dir), hint)
+            self.assertIn("--shots 1,3", hint)               # CLI shot numbers are 1-based
+
+    def test_the_hint_omits_the_command_when_there_is_nothing_to_redo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder)
+            hint = runner._recovery_hint(project)
+            self.assertIn(str(project.project_dir), hint)
+            self.assertNotIn("--shots", hint)
+
+    def test_a_salvaged_shot_records_how_it_was_salvaged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder, retry_limit=2, fallback_failures=9,
+                                      max_degraded_percent=100)
+            project = create_project("desert city", 60, "35mm nocturne", "auto",
+                                     narration_enabled=False, config=config, script=sample_script())
+            reviews = iter([
+                {"valid": False, "average_score": 5.5, "fatal_problems": [], "revision_prompt": "a"},
+                {"valid": False, "average_score": 6.8, "fatal_problems": [], "revision_prompt": "b"},
+                {"valid": False, "average_score": 6.0, "fatal_problems": [], "revision_prompt": "c"},
+            ])
+            runner = QueueRunner(config, {"minimax": FakeBackend(config, "minimax", []),
+                                          "wan": FakeBackend(config, "wan", [])},
+                                 validator=fake_validator, extractor=fake_extractor,
+                                 visual_reviewer=lambda *args: next(reviews))
+            result = runner.run(project, shots={1})
+            self.assertEqual("accepted", result.shots[0].status)
+            self.assertEqual("best_take", result.shots[0].degraded)   # accepted != passed review
+
+    def test_regenerating_a_shot_clears_its_salvage_mark(self):
+        """Otherwise a stale mark spends the next run's budget and bars the shot as a still source."""
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            project = create_project("desert city", 60, "35mm nocturne", "auto",
+                                     narration_enabled=False, config=config, script=sample_script())
+            project.shots[0].status = "accepted"
+            project.shots[0].degraded = "still"
+            project.save()
+            reset = reset_shot(project.project_dir, 1, config)
+            self.assertEqual("pending", reset.shots[0].status)
+            self.assertEqual("", reset.shots[0].degraded)
+
+    def test_the_recovery_hint_tells_you_to_pass_redo(self):
+        """Without --redo the named shots are already 'accepted', so the queue skips them and the
+        command silently re-reviews the same edit."""
+        with tempfile.TemporaryDirectory() as folder:
+            runner, project = self._runner_and_project(folder)
+            hint = runner._recovery_hint(project, [project.shots[0], project.shots[2]])
+            self.assertIn("--shots 1,3", hint)
+            self.assertIn("--redo", hint)
+
+
+class RedoFlagTests(unittest.TestCase):
+    """`run --shots` reuses accepted shots; only --redo re-renders them."""
+
+    def _project(self, folder):
+        config = make_test_config(folder)
+        project = create_project("desert city", 60, "35mm nocturne", "auto", narration_enabled=False,
+                                 config=config, script=sample_script())
+        clip = Path(project.project_dir) / "shots" / "shot-001.mp4"
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        clip.write_bytes(b"clip")
+        project.shots[0].status = "accepted"
+        project.shots[0].degraded = "still"
+        project.shots[0].output = str(clip.relative_to(project.project_dir))
+        project.save()
+        return config, project
+
+    def test_redo_resets_the_named_shots_before_running(self):
+        from local_video import cli
+        with tempfile.TemporaryDirectory() as folder:
+            config, project = self._project(folder)
+            with patch.object(cli.QueueRunner, "run", side_effect=lambda m, shots=None: m) as run, \
+                    patch.object(cli, "PipelineConfig", return_value=config):
+                cli.main(["run", str(project.project_dir), "--shots", "1", "--redo"])
+            passed = run.call_args.kwargs.get("shots") or run.call_args.args[1]
+            self.assertEqual({1}, passed)
+            reloaded = json.loads((Path(project.project_dir) / "project.json").read_text(encoding="utf-8"))
+            self.assertEqual("pending", reloaded["shots"][0]["status"])   # archived, will re-render
+            self.assertEqual("", reloaded["shots"][0]["degraded"])
+
+    def test_without_redo_an_accepted_shot_is_left_alone(self):
+        from local_video import cli
+        with tempfile.TemporaryDirectory() as folder:
+            config, project = self._project(folder)
+            with patch.object(cli.QueueRunner, "run", side_effect=lambda m, shots=None: m), \
+                    patch.object(cli, "PipelineConfig", return_value=config):
+                cli.main(["run", str(project.project_dir), "--shots", "1"])
+            reloaded = json.loads((Path(project.project_dir) / "project.json").read_text(encoding="utf-8"))
+            self.assertEqual("accepted", reloaded["shots"][0]["status"])  # reused, as before
+
+    def test_redo_without_shots_is_refused_rather_than_wiping_the_project(self):
+        import contextlib
+        import io as _io
+        from local_video import cli
+        with tempfile.TemporaryDirectory() as folder:
+            config, project = self._project(folder)
+            stderr = _io.StringIO()
+            with patch.object(cli.QueueRunner, "run") as run, \
+                    patch.object(cli, "PipelineConfig", return_value=config), \
+                    contextlib.redirect_stderr(stderr):
+                self.assertEqual(2, cli.main(["run", str(project.project_dir), "--redo"]))
+            run.assert_not_called()
+            self.assertIn("--redo needs --shots", stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -163,6 +163,12 @@ class PipelineConfig:
     ).expanduser().resolve())
     retry_limit: int = field(default_factory=lambda: env_int("LOCAL_VIDEO_RETRY_LIMIT", 2, 0, 10))
     fallback_failures: int = field(default_factory=lambda: env_int("LOCAL_VIDEO_FALLBACK_FAILURES", 2, 1, 10))
+    # Share of shots that may be salvaged (a rejected take kept, or a still push-in) before the run
+    # stops. Salvaged shots cost the final creative review its story, continuity and pacing scores,
+    # so a heavily salvaged render is hours of GPU spent on a video that gate will reject.
+    # 100 = never stop (the old behaviour).
+    max_degraded_percent: int = field(
+        default_factory=lambda: env_int("LOCAL_VIDEO_MAX_DEGRADED_PERCENT", 25, 0, 100))
     generation_timeout: int = field(default_factory=lambda: env_int("LOCAL_VIDEO_GENERATION_TIMEOUT", 3600, 60, 86400))
     poll_seconds: float = field(default_factory=lambda: env_float("LOCAL_VIDEO_POLL_SECONDS", 2.0, 0.1))
     minimax_width: int = field(default_factory=lambda: env_int("MINIMAX_WIDTH", 544, 256, 4096))

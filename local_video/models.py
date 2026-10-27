@@ -60,6 +60,10 @@ class Shot:
     last_frame: str | None = None
     validation: dict[str, Any] | None = None
     error: str | None = None
+    # How the shot was salvaged when no take passed review: "best_take", "flawed_take" or "still".
+    # Empty means it genuinely passed. Salvaged shots lower the final creative review's scores, and
+    # a "still" shot is never reused as a continuity source (that chains push-ins of one frame).
+    degraded: str = ""
 
     @property
     def duration_seconds(self) -> float:

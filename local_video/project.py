@@ -252,6 +252,9 @@ def reset_shot(project: str | Path, shot_number: int, config: PipelineConfig | N
     shot.validation = None
     shot.error = None
     shot.attempts = []
+    # A regenerated shot is no longer salvaged: a stale mark would both count against the run's
+    # degradation budget and keep the shot from serving as a still source for its neighbours.
+    shot.degraded = ""
     manifest.outputs = {}
     manifest.set_state(ProjectState.QUEUED, reason="shot_regeneration", shot=shot.id)
     manifest.save()

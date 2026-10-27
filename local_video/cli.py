@@ -100,6 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("project")
         if name in {"run", "resume", "retry"}:
             command.add_argument("--shots", help="Only process selected shots, for example 1 or 2-5,8")
+            command.add_argument("--redo", action="store_true",
+                                 help="Re-render the selected shots even though they are already "
+                                      "accepted (archives their current clip first). Without this, an "
+                                      "accepted shot is reused and --shots alone does nothing.")
     regenerate = sub.add_parser("regenerate", help="Archive and regenerate one selected shot")
     regenerate.add_argument("project")
     regenerate.add_argument("shot", type=int)
@@ -183,11 +187,18 @@ def main(argv: list[str] | None = None) -> int:
                 if shot.status == "failed":
                     shot.status = "pending"
                     shot.error = None
+                    shot.degraded = ""
             manifest.set_state(ProjectState.QUEUED, requested_by="user", reason="retry_failed_shots")
             manifest.save()
-        manifest = QueueRunner(config, progress=_progress).run(
-            manifest, shots=_shot_selection(getattr(args, "shots", None))
-        )
+        selection = _shot_selection(getattr(args, "shots", None))
+        if getattr(args, "redo", False):
+            # An accepted shot is skipped by the queue, so --shots alone cannot re-render the
+            # salvaged shots a failed review blames. Archive them first, as `regenerate` does.
+            if not selection:
+                raise ValueError("--redo needs --shots: it re-renders only the shots you name")
+            for number in sorted(selection):
+                manifest = reset_shot(manifest.project_dir, number, config)
+        manifest = QueueRunner(config, progress=_progress).run(manifest, shots=selection)
         _print_status(manifest)
         return 0 if manifest.state == ProjectState.COMPLETED.value else 1
     except (ValueError, FileNotFoundError, RuntimeError, QueueBusyError) as exc:

@@ -170,7 +170,12 @@ def run_pipeline(
     from agents.evaluator import evaluate_with_retry
     mode = "unreal" if source == "unreal" else "local-ai" if source == "local-ai" else "footage"
     angle = selection.get("angle") if selection else None
-    script = evaluate_with_retry(topic, tone=tone, max_retries=3, target_seconds=duration, mode=mode,
+    # Documentary drafts converge instead of passing outright: the evaluator finds the unsourced
+    # claims a few at a time, so each revision clears some and the next one surfaces fewer. Three
+    # attempts stranded a draft one blocking issue from PASS, throwing away the whole topic and its
+    # research. Each attempt is ~25k tokens and CLAUDE_TOKEN_BUDGET caps the total.
+    attempts = int(os.getenv("SCRIPT_MAX_ATTEMPTS") or 5)
+    script = evaluate_with_retry(topic, tone=tone, max_retries=attempts, target_seconds=duration, mode=mode,
                                  source=source, angle=angle, research=research)
     if not script:
         log.error("Script generation failed. Aborting.")

@@ -142,6 +142,13 @@ def _music_path(manifest: ProjectManifest) -> Path | None:
     return Path(picked) if picked else None
 
 
+DEGRADATION_KIND = {
+    "shot_accepted_best_take": "best_take",
+    "shot_accepted_flawed_take": "flawed_take",
+    "shot_replaced_with_animated_still": "still",
+}
+
+
 def _prompt_for_backend(shot, backend: str):
     if backend == "wan" and MINIMAX_SUFFIX in shot.prompt:
         return replace(shot, prompt=shot.prompt.replace(MINIMAX_SUFFIX, WAN_SUFFIX))
@@ -548,13 +555,17 @@ class QueueRunner:
         shot.output = str(path.relative_to(manifest.project_dir))
         shot.status = "accepted"
         shot.error = None
+        # "accepted" here means "kept so the run can continue", not "passed review". Record which
+        # compromise was made: the degradation budget counts these, and a still is never reused as a
+        # continuity source.
+        shot.degraded = DEGRADATION_KIND.get(event, "salvaged")
         frame_path = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
         try:
             self.extractor(path, frame_path, self.config)
             shot.last_frame = str(frame_path.relative_to(manifest.project_dir))
         except Exception as frame_error:
             manifest.record("continuity_frame_failed", shot=shot.id, error=str(frame_error))
-        manifest.record(event, shot=shot.id, **details)
+        manifest.record(event, shot=shot.id, degraded=shot.degraded, **details)
         manifest.save()
         log.warning("Local AI %s: no take passed review; %s so the video can continue.",
                     shot.id, event.replace("_", " "))
@@ -613,8 +624,8 @@ class QueueRunner:
     def _accept_fallback(self, manifest: ProjectManifest, index: int, last_error: str) -> bool:
         """When every take was rejected, keep the video going with the least bad option.
 
-        Order: the best reviewed take without fatal problems, then a slow push-in on the previous
-        shot's last frame, then the best reviewed take even with fatal problems. Takes that failed
+        Order: the best reviewed take without fatal problems, then a slow push-in on a real
+        generated frame, then the best reviewed take even with fatal problems. Takes that failed
         technical validation (black, frozen, wrong size) are never used.
         """
         shot = manifest.shots[index]
@@ -629,12 +640,74 @@ class QueueRunner:
         clean = [take for take in takes if not take[1]]
         if clean and self._restore_take(manifest, shot, clean[0][2], "shot_accepted_best_take"):
             return True
-        reference = self._reference_for(manifest, index)
+        reference = self._still_source(manifest, index)
         if reference and self._still_replacement(manifest, shot, reference):
             return True
         if takes and self._restore_take(manifest, shot, takes[0][2], "shot_accepted_flawed_take"):
             return True
         return False
+
+    def _still_source(self, manifest: ProjectManifest, index: int) -> Path | None:
+        """A frame to build a still push-in from, never one belonging to another still.
+
+        Chaining them turns consecutive shots into zooms of a single frame several shots back, which
+        is precisely the "repeated variations of the same scene, so the edit loops instead of
+        progressing" defect the final creative review rejects. With no real frame to fall back on,
+        no still is made: failing the shot is better than manufacturing that defect.
+        """
+        source = self._reference_source(manifest, index)
+        seen = set()
+        while source is not None and source not in seen and manifest.shots[source].degraded == "still":
+            seen.add(source)
+            source = self._reference_source(manifest, source)
+        if source is None or source in seen:
+            return None
+        previous = manifest.shots[source]
+        if not previous.last_frame:
+            return None
+        candidate = resolve_within(manifest.project_dir, previous.last_frame)
+        return candidate if candidate.is_file() else None
+
+    @staticmethod
+    def _recovery_hint(manifest: ProjectManifest, redo=()) -> str:
+        """Name the project and the exact command that reuses everything already rendered."""
+        lines = [f"The render so far is kept in {manifest.project_dir}"]
+        selection = ",".join(str(shot.index + 1) for shot in redo)
+        if selection:
+            # --redo is required: those shots are marked accepted, and the queue skips an accepted
+            # shot, so `--shots` on its own would re-review the same edit and fail again.
+            lines.append("Fix those shots' prompts, then re-render only them (every other shot is reused):")
+            lines.append(f'  python -m local_video.cli run "{manifest.project_dir}" '
+                         f'--shots {selection} --redo')
+        return "\n".join(lines)
+
+    def _degradation_stop(self, manifest: ProjectManifest, shots: set[int] | None) -> str | None:
+        """Stop while the GPU bill is small once salvaged shots make the final review hopeless.
+
+        Every salvaged shot costs the final creative review its story-coherence, continuity and
+        pacing scores, so a heavily salvaged render spends hours building a video that gate rejects.
+        The remaining shots cannot recover those scores, so there is nothing to gain by finishing.
+        """
+        allowed = self.config.max_degraded_percent
+        if allowed >= 100:
+            return None
+        planned = len(shots) if shots is not None else len(manifest.shots)
+        finished = [shot for index, shot in enumerate(manifest.shots)
+                    if (shots is None or index + 1 in shots) and shot.status == "accepted"]
+        degraded = [shot for shot in finished if shot.degraded]
+        budget = planned * allowed // 100
+        if not planned or len(degraded) <= budget:
+            return None
+        stills = sum(1 for shot in degraded if shot.degraded == "still")
+        return (
+            f"{len(degraded)} of the {len(finished)} finished shots had to be salvaged because no take "
+            f"passed review ({stills} replaced with a still push-in). That is past the "
+            f"{allowed}% budget ({budget} of {planned} shots), and the remaining shots cannot raise the "
+            f"final creative review's story, continuity and pacing scores back over its threshold. "
+            f"The run stopped here instead of rendering the rest for a video that gate would reject. "
+            f"The prompts are most likely asking for something the backend cannot generate.\n"
+            + self._recovery_hint(manifest, degraded)
+        )
 
     def _narration(self, manifest: ProjectManifest) -> Path | None:
         if not manifest.narration_enabled or not str(manifest.script.get("spoken_script") or "").strip():
@@ -823,6 +896,16 @@ class QueueRunner:
                     )
                     manifest.save()
                     return manifest
+                hopeless = self._degradation_stop(manifest, shots)
+                if hopeless:
+                    manifest.active_shot = None
+                    manifest.error = hopeless
+                    manifest.record("stopped_degradation_budget", shot=shot.id)
+                    manifest.set_state(ProjectState.PARTIALLY_COMPLETED, stage="generation", error=hopeless)
+                    manifest.save()
+                    log.error("Local AI stopped: %s", hopeless)
+                    self._emit(manifest, error=hopeless)
+                    return manifest
             if shots is not None and completed_shots(manifest) < len(manifest.shots):
                 manifest.active_shot = None
                 manifest.set_state(ProjectState.PARTIALLY_COMPLETED, reason="selected_shots_only")
@@ -847,7 +930,17 @@ class QueueRunner:
                     details = creative_report.get("fatal_problems") or creative_report.get("problems") or [
                         creative_report.get("reason", "final creative review failed")
                     ]
-                    raise RuntimeError("Final creative review rejected the video: " + "; ".join(details[:5]))
+                    # The assembled video and every accepted shot stay on disk, so say so: this
+                    # rejection is a prompt problem to repair, not a render to throw away.
+                    degraded = [shot for shot in manifest.shots if shot.degraded]
+                    salvage = ""
+                    if degraded:
+                        stills = sum(1 for shot in degraded if shot.degraded == "still")
+                        salvage = (f"\n{len(degraded)} of {len(manifest.shots)} shots were salvaged rather than "
+                                   f"passing review ({stills} are still push-ins), which is the usual cause of a "
+                                   f"repetitive, incoherent edit.")
+                    raise RuntimeError("Final creative review rejected the video: " + "; ".join(details[:5])
+                                       + salvage + "\n" + self._recovery_hint(manifest, degraded))
                 from .models import utc_now
                 manifest.completed_at = utc_now()
                 manifest.set_state(ProjectState.COMPLETED)
