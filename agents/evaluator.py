@@ -259,7 +259,10 @@ def variety_feedback(script: dict) -> str | None:
         return None                         # no shot list to judge; the schema check owns that
     problems = []
     counts = Counter(name for text in descriptions for name in _named_subjects(text))
-    for name, count in counts.most_common(1):
+    # Ties (e.g. "Anak" and "Krakatau", always together) used to be broken by set order, which Python
+    # randomises per run: name the longest, most specific word, deterministically.
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))
+    for name, count in ranked[:1]:
         if count > len(beats) / 2:
             problems.append(
                 f"{name} is in {count} of {len(beats)} shots. Show it in at most half: give the other beats "
