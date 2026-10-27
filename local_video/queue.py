@@ -27,7 +27,7 @@ from .keyframes import prepare_keyframes, usable_keyframe
 from .config import PipelineConfig, resolve_within
 from .models import ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
 from .planner import (
-    MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, continuation_source, payoff_of, reseed,
+    MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, continuation_source, framing_scale, payoff_of, reseed,
 )
 from .project import load_project
 from .preflight import run_preflight
@@ -179,6 +179,25 @@ def _retake_prompt(shot, correction: str, has_reference: bool) -> str:
     )
 
 
+def _repair_prompt(shot) -> str:
+    """The last take for a shot every normal take failed: hold on its end state, with no move.
+
+    On the 2026-10-27 volcano run MiniMax ignored every reveal it was given: a pan to "another"
+    lava flow kept the first flow and drifted to a green hill, and a close-up of a wave on rock
+    pulled back to a wide aerial on all six takes. A locked-off view of the payoff is the one
+    thing it renders reliably, and the narration still carries the beat.
+    """
+    payoff = payoff_of(shot.subject_action)
+    prompt = shot.prompt.replace(shot.camera_action, "locked-off static camera") if shot.camera_action else shot.prompt
+    return (
+        "SIMPLE HELD SHOT. One unbroken view held from the first frame to the last.\n"
+        f"THE FRAME SHOWS: {payoff}\n"
+        "CAMERA: locked off on a tripod. The framing, distance and angle stay exactly the same in "
+        "every frame. The only motion is natural motion inside the scene, such as water, smoke, "
+        "steam, cloud or light.\n\n" + prompt
+    )
+
+
 def _is_infrastructure_failure(exc: Exception) -> bool:
     """Identify transient service/GPU failures that should not spend a creative attempt."""
     if isinstance(exc, VisualReviewRejected):
@@ -258,6 +277,7 @@ class QueueRunner:
     def _reference_source(manifest: ProjectManifest, index: int) -> int | None:
         return continuation_source(
             [(s.scene.lower(), s.light.lower()) for s in manifest.shots], index, [s.cast for s in manifest.shots],
+            [framing_scale(s.subject_action) for s in manifest.shots],
         )
 
     def _reference_for(self, manifest: ProjectManifest, index: int) -> Path | None:
@@ -287,7 +307,10 @@ class QueueRunner:
         primary_failures = 0
         total_attempts = self.config.retry_limit + 1
         infrastructure_retry_limit = 2
-        maximum_attempts = total_attempts + infrastructure_retry_limit
+        # One extra take with the move stripped out, spent only once every normal take was rejected.
+        repair_used = not self.config.repair_take
+        repairing = False
+        maximum_attempts = total_attempts + infrastructure_retry_limit + (0 if repair_used else 1)
         creative_failures = 0
         infrastructure_failures = 0
         last_error = "No backend was attempted"
@@ -305,7 +328,12 @@ class QueueRunner:
                 revision_notes.append((float(review.get("average_score") or 0), correction[:1200]))
         for attempt_index in range(maximum_attempts):
             if creative_failures >= total_attempts:
-                break
+                if repair_used or not revision_notes:
+                    break
+                repair_used, repairing = True, True
+                total_attempts += 1
+                manifest.record("shot_repair_take", shot=shot.id)
+                log.warning("Local AI %s: every take was rejected; trying one held-camera repair take.", shot.id)
             backend_name = sequence[0]
             if len(sequence) > 1 and primary_failures >= self.config.fallback_failures:
                 backend_name = sequence[1]
@@ -359,7 +387,10 @@ class QueueRunner:
                 if reference is not None and reference.parent.name == "keyframes":
                     attempt["keyframe"] = True
                 candidate_shot = _prompt_for_backend(shot, backend_name)
-                if revision_notes:
+                if repairing:
+                    attempt["repair"] = True
+                    candidate_shot = replace(candidate_shot, prompt=_repair_prompt(candidate_shot))
+                elif revision_notes:
                     best_correction = max(revision_notes, key=lambda item: item[0])[1]
                     candidate_shot = replace(
                         candidate_shot,
@@ -407,7 +438,14 @@ class QueueRunner:
                         )
                     correction = (corrections or "Match the assigned action and continuity exactly.")[:1200]
                     revision_notes.append((float(visual_report.get("average_score") or 0), correction))
-                    raise VisualReviewRejected("visual review rejected clip: " + correction)
+                    # Log what the reviewer saw wrong; the correction is the next take's prompt and
+                    # says nothing about why this take failed.
+                    reasons = [*visual_report.get("fatal_problems", []), *visual_report.get("problems", [])]
+                    reason = " | ".join(str(item) for item in reasons[:3]) or visual_report.get("reason") or correction
+                    raise VisualReviewRejected(
+                        f"visual review rejected clip (avg {visual_report.get('average_score', '?')}, "
+                        f"{visual_report.get('acceptance', 'rejected')}): {str(reason)[:600]}"
+                    )
                 shot.validation = report
                 shot.output = str(result.path.relative_to(manifest.project_dir))
                 frame_path = Path(manifest.project_dir) / "shots" / f"{shot.id}-last.jpg"
@@ -588,19 +626,23 @@ class QueueRunner:
             fatal_problems=review.get("fatal_problems") or [],
         )
 
-    def _still_replacement(self, manifest: ProjectManifest, shot, reference: Path) -> bool:
+    def _still_replacement(self, manifest: ProjectManifest, shot, reference: Path | None) -> bool:
+        """A slow push-in on reference; with no reference, a dark ash-grey card (the very last resort)."""
         replacement = Path(manifest.project_dir) / "shots" / f"{shot.id}-still-replacement.mp4"
         duration = shot.duration_seconds
         frames = max(1, round(duration * 30))
+        width, height = self.config.minimax_width, self.config.minimax_height
         video_filter = (
-            f"scale={self.config.minimax_width}:{self.config.minimax_height}:"
+            f"scale={width}:{height}:"
             "force_original_aspect_ratio=increase:flags=lanczos,"
-            f"crop={self.config.minimax_width}:{self.config.minimax_height},"
+            f"crop={width}:{height},"
             f"zoompan=z='min(zoom+0.0008,1.08)':d={frames}:"
-            f"s={self.config.minimax_width}x{self.config.minimax_height}:fps=30,format=yuv420p"
+            f"s={width}x{height}:fps=30,format=yuv420p"
         )
+        source = (["-loop", "1", "-i", str(reference)] if reference is not None
+                  else ["-f", "lavfi", "-i", f"color=c=0x1c1f22:s={width}x{height}:r=30"])
         command = [
-            self.config.ffmpeg, "-y", "-loop", "1", "-i", str(reference),
+            self.config.ffmpeg, "-y", *source,
             "-vf", video_filter, "-t", f"{duration:.6f}", "-an", "-c:v", "libx264",
             "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", str(replacement),
         ]
@@ -616,10 +658,13 @@ class QueueRunner:
             report = self.validator(replacement, self.config, self.config.minimax_width,
                                     self.config.minimax_height, duration)
         except Exception as exc:
-            manifest.record("still_replacement_failed", shot=shot.id, error=str(exc))
-            return False
+            if reference is not None:
+                manifest.record("still_replacement_failed", shot=shot.id, error=str(exc))
+                return False
+            report = {"valid": False, "error": str(exc)}  # a flat card is frozen by design
         return self._finish_fallback(manifest, shot, replacement, report, "still-replacement",
-                                     "shot_replaced_with_animated_still", reference=str(reference))
+                                     "shot_replaced_with_animated_still",
+                                     reference=str(reference) if reference is not None else "plain card")
 
     def _accept_fallback(self, manifest: ProjectManifest, index: int, last_error: str) -> bool:
         """When every take was rejected, keep the video going with the least bad option.
@@ -645,7 +690,32 @@ class QueueRunner:
             return True
         if takes and self._restore_take(manifest, shot, takes[0][2], "shot_accepted_flawed_take"):
             return True
-        return False
+        # Nothing reviewable was rendered (every attempt was an infrastructure or technical failure).
+        # A run must still finish, so animate the nearest real image, and only then a plain card.
+        for candidate in self._last_resort_frames(manifest, index):
+            if self._still_replacement(manifest, shot, candidate):
+                return True
+        return self._still_replacement(manifest, shot, None)
+
+    def _last_resort_frames(self, manifest: ProjectManifest, index: int) -> list[Path]:
+        """Real images to animate when the shot has none of its own: its keyframe, the nearest
+        genuinely rendered frame from any other shot, then the project reference image."""
+        frames: list[Path] = []
+        keyframe = usable_keyframe(manifest, manifest.shots[index])
+        if keyframe:
+            frames.append(keyframe)
+        others = sorted((s for i, s in enumerate(manifest.shots) if i != index), key=lambda s: abs(s.index - index))
+        for other in others:
+            if other.status == "accepted" and other.degraded != "still" and other.last_frame:
+                frame = resolve_within(manifest.project_dir, other.last_frame)
+                if frame.is_file():
+                    frames.append(frame)
+                    break
+        if manifest.reference_image:
+            reference = resolve_within(manifest.project_dir, manifest.reference_image)
+            if reference.is_file():
+                frames.append(reference)
+        return frames
 
     def _still_source(self, manifest: ProjectManifest, index: int) -> Path | None:
         """A frame to build a still push-in from, never one belonging to another still.
@@ -687,13 +757,14 @@ class QueueRunner:
         Every salvaged shot costs the final creative review its story-coherence, continuity and
         pacing scores, so a heavily salvaged render spends hours building a video that gate rejects.
         The remaining shots cannot recover those scores, so there is nothing to gain by finishing.
+        The budget is always the whole video's, since that is what the final review sees: sizing it
+        from a --shots redo gave a six-shot redo a budget of one, so two hard shots stopped it.
         """
         allowed = self.config.max_degraded_percent
         if allowed >= 100:
             return None
-        planned = len(shots) if shots is not None else len(manifest.shots)
-        finished = [shot for index, shot in enumerate(manifest.shots)
-                    if (shots is None or index + 1 in shots) and shot.status == "accepted"]
+        planned = len(manifest.shots)
+        finished = [shot for shot in manifest.shots if shot.status == "accepted"]
         degraded = [shot for shot in finished if shot.degraded]
         budget = planned * allowed // 100
         if not planned or len(degraded) <= budget:
@@ -920,27 +991,45 @@ class QueueRunner:
                 manifest.set_state(ProjectState.RENDERING)
                 manifest.save()
                 self._emit(manifest)
-                manifest.outputs = self.assembler(manifest, self.config, narration, _music_path(manifest))
+                try:
+                    manifest.outputs = self.assembler(manifest, self.config, narration, _music_path(manifest))
+                except Exception as exc:
+                    # Assembly is ffmpeg over files already on disk; one retry clears a locked or
+                    # half-written intermediate.
+                    log.warning("Local AI assembly failed (%s); retrying once.", exc)
+                    manifest.record("assembly_retry", error=str(exc))
+                    manifest.outputs = self.assembler(manifest, self.config, narration, _music_path(manifest))
                 final = resolve_within(manifest.project_dir, manifest.outputs["video"])
                 report = validate_final(final, self.config, manifest.duration_seconds)
                 manifest.settings["final_validation"] = report
-                creative_report = self.final_reviewer(final, manifest)
+                try:
+                    creative_report = self.final_reviewer(final, manifest)
+                except Exception as exc:
+                    creative_report = {"valid": False, "reason": f"final review crashed: {exc}"}
                 manifest.settings["final_creative_review"] = creative_report
+                warnings: list[str] = []
+                degraded = [shot for shot in manifest.shots if shot.degraded]
+                if degraded:
+                    stills = sum(1 for shot in degraded if shot.degraded == "still")
+                    warnings.append(f"{len(degraded)} of {len(manifest.shots)} shots were salvaged rather than "
+                                    f"passing review ({stills} are still push-ins): "
+                                    + ", ".join(shot.id for shot in degraded))
                 if not creative_report.get("valid", False):
                     details = creative_report.get("fatal_problems") or creative_report.get("problems") or [
                         creative_report.get("reason", "final creative review failed")
                     ]
-                    # The assembled video and every accepted shot stay on disk, so say so: this
-                    # rejection is a prompt problem to repair, not a render to throw away.
-                    degraded = [shot for shot in manifest.shots if shot.degraded]
-                    salvage = ""
-                    if degraded:
-                        stills = sum(1 for shot in degraded if shot.degraded == "still")
-                        salvage = (f"\n{len(degraded)} of {len(manifest.shots)} shots were salvaged rather than "
-                                   f"passing review ({stills} are still push-ins), which is the usual cause of a "
-                                   f"repetitive, incoherent edit.")
-                    raise RuntimeError("Final creative review rejected the video: " + "; ".join(details[:5])
-                                       + salvage + "\n" + self._recovery_hint(manifest, degraded))
+                    rejection = "Final creative review rejected the video: " + "; ".join(details[:5])
+                    if self.config.final_review_blocks:
+                        # The assembled video and every accepted shot stay on disk, so say so: this
+                        # rejection is a prompt problem to repair, not a render to throw away.
+                        raise RuntimeError(rejection + ("\n" + warnings[0] if warnings else "") + "\n"
+                                           + self._recovery_hint(manifest, degraded))
+                    warnings.insert(0, rejection)
+                manifest.settings["quality_warnings"] = warnings
+                for warning in warnings:
+                    log.warning("Local AI quality warning: %s", warning)
+                if warnings:
+                    log.warning("Local AI delivered the video anyway. %s", self._recovery_hint(manifest, degraded))
                 from .models import utc_now
                 manifest.completed_at = utc_now()
                 manifest.set_state(ProjectState.COMPLETED)

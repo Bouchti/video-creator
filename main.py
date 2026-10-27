@@ -137,49 +137,75 @@ def run_pipeline(
             return {"success": False, "stage_failed": "unreal_preflight", "error": error}
 
     selection = None
-    # Stage 0: Find today's topic via Leader Agent (unless topic explicitly provided)
-    if topic is None:
-        log.info("\n[STAGE 0] Leader Agent: trending topic discovery")
-        from agents.leader import find_todays_topic
-        try:
-            selection = find_todays_topic(source=source)
-            topic = selection["topic"]
-            tone = tone or selection["tone"]
-            log.info(f"Selected topic: {topic}")
-            log.info(f"Selected angle: {selection['angle']}")
-        except Exception as e:
-            log.error(f"Leader Agent failed: {e}")
-            return {"success": False, "stage_failed": "leader", "error": str(e)}
-    else:
+    manual_topic = topic is not None
+    if manual_topic:
         log.info(f"Topic (manual): {topic}")
-        tone = tone or DEFAULT_TONE
-
-    research = selection.get("research", []) if selection else []
-    if not research:
-        log.info("\n[STAGE 0B] Researching factual source evidence")
-        try:
-            from agents.leader import research_topic
-            research = research_topic(topic)
-        except Exception as e:
-            log.error(f"Topic research failed: {e}")
-            return {"success": False, "stage_failed": "research", "topic": topic, "error": str(e)}
-
-    log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
-
-    log.info("\n[STAGE 1] Script generation + evaluation")
+    requested_tone = tone
     from agents.evaluator import evaluate_with_retry
     mode = "unreal" if source == "unreal" else "local-ai" if source == "local-ai" else "footage"
-    angle = selection.get("angle") if selection else None
     # Documentary drafts converge instead of passing outright: the evaluator finds the unsourced
     # claims a few at a time, so each revision clears some and the next one surfaces fewer. Three
     # attempts stranded a draft one blocking issue from PASS, throwing away the whole topic and its
     # research. Each attempt is ~25k tokens and CLAUDE_TOKEN_BUDGET caps the total.
     attempts = int(os.getenv("SCRIPT_MAX_ATTEMPTS") or 5)
-    script = evaluate_with_retry(topic, tone=tone, max_retries=attempts, target_seconds=duration, mode=mode,
-                                 source=source, angle=angle, research=research)
+    # A topic whose script never passes the fact check is dropped for a fresh one rather than ending
+    # the run; an unsourced draft is never used. A manual topic is retried as-is, for transient errors.
+    topic_attempts = max(1, int(os.getenv("PIPELINE_TOPIC_ATTEMPTS") or (2 if manual_topic else 3)))
+    given_up: list[str] = []
+    script, failure = None, None
+    for topic_attempt in range(1, topic_attempts + 1):
+        if topic_attempt > 1:
+            log.warning(f"\nRetrying with {'the same' if manual_topic else 'a new'} topic "
+                        f"({topic_attempt}/{topic_attempts}).")
+        # Stage 0: Find today's topic via Leader Agent (unless topic explicitly provided)
+        if not manual_topic:
+            log.info("\n[STAGE 0] Leader Agent: trending topic discovery")
+            from agents.leader import find_todays_topic
+            try:
+                selection = find_todays_topic(source=source, exclude=given_up)
+                topic = selection["topic"]
+                log.info(f"Selected topic: {topic}")
+                log.info(f"Selected angle: {selection['angle']}")
+            except Exception as e:
+                log.error(f"Leader Agent failed: {e}")
+                failure = {"success": False, "stage_failed": "leader", "error": str(e)}
+                continue
+        tone = requested_tone or (selection["tone"] if selection else DEFAULT_TONE)
+
+        research = selection.get("research", []) if selection else []
+        if not research:
+            log.info("\n[STAGE 0B] Researching factual source evidence")
+            try:
+                from agents.leader import research_topic
+                research = research_topic(topic)
+            except Exception as e:
+                log.error(f"Topic research failed: {e}")
+                failure = {"success": False, "stage_failed": "research", "topic": topic, "error": str(e)}
+                given_up.append(topic)
+                continue
+
+        log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
+
+        log.info("\n[STAGE 1] Script generation + evaluation")
+        angle = selection.get("angle") if selection else None
+        # Claims the topic grounder already struck out. The writer otherwise re-supplies them from its
+        # own knowledge and the evaluator spends a revision round blocking the same claim a second time.
+        excluded = ((selection.get("grounding") or {}).get("dropped") or []) if selection else []
+        try:
+            script = evaluate_with_retry(topic, tone=tone, max_retries=attempts, target_seconds=duration,
+                                         mode=mode, source=source, angle=angle, research=research,
+                                         excluded_claims=excluded)
+        except Exception as e:
+            log.error(f"Script stage crashed: {e}", exc_info=True)
+            script = None
+        if script:
+            break
+        log.error(f"Script generation failed for this topic: {topic}")
+        failure = {"success": False, "stage_failed": "script", "topic": topic}
+        given_up.append(topic)
     if not script:
-        log.error("Script generation failed. Aborting.")
-        return {"success": False, "stage_failed": "script", "topic": topic}
+        log.error("No topic produced a usable script. Aborting.")
+        return failure or {"success": False, "stage_failed": "script", "topic": topic}
 
     log.info(f"Script approved: {script['video_title']}")
     log.info(f"Word count: {len(script['spoken_script'].split())}")
@@ -229,22 +255,43 @@ def run_pipeline(
     ts = started.strftime("%Y%m%d_%H%M%S")
     safe_title = "".join(c if c.isalnum() else "_" for c in script["video_title"])[:60]
     output_path = os.path.join(OUTPUT_DIR, f"{ts}_{source}_{safe_title}.mp4")
-    if source in ("local-ai", "unreal"):
-        # The durable project keeps its canonical final render; preserve the
-        # legacy top-level output convention with a copy.
-        shutil.copy2(final_path, output_path)
-    else:
-        shutil.move(final_path, output_path)
+    try:
+        if source in ("local-ai", "unreal"):
+            # The durable project keeps its canonical final render; preserve the
+            # legacy top-level output convention with a copy.
+            shutil.copy2(final_path, output_path)
+        else:
+            shutil.move(final_path, output_path)
+    except OSError as e:
+        log.error(f"Could not copy the video to {output_path} ({e}); using it where it was rendered.")
+        output_path = str(final_path)
+    # The video exists from here on; nothing below may turn a finished render into a failed run.
     credits = script.get("credits") or []
-    notes_path = write_post_notes(output_path, script, credits)
-    from agents.post_text import write as write_post_text
-    post_text_path = write_post_text(script, output_path)
+    notes_path = post_text_path = None
+    try:
+        notes_path = write_post_notes(output_path, script, credits)
+    except Exception as e:
+        log.error(f"Writing post notes failed: {e}", exc_info=True)
+    try:
+        from agents.post_text import write as write_post_text
+        post_text_path = write_post_text(script, output_path)
+    except Exception as e:
+        log.error(f"Writing post text failed: {e}", exc_info=True)
     if selection:
-        from agents.leader import save_used_topic
-        save_used_topic(topic)
+        try:
+            from agents.leader import save_used_topic
+            save_used_topic(topic)
+        except Exception as e:
+            log.error(f"Saving the used topic failed: {e}")
 
+    quality_warnings = script.get("quality_warnings") or []
+    for warning in quality_warnings:
+        log.warning(f"QUALITY WARNING: {warning}")
     publishing = []
-    if publish_platforms:
+    if publish_platforms and script.get("publish_hold") and os.getenv("PUBLISH_FLAGGED_VIDEOS", "0") != "1":
+        log.warning("Publishing held: the final creative review rejected this video. Watch it, then publish "
+                    "it yourself, or set PUBLISH_FLAGGED_VIDEOS=1 to publish such videos automatically.")
+    elif publish_platforms:
         from agents.publisher import publish_video
         publish_metadata = {
             "title": script["video_title"],
@@ -252,18 +299,13 @@ def run_pipeline(
             "hashtags": script.get("hashtags", []),
             "ai_generated": source in ("local-ai", "unreal"),
         }
-        try:
-            publishing = [
-                publish_video(output_path, platform, publish_metadata, live=publish_live)
-                for platform in publish_platforms
-            ]
-        except Exception as e:
-            log.error(f"Publishing failed: {e}", exc_info=True)
-            return {
-                "success": False, "stage_failed": "publishing", "topic": topic,
-                "video_path": output_path, "notes_path": notes_path,
-                "post_text_path": post_text_path, "publishing": publishing, "error": str(e),
-            }
+        # One platform failing must not cost the others, or the finished video.
+        for platform in publish_platforms:
+            try:
+                publishing.append(publish_video(output_path, platform, publish_metadata, live=publish_live))
+            except Exception as e:
+                log.error(f"Publishing to {platform} failed: {e}", exc_info=True)
+                publishing.append({"platform": platform, "success": False, "error": str(e)})
 
     elapsed_min = (datetime.now() - started).total_seconds() / 60
     log.info(f"\nFINAL VIDEO: {output_path}")
@@ -286,6 +328,9 @@ def run_pipeline(
         "notes_path": notes_path,
         "post_text_path": post_text_path,
         "publishing": publishing,
+        "quality_warnings": quality_warnings,
+        "publish_held": bool(publish_platforms and script.get("publish_hold")
+                             and os.getenv("PUBLISH_FLAGGED_VIDEOS", "0") != "1"),
         "elapsed_minutes": round(elapsed_min, 1),
     }
 

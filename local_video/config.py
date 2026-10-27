@@ -164,11 +164,16 @@ class PipelineConfig:
     retry_limit: int = field(default_factory=lambda: env_int("LOCAL_VIDEO_RETRY_LIMIT", 2, 0, 10))
     fallback_failures: int = field(default_factory=lambda: env_int("LOCAL_VIDEO_FALLBACK_FAILURES", 2, 1, 10))
     # Share of shots that may be salvaged (a rejected take kept, or a still push-in) before the run
-    # stops. Salvaged shots cost the final creative review its story, continuity and pacing scores,
-    # so a heavily salvaged render is hours of GPU spent on a video that gate will reject.
-    # 100 = never stop (the old behaviour).
+    # stops to save GPU hours. 100 = never stop, the default: a run always finishes its video, and
+    # the salvage count is reported as a quality warning instead.
     max_degraded_percent: int = field(
-        default_factory=lambda: env_int("LOCAL_VIDEO_MAX_DEGRADED_PERCENT", 25, 0, 100))
+        default_factory=lambda: env_int("LOCAL_VIDEO_MAX_DEGRADED_PERCENT", 100, 0, 100))
+    # Once every normal take of a shot is rejected, render one more with the camera locked off.
+    repair_take: bool = field(default_factory=lambda: env_int("LOCAL_VIDEO_REPAIR_TAKE", 1, 0, 1) == 1)
+    # 1 = a final creative review reject fails the run. 0 (default) = the video is delivered and the
+    # reject is reported as a quality warning, which holds auto-publishing for that video.
+    final_review_blocks: bool = field(
+        default_factory=lambda: env_int("LOCAL_VIDEO_FINAL_REVIEW_BLOCKS", 0, 0, 1) == 1)
     generation_timeout: int = field(default_factory=lambda: env_int("LOCAL_VIDEO_GENERATION_TIMEOUT", 3600, 60, 86400))
     poll_seconds: float = field(default_factory=lambda: env_float("LOCAL_VIDEO_POLL_SECONDS", 2.0, 0.1))
     minimax_width: int = field(default_factory=lambda: env_int("MINIMAX_WIDTH", 544, 256, 4096))

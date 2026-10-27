@@ -1,6 +1,8 @@
 import json
 import os
 import logging
+import re
+from collections import Counter
 from dotenv import load_dotenv
 from config.paths import get_env_path
 from agents import ai_router
@@ -231,9 +233,65 @@ def length_feedback(wc: int, min_words: int, max_words: int, num_beats: int, gra
     return None
 
 
+def _named_subjects(text: str) -> set[str]:
+    """Capitalised words that are not a sentence's first word: the proper names a shot shows."""
+    names = set()
+    for sentence in re.split(r"[.!?:;]\s+", text):
+        words = re.findall(r"[A-Za-z][\w'-]*", sentence)[1:]
+        names.update(word.split("'")[0] for word in words if word[0].isupper() and len(word) >= 4)
+    return names
+
+
+def variety_feedback(script: dict) -> str | None:
+    """Free check that the shot list keeps changing, or None when it does.
+
+    The 2026-10-27 volcano video showed Anak Krakatau from the same distance in 18 of 22 shots,
+    with one real close-up, while the narration moved on to flights, a satellite and sailors.
+    """
+    from local_video.planner import framing_scale
+
+    beats = [beat for beat in script.get("beats") or [] if isinstance(beat, dict)]
+    if len(beats) < 6:
+        return None
+    visuals = [beat.get("visual") if isinstance(beat.get("visual"), dict) else {} for beat in beats]
+    descriptions = [str(visual.get("description") or "") for visual in visuals]
+    if sum(bool(text.strip()) for text in descriptions) < len(beats) / 2:
+        return None                         # no shot list to judge; the schema check owns that
+    problems = []
+    counts = Counter(name for text in descriptions for name in _named_subjects(text))
+    for name, count in counts.most_common(1):
+        if count > len(beats) / 2:
+            problems.append(
+                f"{name} is in {count} of {len(beats)} shots. Show it in at most half: give the other beats "
+                "close details, surroundings, effects, and illustrative stand-ins for what each line names.")
+    sizes = [framing_scale(text) or ("medium" if "medium" in text.lower() else None) for text in descriptions]
+    close = sum(size == "close" for size in sizes)
+    if close < max(2, len(beats) // 4):
+        problems.append(
+            f"only {close} of {len(beats)} shots are close-ups. Make at least {max(2, len(beats) // 4)} of them "
+            "'Close-up:' or 'Extreme close-up:' shots of a physical detail.")
+    unsized = sum(size is None for size in sizes)
+    if unsized > len(beats) // 4:
+        problems.append(f"{unsized} descriptions do not start with their shot size "
+                        "('Wide shot:', 'Medium shot:', 'Close-up:', 'Extreme close-up:').")
+    run, longest, where = 1, 1, 0
+    for index in range(1, len(beats)):
+        same = sizes[index] is not None and sizes[index] == sizes[index - 1]
+        run = run + 1 if same else 1
+        if run > longest:
+            longest, where = run, index - run + 2
+    if longest > 3:
+        problems.append(f"beats {where}-{where + longest - 1} are {longest} {sizes[where - 1]} shots in a row; "
+                        "never more than three of one shot size in a row.")
+    if not problems:
+        return None
+    return "VISUAL VARIETY (the video reads as one repeated shot): " + " ".join(f"- {p}" for p in problems)
+
+
 def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int = 3, target_seconds: int = 75,
                         mode: str = "footage", source: str = "pexels", angle: str | None = None,
-                        content_mode: str = "documentary", research: list[dict] | None = None) -> dict:
+                        content_mode: str = "documentary", research: list[dict] | None = None,
+                        excluded_claims: list[str] | None = None) -> dict:
     from agents.script import generate_script, plan_for_duration
 
     num_beats, min_words, max_words = plan_for_duration(target_seconds)
@@ -246,7 +304,8 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
             # After a failure, the model revises its own draft to fix the exact issue.
             script = generate_script(topic, tone, target_seconds=target_seconds,
                                      previous=previous, feedback=last_feedback, mode=mode,
-                                     angle=angle, content_mode=content_mode, research=research)
+                                     angle=angle, content_mode=content_mode, research=research,
+                                     excluded_claims=excluded_claims)
         except Exception as e:
             log.error(f"Script generation crashed: {e}")
             if final:
@@ -279,6 +338,15 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
             continue
         if not min_words <= wc <= max_words:
             log.warning(f"Accepting {wc} words (within the {grace:.0%} length grace).")
+
+        # Checked before the paid evaluation, which a monotonous draft would only waste.
+        variety = variety_feedback(script) if mode == "local-ai" else None
+        if variety and not final:
+            log.warning(f"Failed. Feedback: {variety}")
+            previous, last_feedback = script, variety
+            continue
+        if variety:
+            log.warning(f"Accepting the draft on the last attempt despite: {variety}")
 
         try:
             result = evaluate_script(

@@ -59,9 +59,11 @@ class CostTests(unittest.TestCase):
                 patch.object(sb, "_run_claude_streaming") as claude:
             with self.assertRaises(showrunner.UsageLimit) as ctx:
                 sb.claude_agent("design", files)
+            # Inside the patches: once they unwind, active_backend() falls back to the real
+            # SHOWRUNNER_BACKEND from .env and this would assert the developer's config instead.
+            self.assertEqual(showrunner.active_backend(), "codex")      # nothing else was switched either
         claude.assert_not_called()
         self.assertIn("SET_BUILDER_CLAUDE_FALLBACK", str(ctx.exception))
-        self.assertEqual(showrunner.active_backend(), "codex")          # nothing else was switched either
 
 
 

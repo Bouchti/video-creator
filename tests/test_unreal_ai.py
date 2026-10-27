@@ -165,6 +165,37 @@ class LocalAiRenderabilityPromptTests(unittest.TestCase):
     def test_the_rule_does_not_leak_into_the_stock_footage_pipeline(self):
         self.assertNotIn("EVERY VISUAL MUST BE FILMABLE", script.system_prompt("footage"))
 
+    def test_night_is_refused_as_a_lighting_condition(self):
+        """The 2026-10-27 Anak Krakatau run: all five 'night lava glow' shots needed salvage, and 15
+        of 20 fatal problems named night, because the generator drifts to dawn within three seconds."""
+        prompt = script.system_prompt("local-ai", content_mode="documentary")
+        self.assertIn("must be a DAYTIME condition", prompt)
+        self.assertIn("drifts to dawn", prompt)
+        for banned in ("night", "moonlight", "dusk", "twilight", "starlight"):
+            self.assertIn(banned, prompt)
+        for allowed in ("Overcast", "haze", "smoke", "deep shade"):
+            self.assertIn(allowed, prompt)
+
+    def test_a_shot_may_not_be_written_as_a_slow_process(self):
+        """28 of 98 problem notes on the 2026-10-27 volcano run were one thing: the brief asked a
+        plume to thicken and veil a summit, or a shelf to widen, inside a three-second clip. Nothing
+        appeared to happen, so story_progression came in under 7 on 17 of 20 takes."""
+        prompt = script.system_prompt("local-ai", content_mode="documentary")
+        self.assertIn("EACH SHOT IS A MOMENT, NOT A PROCESS", prompt)
+        self.assertIn("NEVER make a slow process", prompt)
+        self.assertIn("what the CUT is for", prompt)          # stages go across shots
+        self.assertIn("State the stage each shot is AT", prompt)
+
+    def test_the_subject_must_not_be_asked_for_small_and_distant(self):
+        prompt = script.system_prompt("local-ai", content_mode="documentary")
+        self.assertIn("generator fills the frame", prompt)
+
+    def test_a_night_only_subject_is_redirected_to_its_daytime_evidence(self):
+        prompt = script.system_prompt("local-ai", content_mode="documentary")
+        self.assertIn("only visible because it glows in the dark", prompt)
+        self.assertIn("fresh black rock", prompt)        # what to film instead
+        self.assertIn("narration say it happened at night", prompt)
+
 
 class TopicGroundingTests(unittest.TestCase):
     """The topic is reconciled with its evidence BEFORE scripting, so STAGE 1 never has to write a

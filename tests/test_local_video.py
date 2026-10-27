@@ -242,7 +242,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("SINGLE-SHOT CONTINUITY LOCK", shots[0].prompt)
         self.assertIn("CURRENT SHOT (the only event to render)", shots[0].prompt)
         self.assertNotIn("NEXT SHOT", shots[0].prompt)
-        self.assertIn("WHOLE-STORY CONTRACT", shots[0].prompt)
+        self.assertNotIn("WHOLE-STORY CONTRACT", shots[0].prompt)   # other beats' nouns get rendered
         self.assertNotIn("FULL VISUAL SCREENPLAY", shots[0].prompt)
         self.assertNotIn("Beat 20", shots[0].prompt)
         self.assertLess(len(shots[0].prompt), 6000)
@@ -587,8 +587,76 @@ class QueueTests(unittest.TestCase):
             result = QueueRunner(config, {"minimax": minimax, "wan": wan}, validator=fake_validator,
                                  extractor=fake_extractor).run(project, shots={1})
             self.assertEqual(minimax.calls, 3)
-            self.assertEqual(result.shots[0].status, "failed")
             self.assertEqual(len(result.shots[0].attempts), 3)
+            # Nothing reviewable was rendered, so no repair take is spent; the shot is a last-resort
+            # still and the run goes on instead of failing.
+            self.assertEqual(result.shots[0].status, "accepted")
+            self.assertEqual(result.shots[0].degraded, "still")
+
+    def test_a_shot_every_take_of_which_is_rejected_gets_one_held_repair_take(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder, retry_limit=2, fallback_failures=9)
+            project = self._project(folder, config)
+            minimax = FakeBackend(config, "minimax", [])
+            verdicts = iter([False, False, False, True])
+
+            def reviewer(*args, **kwargs):
+                return {"valid": next(verdicts), "average_score": 6, "problems": ["camera drifted"],
+                        "fatal_problems": [], "revision_prompt": "Hold on the lava flow."}
+
+            result = QueueRunner(config, {"minimax": minimax, "wan": FakeBackend(config, "wan", [])},
+                                 validator=fake_validator, extractor=fake_extractor,
+                                 visual_reviewer=reviewer).run(project, shots={1})
+            shot = result.shots[0]
+            self.assertEqual(minimax.calls, 4)
+            self.assertEqual(shot.status, "accepted")
+            self.assertFalse(shot.degraded)                   # the repair take passed outright
+            self.assertTrue(shot.attempts[-1].get("repair"))
+            self.assertTrue(minimax.prompts[-1].startswith("SIMPLE HELD SHOT"))
+
+    def test_the_repair_take_can_be_switched_off(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder, retry_limit=2, fallback_failures=9, repair_take=False)
+            project = self._project(folder, config)
+            minimax = FakeBackend(config, "minimax", [])
+            reviewer = lambda *a, **k: {"valid": False, "average_score": 6, "problems": ["x"],
+                                        "fatal_problems": [], "revision_prompt": "y"}
+            QueueRunner(config, {"minimax": minimax, "wan": FakeBackend(config, "wan", [])},
+                        validator=fake_validator, extractor=fake_extractor,
+                        visual_reviewer=reviewer).run(project, shots={1})
+            self.assertEqual(minimax.calls, 3)
+
+    def _finish(self, folder, config, verdict):
+        project = self._project(folder, config)
+        for shot in project.shots[1:]:
+            shot.status, shot.output = "accepted", "shots/x.mp4"
+        (Path(project.project_dir) / "shots").mkdir(exist_ok=True)
+        (Path(project.project_dir) / "shots" / "x.mp4").write_bytes(b"v")
+
+        def assembler(manifest, *args):
+            (Path(manifest.project_dir) / "render").mkdir(exist_ok=True)
+            (Path(manifest.project_dir) / "render" / "final.mp4").write_bytes(b"v")
+            return {"video": "render/final.mp4"}
+
+        runner = QueueRunner(config, {"minimax": FakeBackend(config, "minimax", []),
+                                      "wan": FakeBackend(config, "wan", [])},
+                             validator=fake_validator, extractor=fake_extractor,
+                             visual_reviewer=fake_visual_reviewer, assembler=assembler,
+                             final_reviewer=lambda *a: {"valid": verdict, "problems": ["the edit loops"]})
+        with patch("local_video.queue.validate_final", return_value={"valid": True}):
+            return runner.run(project)
+
+    def test_a_final_review_reject_delivers_the_video_with_a_warning_by_default(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result = self._finish(folder, make_test_config(folder), verdict=False)
+            self.assertEqual(result.state, "completed")
+            self.assertIn("the edit loops", result.settings["quality_warnings"][0])
+
+    def test_a_final_review_reject_can_still_be_made_to_fail_the_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result = self._finish(folder, make_test_config(folder, final_review_blocks=True), verdict=False)
+            self.assertEqual(result.state, "partially_completed")
+            self.assertIn("the edit loops", result.error)
 
     def test_cuda_failure_does_not_consume_creative_retry(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1149,12 +1217,17 @@ class DegradationGuardTests(unittest.TestCase):
                 shot.status, shot.degraded = "accepted", "still"
             self.assertIsNone(runner._degradation_stop(project, None))
 
-    def test_the_budget_counts_only_the_selected_shots_on_a_partial_rerun(self):
+    def test_a_partial_rerun_is_budgeted_against_the_whole_video(self):
+        # The 2026-10-27 redo of 6 of 22 shots stopped at "2 salvaged, budget 1 of 6"; the final
+        # review sees 22 shots, whose budget of 5 had room.
         with tempfile.TemporaryDirectory() as folder:
             runner, project = self._runner_and_project(folder, max_degraded_percent=25)
-            project.shots[0].status, project.shots[0].degraded = "accepted", "still"
-            for shot in project.shots[1:]:                    # untouched shots must not count
-                shot.status, shot.degraded = "accepted", "still"
+            allowed = len(project.shots) * 25 // 100
+            self.assertGreaterEqual(allowed, 1)
+            for shot in project.shots[:allowed]:
+                shot.status, shot.degraded = "accepted", "best_take"
+            self.assertIsNone(runner._degradation_stop(project, {1}))
+            project.shots[allowed].status, project.shots[allowed].degraded = "accepted", "best_take"
             self.assertIsNotNone(runner._degradation_stop(project, {1}))
 
     def test_the_recovery_hint_names_the_project_and_the_shots_to_redo(self):
@@ -1211,6 +1284,216 @@ class DegradationGuardTests(unittest.TestCase):
             hint = runner._recovery_hint(project, [project.shots[0], project.shots[2]])
             self.assertIn("--shots 1,3", hint)
             self.assertIn("--redo", hint)
+
+
+class WritersCameraChoiceTests(unittest.TestCase):
+    """The screenplay schema requires a camera move per beat and the script evaluator checks it
+    against continuity_out, but the planner used to overwrite it with CAMERA_MOVES[index % 6].
+    On the 2026-10-27 volcano run 7 of 8 shots rendered a move the writer never chose, so every
+    inherited start state described a move that was never filmed."""
+
+    def test_the_writers_move_is_rendered(self):
+        from local_video.planner import _camera_plan
+        for chosen, expected in (("push_in", "push-in"), ("pull_out", "pull-back"),
+                                 ("pan_left", "pan left"), ("pan_right", "pan right"),
+                                 ("rise", "rising"), ("orbit", "orbit")):
+            with self.subTest(chosen=chosen):
+                move, _ = _camera_plan("a volcano across the strait", 3, chosen=chosen)
+                self.assertIn(expected, move)
+
+    def test_a_beat_with_no_choice_still_falls_back_to_the_rotation(self):
+        from local_video.planner import CAMERA_MOVES, _camera_plan
+        expected = CAMERA_MOVES[3 % len(CAMERA_MOVES)]
+        move, _ = _camera_plan("a volcano across the strait", 3)
+        self.assertEqual(expected, move)
+        move, _ = _camera_plan("a volcano across the strait", 3, chosen="not_a_move")
+        self.assertEqual(expected, move)
+
+    def test_the_writers_vocabulary_is_fully_translated(self):
+        """planner.CAMERA_MOVES is 8 prose phrases, the screenplay enum is 6 different values, so
+        the two could never match by accident: every enum value needs an explicit phrase."""
+        from agents.animate import CAMERA_MOVES as SCHEMA_MOVES
+        from local_video.planner import _MOVE_PHRASE
+        self.assertEqual(set(SCHEMA_MOVES), set(_MOVE_PHRASE))
+
+    def test_an_explicit_composition_cue_still_wins(self):
+        """A macro or low-angle cue describes where the camera IS, so it sets the move and framing."""
+        from local_video.planner import _camera_plan
+        move, framing = _camera_plan("extreme close-up of the lava crust", 3, chosen="orbit")
+        self.assertIn("macro", move)
+        self.assertIn("macro", framing)
+
+
+class KeyframeStyleTests(unittest.TestCase):
+    """The keyframe is the clip's first frame AND the reference the reviewer compares it against,
+    so a look the clip brief states and the keyframe omits becomes a rejection. It omitted
+    visual_style, which carries the palette and grade."""
+
+    def _shot(self, **continuity):
+        return Shot(id="s", index=0, duration_frames=90, prompt="", negative_prompt="", seed=1,
+                    subject_action="a dark volcanic cone across a strait",
+                    light="hazy daylight under ash plume", continuity=continuity, cast=[])
+
+    def test_the_palette_and_grade_reach_the_keyframe(self):
+        from local_video.keyframes import keyframe_prompt
+        prompt = keyframe_prompt(self._shot(
+            visual_style="35mm documentary look, charcoal-and-steel grade with muted ember accents"))
+        self.assertIn("Visual style:", prompt)
+        self.assertIn("charcoal-and-steel grade", prompt)
+        self.assertIn("hazy daylight under ash plume", prompt)       # and the light, as before
+
+    def test_the_keyframe_states_the_aspect_and_framing(self):
+        from local_video.keyframes import keyframe_prompt
+        prompt = keyframe_prompt(self._shot(visual_style="any"))
+        self.assertIn("9:16 portrait", prompt)
+        self.assertIn("filling a clear share of the frame", prompt)  # not a tiny distant subject
+
+    def test_a_shot_without_a_style_still_builds_a_prompt(self):
+        from local_video.keyframes import keyframe_prompt
+        prompt = keyframe_prompt(self._shot())
+        self.assertNotIn("Visual style:", prompt)
+        self.assertIn("a dark volcanic cone across a strait", prompt)
+
+
+class VolcanoRejectionCauseTests(unittest.TestCase):
+    """The prompt faults behind the 2026-10-27 volcano run's rejections, rebuilt from its own text."""
+
+    def _script(self):
+        script = sample_script()
+        beats = script["beats"]
+        for beat, (scene, light, description, camera) in zip(beats, [
+            ("open sea off the island", "hazy midday sun",
+             "From the open sea, the bare ash cone rises straight from the water.", "push_in"),
+            ("open sea off the island", "ash-darkened overcast sky",
+             "A wide view from the sea: a dense ash column already stands over the summit.", "push_in"),
+            ("western shore", "ash-darkened overcast sky",
+             "A wide view of the western shore and its dark lava apron.", "push_in"),
+            ("western shore", "ash-darkened overcast sky",
+             "Close on the edge of the flow: a wave rolls over hardened black rock.", "push_in"),
+            ("above the island", "ash-darkened overcast sky",
+             "An illustrative high, wide view looking down on the island from far above.", "push_in"),
+        ]):
+            beat["visual"].update(scene=scene, light=light, description=description, camera=camera)
+        script["location"] = (
+            "Open sea off the island: the ash cone rises from the strait, seen from the sea. "
+            "Above the island: an illustrative high, wide vantage looking down on the whole cone. "
+            "Western shore: dark crusted lava flows run down rough grey slopes to the waterline.")
+        script["color_palette"] = "ash grey, muted sea teal, white steam, pale hazy sky"
+        script["story_premise"] = "Eruptions sent lava down the flanks of the volcano."
+        script["ending_payoff"] = "A clear, wide daytime view of the enlarged island."
+        return script
+
+    def _shots(self):
+        shots, _ = plan_shots(self._script(), "volcano", 60, "documentary", "auto")
+        return shots[:4]
+
+    def test_another_scenes_aerial_vantage_stays_out_of_the_open_sea_shots(self):
+        for shot in self._shots()[:2]:
+            self.assertNotIn("looking down", shot.prompt)
+            self.assertIn("Open sea off the island", shot.prompt)
+
+    def test_a_pale_sky_stays_out_of_ash_darkened_shots(self):
+        shots = self._shots()
+        self.assertNotIn("pale hazy sky", shots[1].prompt)
+        self.assertIn("pale hazy sky", shots[0].prompt)
+
+    def test_clear_air_never_contradicts_the_shots_own_light(self):
+        self.assertNotIn("clear air", self._shots()[1].prompt)
+
+    def test_the_whole_story_premise_and_payoff_stay_out_of_each_shot(self):
+        for shot in self._shots():
+            self.assertNotIn("sent lava down", shot.prompt)
+            self.assertNotIn("clear, wide daytime view", shot.prompt)
+
+    def test_framing_follows_the_description_never_a_rotation(self):
+        prompts = [shot.prompt for shot in self._shots()]
+        self.assertNotIn("macro", prompts[1])                # a wide ash-column shot
+        self.assertIn("24mm wide frame", prompts[1])
+        self.assertIn("85mm close-up", prompts[3])
+        self.assertTrue(all("eye level" in prompt for prompt in prompts))
+
+    def test_a_close_up_after_a_wide_shot_opens_on_its_own_keyframe(self):
+        from local_video.planner import framing_scale
+        shots = self._shots()
+        labels = [(s.scene, s.light) for s in shots]
+        scales = [framing_scale(s.subject_action) for s in shots]
+        self.assertEqual(scales[2:], ["wide", "close"])
+        self.assertIsNone(continuation_source(labels, 3, None, scales))
+        self.assertEqual(continuation_source(labels, 3), 2)     # without scales it would continue
+
+    def test_the_keyframe_leads_with_camera_position_and_light(self):
+        from local_video.keyframes import keyframe_prompt
+        prompt = keyframe_prompt(self._shots()[1])
+        self.assertTrue(prompt.startswith("Photograph, 24mm wide frame, camera at eye level"))
+        self.assertLess(prompt.index("ash-darkened"), prompt.index("Subject:"))
+        self.assertNotIn("looking down", prompt)
+
+
+class QualityFloorTests(unittest.TestCase):
+    """A 3s clip of a slow subject scores low on story_progression even when it is a good shot:
+    17 of 20 takes on the volcano run, several otherwise scoring 8s. The floor now gives that
+    dimension the same one-point relief as visual_match and immersion."""
+
+    GOOD = {"visual_match": 8, "continuity": 8, "image_quality": 8, "anatomy": 10,
+            "immersion": 8, "story_progression": 6}
+
+    def _accepts(self, scores):
+        from local_video.visual_review import quality_floor
+        return all(v >= 7 for v in scores.values()) or quality_floor(scores, 7)
+
+    def test_a_take_missing_only_on_progression_is_kept(self):
+        self.assertTrue(self._accepts(self.GOOD))           # avg 8.0, rejected before this change
+
+    def test_anatomy_still_rejects(self):
+        self.assertFalse(self._accepts(dict(self.GOOD, anatomy=6)))
+
+    def test_progression_two_below_still_rejects(self):
+        self.assertFalse(self._accepts(dict(self.GOOD, story_progression=5)))
+
+    def test_strong_take_with_cgi_looking_smoke_is_kept(self):
+        # shot-007 take 1 of the 2026-10-27 run: avg 7.17, rejected on image_quality 6 alone.
+        scores = {"visual_match": 7, "continuity": 8, "image_quality": 6, "anatomy": 9,
+                  "immersion": 6, "story_progression": 7}
+        self.assertTrue(self._accepts(scores))
+
+    def test_image_quality_one_low_on_a_middling_take_still_rejects(self):
+        scores = {"visual_match": 6, "continuity": 7, "image_quality": 6, "anatomy": 9,
+                  "immersion": 6, "story_progression": 6}   # avg 6.67, under 6.7
+        self.assertFalse(self._accepts(scores))
+
+    def test_image_quality_two_low_still_rejects(self):
+        self.assertFalse(self._accepts(dict(self.GOOD, image_quality=5)))
+
+    def test_the_floor_stays_off_unless_enabled(self):
+        import inspect
+        from local_video import visual_review
+        source = inspect.getsource(visual_review.review_clip)
+        self.assertIn('os.getenv("LOCAL_VIDEO_ALLOW_QUALITY_FLOOR", "0") == "1" and quality_floor(', source)
+
+
+class RetakeCorrectionTests(unittest.TestCase):
+    """A rejected take's correction is fed straight to the generator as the next prompt.
+
+    MiniMax has no negative channel (only WanAdapter reads Shot.negative_prompt), so a forbidden
+    thing named in the correction becomes a thing that was asked for. The 2026-10-27 run's
+    corrections read "no daylight", "no pink", "avoid the mainland" and the same defects returned.
+    """
+
+    def test_the_reviewer_is_told_to_write_corrections_positively(self):
+        spec = review_clip.__globals__["REVIEW_TOOL"]["input_schema"]["properties"]["revision_prompt"]
+        self.assertIn("description", spec)               # it had none, so the format was invented
+        description = spec["description"]
+        self.assertIn("Never phrase a fix as a prohibition", description)
+        self.assertIn("no negative channel", description)
+        self.assertIn("becomes a thing you asked for", description)
+        self.assertIn("State the replacement instead", description)
+
+    def test_only_the_wan_backend_consumes_a_negative_prompt(self):
+        """Why corrections must be positive: the primary backend ignores negative_prompt."""
+        import inspect
+        from local_video.backends import MiniMaxAdapter, WanAdapter
+        self.assertIn("negative_prompt", inspect.getsource(WanAdapter))
+        self.assertNotIn("negative_prompt", inspect.getsource(MiniMaxAdapter))
 
 
 class RedoFlagTests(unittest.TestCase):

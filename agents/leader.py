@@ -1,10 +1,10 @@
 """
-Leader Agent — picks today's trending topic + optimal angle.
+Leader Agent — picks the channel's next story + optimal angle.
 
 Flow:
-  1. Pulls 10-15 trending topics from Tavily search
-  2. Filters out: politics, religion, unverifiable rumors, repeats from last 7 days
-  3. Picks ONE topic with high view potential + good visual representation
+  1. Searches Tavily for candidates matching the channel description (config/channel.md)
+  2. Filters out: politics, religion, unverifiable rumors, topics the channel already told
+  3. Picks ONE story that fits the channel and can be shown on screen
   4. Auto-selects the best framing angle for that specific topic
   5. Returns a creative brief for the Script Agent
 """
@@ -26,18 +26,33 @@ from tavily import TavilyClient
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 USED_TOPICS_FILE = os.path.join(get_output_dir(), "used_topics.json")
+CHANNEL_PROFILE_FILE = os.getenv("CHANNEL_PROFILE_FILE") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "channel.md")
+
+
+def channel_profile() -> str:
+    """The channel's own description; every automatic topic must fit it."""
+    try:
+        with open(CHANNEL_PROFILE_FILE, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 # ------------------- TOPIC HISTORY -------------------
 
 def load_used_topics() -> list:
-    """Load topics used in the last 7 days to avoid repeats."""
+    """Load the channel's past topics to avoid repeats.
+
+    History does not go stale like news: with a 7-day window the channel would retell Wojtek the
+    bear a week after publishing him. USED_TOPICS_DAYS shortens it if ever wanted.
+    """
     if not os.path.exists(USED_TOPICS_FILE):
         return []
     try:
         with open(USED_TOPICS_FILE) as f:
             data = json.load(f)
-        cutoff = datetime.now() - timedelta(days=7)
+        cutoff = datetime.now() - timedelta(days=int(os.getenv("USED_TOPICS_DAYS") or 3650))
         recent = [t for t in data if datetime.fromisoformat(t["date"]) > cutoff]
         return recent
     except Exception:
@@ -45,9 +60,7 @@ def load_used_topics() -> list:
 
 
 def save_used_topic(topic: str):
-    """Append today's topic to the history file.
-    Only recent topics (last 7 days) are kept because load_used_topics filters them.
-    """
+    """Append today's topic to the history file (kept for USED_TOPICS_DAYS, ten years by default)."""
     used = load_used_topics()
     used.append({"topic": topic, "date": datetime.now().isoformat()})
     os.makedirs(os.path.dirname(USED_TOPICS_FILE), exist_ok=True)
@@ -57,9 +70,51 @@ def save_used_topic(topic: str):
 
 # ------------------- TRENDING SEARCH -------------------
 
+# One pool per line of the channel description, so every run looks across all four. History is not
+# news: these run without a time window, and the leader's memory of past topics prevents repeats.
+CHANNEL_QUERIES = {
+    "Forgotten heroes and unlikely soldiers": [
+        "animal that served as a soldier in a war true story",
+        "forgotten unlikely war hero true story",
+        "ordinary person who changed a battle forgotten history",
+        "strangest military recruit in history",
+    ],
+    "Bizarre wars, battles and military history": [
+        "war fought over a trivial object true history",
+        "strangest battle in history true story",
+        "bizarre military blunder history",
+        "shortest or oddest war in history",
+    ],
+    "Strange true events from ancient times to the 20th century": [
+        "bizarre true event ancient history",
+        "strange forgotten event medieval history true story",
+        "weird true story 19th century history forgotten",
+        "unbelievable true event early 20th century",
+    ],
+    "The real people behind history's oddest moments": [
+        "person who survived impossible odds history true story",
+        "real person behind a famous historical oddity",
+        "forgotten inventor or eccentric history true story",
+        "accidental hero history surprising human story",
+    ],
+}
+
+
+def _channel_queries() -> list[str]:
+    """Two queries from each line of the channel, varied run to run so the candidates differ."""
+    import random
+    picks = []
+    for pool in CHANNEL_QUERIES.values():
+        picks.extend(random.sample(pool, 2))
+    return picks
+
+
 def search_trending_subjects(source: str | None = None) -> list:
-    """Search Tavily for fresh, viral-worthy subjects across multiple categories."""
+    """Search Tavily for subjects that fit the channel (Unreal: mechanisms its sets can show)."""
     log.info("  Searching for trending subjects...")
+
+    if source != "unreal" and channel_profile():
+        return _search(_channel_queries(), time_range=None)
 
     # Multiple search angles to find variety
     queries = (
@@ -91,10 +146,15 @@ def search_trending_subjects(source: str | None = None) -> list:
         ]
     )
 
+    return _search(queries, time_range="week")
+
+
+def _search(queries: list[str], time_range: str | None) -> list:
     all_results = []
     for q in queries:
         try:
-            r = tavily.search(query=q, search_depth="advanced", max_results=5, time_range="week")
+            options = {"time_range": time_range} if time_range else {}
+            r = tavily.search(query=q, search_depth="advanced", max_results=5, **options)
             for item in r.get("results", []):
                 all_results.append({
                     "title": item.get("title", ""),
@@ -110,9 +170,11 @@ def search_trending_subjects(source: str | None = None) -> list:
 
 def research_topic(topic: str) -> list[dict]:
     """Build a fresh evidence pack that the writer and critic must stay inside."""
+    # No time window: the channel's stories are decades or centuries old, and their best sources
+    # (museums, archives, encyclopaedias) were written long before this month.
     response = tavily.search(
         query=f'fact check authoritative sources "{topic}"',
-        search_depth="advanced", max_results=6, time_range="month",
+        search_depth="advanced", max_results=6,
     )
     results = list(response.get("results", []))
     if len(results) < 2:
@@ -139,24 +201,30 @@ def research_topic(topic: str) -> list[dict]:
 
 # ------------------- TOPIC SELECTION -------------------
 
-LEADER_SYSTEM_PROMPT = """You are an elite viral content strategist. You pick topics for a TikTok/YouTube Shorts channel that gets millions of views on history, science, and mystery content.
+LEADER_SYSTEM_PROMPT = """You are the story editor of a YouTube Shorts channel. You pick the channel's next story.
 
-Given a list of candidate subjects from web search, your job is to pick ONE topic that will maximize views.
+Given a list of candidate subjects from web search, your job is to pick ONE story that fits the
+channel described in the request and will make its viewers stop scrolling.
 
 ═══ TOPIC SELECTION CRITERIA ═══
 
 REQUIRED for selection:
-✓ Highly visual - a camera could film actual footage of this
-✓ Surprising, counterintuitive, or mysterious
-✓ Has a clear story arc with a payoff
-✓ Confirmed factual (no legends, conspiracy theories, or disputed claims)
+✓ Fits the channel description: a forgotten, bizarre, surprisingly human TRUE story from history
+  (ancient times to the 20th century). An unlikely soldier, an absurd war, a person who survived
+  the impossible, the real person behind an odd moment.
+✓ A clear story arc: a strange setup, what happened, and a payoff that surprises
+✓ Documented in historical sources (no legends, hoaxes or disputed claims presented as fact)
+✓ Can be shown through places, objects, animals and one or two people: a story whose every moment
+  needs a crowd or a battle scene is hard to film
 ✓ NOT in the recently_used list
 
 REJECT topics that are:
-✗ Political, religious, or controversial
-✗ Pure abstract concepts (theoretical physics, philosophy)
-✗ Person-focused if no public-domain footage exists (avoid celebrity gossip)
-✗ Already covered in recently_used list
+✗ Current news, science explainers, technology, engineering or nature documentaries: the channel
+  tells history, so even a spectacular eruption or invention this week is off-brand
+✗ Political, religious, or controversial in a present-day sense
+✗ Famous headline history everyone knows (the Titanic sinking, the moon landing) unless the
+  candidate is an obscure footnote inside it
+✗ Already covered in recently_used list, or the same story told from another angle
 
 ═══ ANGLE SELECTION ═══
 
@@ -172,16 +240,27 @@ Once you pick the topic, choose ONE optimal framing angle:
 The topic you output must be a SPECIFIC factual claim with intrinsic curiosity, not a generic subject.
 
 GOOD topics:
-- "The Pacific octopus that solved a Rubik's cube faster than most humans"
-- "How a single Roman aqueduct in southern France still delivers water 2000 years later"
-- "Why the Sahara desert was a green grassland just 6000 years ago"
+- "In 1325 the Italian cities of Modena and Bologna fought a war that ended with Modena keeping a
+  stolen oak bucket, which still hangs in its cathedral tower"
+- "Tsutomu Yamaguchi was in Hiroshima on business when the first atomic bomb fell, went home to
+  Nagasaki, and survived the second one three days later"
+- "Wojtek, a Syrian brown bear, was enlisted as a private in the Polish army and carried
+  ammunition crates at Monte Cassino"
 
-BAD topics (too generic):
-- "Octopus intelligence"
-- "Roman engineering"
-- "Ancient climate"
+BAD topics (too generic, or off-brand):
+- "Medieval warfare"
+- "Animals in World War II"
+- "A volcano just grew a new island" (news and nature, not a history footnote)
 
 You MUST submit your selection as the structured output."""
+
+
+# The Unreal sets can show only engineering mechanisms, so that source keeps a mechanism brief.
+MECHANISM_LEADER_PROMPT = """You pick topics for a YouTube Shorts channel. Given candidate subjects
+from web search, pick ONE specific, surprising, factual topic with a clear cause-and-effect story
+that the renderer described in the request can show end to end. Reject political, religious,
+controversial, abstract or already-used topics. The topic must be a specific factual claim, not a
+generic subject. You MUST submit your selection as the structured output."""
 
 
 TOPIC_TOOL = {
@@ -327,7 +406,9 @@ AI-VIDEO REALISM (mandatory for the local-ai generator):
   or a comparison that only a chart can explain. The generator cannot make reliable diagrams or
   exact counts. Prefer a subject with observable physical stages and a payoff visible without text.
 - The story must work without invented presenters, scientists, witnesses, or staged discoveries.
-  Choose an object-led or process-led topic that neutral documentary scenes can show end to end.
+  Choose a story that its real places, objects, animals and one or two real people seen at a
+  distance can show end to end (the bucket in the tower, the bear carrying a crate, a lone figure on
+  a station platform), rather than one whose every moment needs a crowd or a battlefield.
 - The camera must be able to STAND where the story happens, in ordinary air and daylight. The
   generator cannot hold a shot that is underwater, submerged, on the seafloor, on a reef, microscopic,
   inside a body, or visible only from orbit: within three seconds it drifts out, usually to dry land
@@ -344,8 +425,13 @@ AI-VIDEO REALISM (mandatory for the local-ai generator):
   predation, prey capture, venom and animals eating their young are removed as animal cruelty.
 """ if source == "local-ai" else ""
 
-    base_prompt = f"""Pick ONE topic for today's viral short video.
-
+    profile = channel_profile() if source != "unreal" else ""
+    channel = f"""
+THE CHANNEL (every pick must fit this description; reject candidates that do not):
+{profile}
+""" if profile else ""
+    base_prompt = f"""Pick ONE topic for today's short video.
+{channel}
 CANDIDATES FROM SEARCH:
 {json.dumps(candidates, indent=2)}
 
@@ -359,7 +445,8 @@ Submit your selection as the structured output. The topic should be a specific f
     for _ in range(3):
         retry = ("\n\nREJECTED BY THE VIDEO RENDERER (do not choose these or close variants):\n- "
                  + "\n- ".join(rejected)) if rejected else ""
-        selection = ai_router.ask(LEADER_SYSTEM_PROMPT, base_prompt + retry, TOPIC_TOOL["input_schema"])
+        system = LEADER_SYSTEM_PROMPT if profile else MECHANISM_LEADER_PROMPT
+        selection = ai_router.ask(system, base_prompt + retry, TOPIC_TOOL["input_schema"])
         if not isinstance(selection, dict):
             raise ValueError("Leader Agent returned no topic selection")
         problem = local_ai_topic_problem(str(selection.get("topic") or "")) if source == "local-ai" else None
@@ -482,11 +569,12 @@ def _merge_sources(*groups) -> list[dict]:
     return merged
 
 
-def find_todays_topic(source: str | None = None) -> dict:
+def find_todays_topic(source: str | None = None, exclude: list[str] | None = None) -> dict:
     """Full Leader Agent flow. Returns dict with topic, angle, tone, rationale and research.
 
     The topic is reconciled with its evidence before it leaves this function, so STAGE 1 never has
-    to write a story whose premise no source supports.
+    to write a story whose premise no source supports. exclude names topics this run already gave
+    up on, so a retry picks something else.
     """
     log.info("Leader Agent: finding today's topic...")
 
@@ -494,7 +582,7 @@ def find_todays_topic(source: str | None = None) -> dict:
     if not candidates:
         raise RuntimeError("Fresh trend research returned no candidates; refusing to use stale fallback topics")
 
-    recently_used = load_used_topics()
+    recently_used = load_used_topics() + [{"topic": topic} for topic in exclude or []]
     log.info(f"  Recently used count: {len(recently_used)}")
 
     rejected, attempts = [], max(1, int(os.getenv("LEADER_TOPIC_ATTEMPTS") or 3))

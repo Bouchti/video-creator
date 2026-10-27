@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ import requests
 from .comfy import ComfyClient, ComfyError
 from .config import PipelineConfig, env_int
 from .models import ProjectManifest, Shot
-from .planner import PHOTO_LOOK, continuation_source
+from .planner import PHOTO_LOOK, continuation_source, framing_for, framing_scale
 
 log = logging.getLogger("pipeline")
 
@@ -70,12 +71,13 @@ def fresh_openings(manifest: ProjectManifest) -> list[int]:
     """Shots that open on no earlier frame: the first (without a user reference) and hard cuts."""
     labels = [(s.scene.lower(), s.light.lower()) for s in manifest.shots]
     casts = [s.cast for s in manifest.shots]
+    scales = [framing_scale(s.subject_action) for s in manifest.shots]
     indices = []
     for index, shot in enumerate(manifest.shots):
         if index == 0:
             if not manifest.reference_image:
                 indices.append(index)
-        elif shot.scene and continuation_source(labels, index, casts) is None:
+        elif shot.scene and continuation_source(labels, index, casts, scales) is None:
             indices.append(index)
     return indices
 
@@ -88,18 +90,48 @@ def usable_keyframe(manifest: ProjectManifest, shot: Shot) -> Path | None:
     return path if failed < KEYFRAME_FAILURE_LIMIT else None
 
 
+def _clip_sentences(text: str, limit: int) -> str:
+    """Whole sentences up to limit characters; a cut mid-word ("near the main cone, n.") reads as noise."""
+    if len(text) <= limit:
+        return text
+    kept = ""
+    for sentence in re.split(r"(?<=[.;])\s+", text):
+        if len(kept) + len(sentence) + 1 > limit:
+            break
+        kept = f"{kept} {sentence}".strip()
+    return kept or text[:limit].rsplit(" ", 1)[0]
+
+
 def keyframe_prompt(shot: Shot) -> str:
+    """The still the clip opens on, described the same way the clip itself is.
+
+    This image becomes the clip's first frame AND the continuity reference the reviewer compares
+    that frame against, so anything the clip brief says about look that is missing here turns into a
+    rejection. It used to omit `visual_style`, which carries the palette and grade: a brief asking
+    for an ash-grey sky and a charcoal-and-steel grade produced a pale-blue cone under a clear sky,
+    and the reviewer then reported "frame 1 does not match the start image".
+
+    Where the camera stands and the light lead the prompt, ahead of the subject: FLUX weighs the
+    opening words most, and with them buried after the setting every volcano keyframe came out as a
+    drone view under a pale sky, even for an "ash-darkened overcast" shot. MiniMax cannot move the
+    camera down to the sea or darken the sky in three seconds, so every take of those shots failed.
+    """
     continuity = shot.continuity or {}
-    parts = [f"Photograph: {shot.subject_action}"]
-    if continuity.get("location"):
-        parts.append(f"Setting: {str(continuity['location'])[:400]}")
     light = shot.light or continuity.get("time_of_day")
+    parts = [f"Photograph, {framing_for(shot.subject_action)}"]
     if light:
-        parts.append(f"Light: {light}")
+        parts.append(f"Light and sky in every part of the frame: {light}")
+    parts.append(f"Subject: {shot.subject_action}")
+    if continuity.get("location"):
+        parts.append(f"Setting: {_clip_sentences(str(continuity['location']), 400)}")
+    style = continuity.get("visual_style")
+    if style:                                  # the same palette and grade the clip is rendered with
+        parts.append(f"Visual style: {str(style)[:400]}")
     if shot.cast and continuity.get("characters"):
         names = ", ".join(shot.cast)
         parts.append(f"Exactly one of each named person ({names}), never two look-alikes; everyone else "
                      f"dressed differently. Look: {str(continuity['characters'])[:500]}")
+    parts.append("9:16 portrait composition, the subject filling a clear share of the frame")
     parts.append(f"{PHOTO_LOOK}, realistic skin and materials, no text, no watermark")
     return ". ".join(part.rstrip(". ") for part in parts) + "."
 

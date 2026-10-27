@@ -128,7 +128,10 @@ LOCAL_AI_VISUAL_SCHEMA = {
         },
         "description": {
             "type": "string",
-            "description": "Production-ready description of one physical three-second shot: named character, action, connected location, recurring props, composition, lighting, and depth. No dialogue or text.",
+            "description": "Production-ready description of one physical three-second shot, starting with its "
+                           "shot size ('Wide shot:', 'Medium shot:', 'Close-up:' or 'Extreme close-up:'): "
+                           "named character, action, connected location, recurring props, composition, "
+                           "lighting, and depth. No dialogue or text.",
         },
         "continuity_out": {
             "type": "string",
@@ -137,7 +140,8 @@ LOCAL_AI_VISUAL_SCHEMA = {
         "camera": {
             "type": "string",
             "enum": list(CAMERA_MOVES),
-            "description": "One motivated camera move that reveals or follows the current action.",
+            "description": "One motivated camera move that follows the current action or moves toward "
+                           "or away from what is already in frame; never one that reveals something new.",
         },
         "transition": {
             "type": "string",
@@ -518,8 +522,9 @@ labels, logos, or written numbers.
    the supplied evidence. Do not add a parachute landing, desert recovery, laboratory procedure, exact
    color, handoff, or sequence of events unless the evidence supports it.
 5. Give every beat a `scene` and `light` label. Consecutive beats with the same labels form one
-   continuous take: `continuity_in` must match the preceding `continuity_out`. Cuts may move among a
-   few evidence-supported settings or clearly illustrative macro environments; no random montage.
+   continuous take: `continuity_in` must match the preceding `continuity_out`. Cuts move among the
+   evidence-supported settings, close details of them, and clearly illustrative stand-ins for what
+   the narration names (rule 14); every cut follows the narration, never a random montage.
 6. No generated text or diagrams. Numbers and terms are spoken by narration and added later as
    software captions. Show quantities through physical groupings only when reliable generation is
    plausible; otherwise show the real object or process the number describes.
@@ -542,9 +547,74 @@ labels, logos, or written numbers.
      the object on a bench, the core on a table, the coastline from the shore, the machine in a hall.
    - Do not stage instrument readouts, sonar traces, scans, screens or data displays; they come out
      as forbidden on-screen text. Show the physical thing the reading is about.
-   - Prefer ordinary air and daylight (or plain, motivated interior light). If the evidence's real
-     setting cannot be filmed, show a supported object from that work instead, and let narration
-     carry the location.
+   - EVERY beat's `light` must be a DAYTIME condition. The generator cannot hold darkness: a night
+     shot drifts to dawn, sunset or full daylight within three seconds, so pink sky, blue sky and
+     sunlit slopes appear in the middle of what you asked to keep black. Overcast, haze, smoke, dim
+     ash-darkened sky, storm light, deep shade and plain interior light are all fine; night,
+     moonlight, dusk, dawn, twilight, starlight and "lit only by <glow>" are not. If the real event
+     happened at night, film its daytime evidence instead — fresh black rock, steam, an ash plume,
+     a scorched slope — and let the narration say it happened at night.
+   - Do not stage a shot whose subject is only visible because it glows in the dark (lava rivers at
+     night, embers, a furnace interior). Show the same thing by day: the dark flow it leaves, the
+     steam where it meets water, the new ground it built.
+   - If the evidence's real setting cannot be filmed, show a supported object from that work instead,
+     and let narration carry the location.
+11. KEEP EVERY ATTRIBUTION EXACTLY AS THE EVIDENCE GIVES IT. When a source credits a finding to a
+   particular instrument, satellite, mission, agency or method, that credit belongs to that one and
+   to no other, and the verb matters as much as the name. A source saying an instrument "tracked",
+   "watched", "visualised" or "imaged" something does NOT say it measured, counted or discovered it;
+   if a different source supplies the number, the number is that source's. Never merge two
+   instruments into one, never move a figure from the thing that produced it to the thing that is
+   more famous or more striking, and never upgrade an observation into a measurement or a discovery.
+   This applies to the title, description, premise, stakes and payoff as much as to a beat: those
+   lines are where a careful script usually slips.
+12. EACH SHOT IS A MOMENT, NOT A PROCESS. A shot is about three seconds long. Whatever change you
+   write into it has to be visible in three seconds of real time, or the shot is rejected for
+   showing nothing happening. So:
+   - The change inside a shot comes from something that genuinely moves at that speed: a wave
+     breaking, surf running up rock, steam curling off a surface, ash sifting down, a bird, a
+     vehicle, smoke bending in wind — or from a gentle push-in or pull-back on what is already in
+     frame (a push-in that lands on the new black shoreline).
+   - NEVER make a slow process the change inside one shot. A plume thickening and veiling a summit,
+     a sky darkening, a shelf widening, a flow advancing into the sea, a crack spreading, a glacier
+     retreating: none of these move perceptibly in three seconds, and asking for them produces a
+     clip where nothing appears to happen.
+   - Those slow processes are what the CUT is for. Show the stages ACROSS shots: a thin plume in one
+     shot, a sky already dark in a later one, bare rock early and a wide black shelf near the end.
+     The viewer reads the change from the difference between shots; each shot only has to be a
+     convincing still moment of its own stage.
+   - State the stage each shot is AT, not the transformation it should undergo. "A dense ash column
+     already standing over the summit, its edge drifting" is filmable; "the plume grows thicker and
+     spreads until it veils the summit" is not.
+   - Frame the subject so it reads on a phone: it should occupy a clear share of the frame. Do not
+     ask for a subject that is small, tiny or far away in frame; the generator fills the frame with
+     its subject and a "small distant cone" comes back large and close, breaking the shot.
+13. THE CAMERA NEVER REVEALS. A continuing shot starts on the previous shot's last frame, and the
+   generator cannot invent what that frame does not already show. On a test run a pan "to another
+   lava flow on the next flank" kept the first flow and drifted onto a hillside on every take, a
+   rise "to reveal the lava front" pulled back until the front was a speck, and an orbit barely
+   turned. So:
+   - `camera` is `push_in` or `pull_out` for a still subject. Use `pan_left`/`pan_right` only to
+     follow something that moves, and never use `rise` or `orbit`.
+   - Whatever the shot is about must be in its first frame. To show a new subject, cut to it: give
+     it its own beat whose description shows it from the start.
+   - Say where the camera stands in every description: "at eye level on the shore", "from a boat
+     just above the water", "high above". Without it the generator picks a drone view.
+14. THE PICTURE MUST KEEP CHANGING. A test video showed the same volcano from the same distance in
+   18 of 22 shots while the narration spoke of flights, a radar satellite and sailors; viewers
+   called it one volcano and a camera turning. So:
+   - Each beat shows what ITS line talks about. When the line names something other than the main
+     subject, show a filmable stand-in for that thing, never the main subject again: a radar
+     mission becomes a large radar dish antenna at a ground station (illustrative); disrupted
+     flights become an airliner parked on an apron under a hazy sky; sailors become a small boat on
+     the swell with anonymous crew in the distance; a cloud-covered camera becomes rain-beaded
+     glass. Call a stand-in "illustrative" in the description.
+   - Start every description with its shot size: "Wide shot:", "Medium shot:", "Close-up:" or
+     "Extreme close-up:". At least one beat in four is a Close-up or Extreme close-up of a physical
+     detail: texture, steam from a crack, water running off rock, ash on a surface, hands, a tool.
+   - Never more than three beats in a row with the same shot size, and never more than three in a
+     row of the same subject. The main subject appears in at most half of the beats; the rest are
+     its details, its surroundings, its effects and the stand-ins above.
 
 """
 
@@ -599,7 +669,8 @@ SYSTEM_PROMPT = system_prompt("footage")
 def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 75,
                     previous: dict = None, feedback: str = None, mode: str = "footage",
                     angle: str | None = None, content_mode: str = "documentary",
-                    research: list[dict] | None = None) -> dict:
+                    research: list[dict] | None = None,
+                    excluded_claims: list[str] | None = None) -> dict:
     """Generate a beat-structured, target-length video script with the configured AI backend.
 
     With `previous` + `feedback`, the model REVISES its earlier draft to fix the
@@ -625,6 +696,17 @@ def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 
                     "not carry a beat, the title, the premise or the ending. A shorter arc that is fully "
                     "sourced beats a richer one built on an unsupported claim."
                     if content_mode == "documentary" else "")
+    # Claims a fact-checker already removed from this topic for want of a source. Without this list
+    # the writer supplies them again from its own knowledge of the subject (an Anak Krakatau draft
+    # re-asserted that the name means "child of Krakatau" one minute after it was struck out), and
+    # the evaluator spends a whole revision round blocking the same claim again.
+    excluded = ""
+    if content_mode == "documentary" and excluded_claims:
+        excluded = ("\n\nALREADY REJECTED FOR THIS TOPIC — a fact-checker removed each of these because no "
+                    "source supports it. They are not open questions and your own knowledge does not "
+                    "settle them. Do not state, imply, hint at or build a beat, title, premise or ending "
+                    "on any of them:\n"
+                    + "\n".join(f"- {str(claim)[:300]}" for claim in excluded_claims[:12]))
 
     if previous and feedback:
         draft = {k: v for k, v in previous.items() if k not in ("spoken_script", "credits")}
@@ -641,7 +723,7 @@ CONTENT MODE: {content_mode}
 TONE: {tone}
 {limits}
 SOURCE EVIDENCE (use only supported claims; never invent missing details):
-{evidence}
+{evidence}{excluded}
 
 PREVIOUS DRAFT:
 {json.dumps(draft, ensure_ascii=False)}
@@ -666,7 +748,7 @@ FRAMING ANGLE: {angle or 'choose the strongest truthful framing'}
 CONTENT MODE: {content_mode}. In documentary mode, do not invent events or discoveries.
 TONE: {tone}
 SOURCE EVIDENCE (use only supported claims; never invent missing details):
-{evidence}
+{evidence}{excluded}
 
 Write ONE continuous story as beats. {limits}
 {visual_hint}

@@ -30,7 +30,20 @@ REVIEW_TOOL = {
             "story_progression": {"type": "integer", "minimum": 1, "maximum": 10},
             "fatal_problems": {"type": "array", "items": {"type": "string"}},
             "problems": {"type": "array", "items": {"type": "string"}},
-            "revision_prompt": {"type": "string"},
+            "revision_prompt": {
+                "type": "string",
+                "description": (
+                    "The prompt for the next take, fed STRAIGHT to the video generator. Write it as a "
+                    "plain positive description of the shot that should exist: subject, framing, "
+                    "camera move, light, and what changes from first frame to last. Never phrase a fix "
+                    "as a prohibition: 'no daylight', 'not pink', 'avoid the mainland', 'do not add "
+                    "trees'. The generator has no negative channel here, so a forbidden thing you name "
+                    "becomes a thing you asked for, and the same defect comes back. State the "
+                    "replacement instead: 'an overcast ash-grey sky', 'open sea to the horizon on both "
+                    "sides', 'bare black rock to the frame edge'. If the defect was a drift away from "
+                    "the intended look, describe that look as a constant held in every frame."
+                ),
+            },
         },
         "required": ["visual_match", "continuity", "image_quality", "anatomy", "immersion", "story_progression",
                      "fatal_problems", "problems", "revision_prompt"],
@@ -121,6 +134,32 @@ def _identity_stills(shot: Any, manifest: Any, start_frame: Path | None) -> list
     return stills
 
 
+def quality_floor(scores: dict[str, int], threshold: int) -> bool:
+    """Keep a take that misses on the soft dimensions while the hard ones are clean.
+
+    story_progression gets the same one-point relief as visual_match and immersion: a three
+    second clip of a slow subject can only ever show a moment of it, so a 6 there is routine even
+    for a good take (17 of 20 takes on the 2026-10-27 volcano run, several otherwise scoring 8s).
+    image_quality may also sit one point low, but only on an otherwise strong take: MiniMax renders
+    ash plumes and smoke "slightly CGI-like" on every seed, so on that run five takes averaging up
+    to 7.17 died on image_quality 6 alone and the retakes could never fix it. anatomy still needs
+    the full threshold, a fatal problem still rejects outright, and LOCAL_VIDEO_MAX_DEGRADED_PERCENT
+    still stops a run whose shots are mostly salvaged, so this cannot quietly become a slideshow.
+    """
+    average = sum(scores.values()) / len(scores)
+    image_ok = scores["image_quality"] >= threshold or (
+        scores["image_quality"] >= threshold - 1 and average >= threshold - 0.3)
+    return (
+        scores["visual_match"] >= max(1, threshold - 2)
+        and scores["continuity"] >= max(1, threshold - 1)
+        and image_ok
+        and scores["anatomy"] >= threshold
+        and scores["immersion"] >= max(1, threshold - 1)
+        and scores["story_progression"] >= max(1, threshold - 1)
+        and average >= threshold - 0.6
+    )
+
+
 def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manifest: Any) -> dict[str, Any]:
     """Return an acceptance report. Creative review is fail-closed by default."""
     if not review_enabled():
@@ -200,15 +239,8 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
         threshold = int(os.getenv("LOCAL_VIDEO_VISION_MIN_SCORE", "7"))
         strict_pass = all(score >= threshold for score in scores.values())
         average = sum(scores.values()) / len(scores)
-        quality_floor_pass = os.getenv("LOCAL_VIDEO_ALLOW_QUALITY_FLOOR", "0") == "1" and (
-            scores["visual_match"] >= max(1, threshold - 2)
-            and scores["continuity"] >= max(1, threshold - 1)
-            and scores["image_quality"] >= threshold
-            and scores["anatomy"] >= threshold
-            and scores["immersion"] >= max(1, threshold - 1)
-            and scores["story_progression"] >= threshold
-            and average >= threshold - 0.6
-        )
+        quality_floor_pass = os.getenv("LOCAL_VIDEO_ALLOW_QUALITY_FLOOR", "0") == "1" and quality_floor(
+            scores, threshold)
         valid = not fatal and (strict_pass or quality_floor_pass)
         return {
             "valid": valid, "skipped": False, "threshold": threshold,

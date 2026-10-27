@@ -30,30 +30,72 @@ CAMERA_MOVES = (
     "slow push-in", "gentle tracking shot", "controlled handheld follow", "smooth orbit",
     "low-angle dolly", "overhead drift", "slow pull-back", "lateral parallax move",
 )
-FRAMINGS = (
-    "24mm wide establishing frame", "35mm medium-wide frame", "50mm medium frame",
-    "85mm intimate close-up", "macro detail shot", "low-angle 35mm frame",
-)
 
 
-def _camera_plan(subject: str, index: int) -> tuple[str, str]:
-    """Honor explicit screenplay composition instead of adding a conflicting camera preset."""
+# The writer's own `camera` choice, as a phrase the generator understands. The screenplay schema
+# requires one of these per beat and the script evaluator checks it against `continuity_out`, so
+# substituting a different move leaves every inherited start state describing a move that was never
+# rendered. Before this, 7 of 8 shots in a run were rendered with a move the writer did not choose.
+_MOVE_PHRASE = {
+    "push_in": "slow push-in",
+    "pull_out": "slow pull-back",
+    "pan_left": "steady pan left",
+    "pan_right": "steady pan right",
+    "rise": "slow rising crane move",
+    "orbit": "slow orbit around the subject",
+}
+
+
+# Where the camera stands when the description does not say. Without it the generator picks its own
+# default for a landscape, a drone view: on the 2026-10-27 volcano run 16 reviews said "high aerial,
+# not the sea-level view the beat describes", in shots that never asked to leave the water.
+EYE_LEVEL = "camera at eye level about two metres above the ground or water, horizon level"
+_CLOSE_CUES = ("extreme close-up", "macro", "close-up", "close shot", "close on ", "close view")
+_OVERHEAD_CUES = ("top-down", "overhead", "looking straight down", "looking down", "from far above", "aerial")
+
+
+def framing_scale(subject: str) -> str | None:
+    """"close", "wide" or None (medium or unstated), from the shot's own description."""
+    action = subject.lower()
+    if any(cue in action for cue in _CLOSE_CUES):
+        return "close"
+    if "wide" in action or any(cue in action for cue in _OVERHEAD_CUES):
+        return "wide"
+    return None
+
+
+def _camera_plan(subject: str, index: int, chosen: str | None = None) -> tuple[str, str]:
+    """Honor explicit screenplay composition instead of adding a conflicting camera preset.
+
+    A composition cue in the description (macro, close-up, low angle, overhead) still sets both the
+    framing and the move, because the cue describes where the camera is. Otherwise the writer's
+    `camera` choice wins, and only a beat that supplied none falls back to the index rotation.
+    The framing never comes from a rotation: that told a wide shot of an ash column it was a
+    "macro detail shot" and a pan across the sea an "85mm intimate close-up", and the generator
+    resolved each contradiction with a generic drone view.
+    """
     action = subject.lower()
     if "extreme close-up" in action or "macro" in action:
         return "controlled macro push-in", "macro detail shot"
-    if "close-up" in action or "close shot" in action:
-        return "slow intimate push-in", "85mm intimate close-up"
+    if any(cue in action for cue in _CLOSE_CUES):
+        return "slow intimate push-in", f"85mm close-up, {EYE_LEVEL}"
     if "low angle" in action or "looking up" in action or "floor level" in action:
         return "slow low-angle drift", "24mm low-angle wide frame"
-    if "top-down" in action or "overhead" in action or "looking straight down" in action:
-        return "slow overhead drift", "24mm overhead wide frame"
+    if any(cue in action for cue in _OVERHEAD_CUES):
+        return "slow overhead drift", "24mm high aerial wide frame looking down"
     if "side angle" in action or "side shot" in action or "from the side" in action:
-        return "gentle lateral tracking shot", "35mm side-angle medium-wide frame"
+        return "gentle lateral tracking shot", f"35mm side-angle medium-wide frame, {EYE_LEVEL}"
+    move = _MOVE_PHRASE.get(str(chosen or "").strip().lower()) or CAMERA_MOVES[index % len(CAMERA_MOVES)]
     if "wide" in action:
-        return CAMERA_MOVES[index % len(CAMERA_MOVES)], "24mm wide establishing frame"
-    if "medium" in action:
-        return CAMERA_MOVES[index % len(CAMERA_MOVES)], "50mm medium frame"
-    return CAMERA_MOVES[index % len(CAMERA_MOVES)], FRAMINGS[index % len(FRAMINGS)]
+        return move, f"24mm wide frame, {EYE_LEVEL}"
+    if "medium" in action or "closer" in action:
+        return move, f"50mm medium frame, {EYE_LEVEL}"
+    return move, f"35mm frame, {EYE_LEVEL}"
+
+
+def framing_for(subject: str) -> str:
+    """The lens and camera position a shot is rendered with; its keyframe must be shot the same way."""
+    return _camera_plan(subject, 0)[1]
 
 
 MIN_DURATION, MAX_DURATION = 30, 90
@@ -187,6 +229,7 @@ def beat_labels(script: dict[str, Any], beat_index: int) -> tuple[str, str]:
 
 def continuation_source(
     labels: list[tuple[str, str]], index: int, casts: list[list[str]] | None = None,
+    scales: list[str | None] | None = None,
 ) -> int | None:
     """The earlier shot whose last frame this shot opens on, or None for a fresh opening.
 
@@ -194,6 +237,9 @@ def continuation_source(
     back to a place keeps its look and a cut elsewhere never morphs out of an unrelated frame.
     A return to an earlier shot also needs the same cast: opening a two-army shot on a frame of
     one hero charging the camera makes the model add the enemy beside him.
+    A close shot never opens on a wide frame, nor a wide one on a close frame (`scales`, from
+    framing_scale): three seconds cannot travel that far, so "close on a wave over the rock" opened
+    on a wide aerial stayed a wide aerial on every take. Such a shot gets its own keyframe.
     Unlabelled scripts keep the old rule: every shot continues the previous one.
     """
     if index <= 0 or index >= len(labels):
@@ -202,38 +248,70 @@ def continuation_source(
         return index - 1
     same_cast = (lambda prior: True) if casts is None else (
         lambda prior: prior == index - 1 or sorted(casts[prior]) == sorted(casts[index]))
+    same_scale = (lambda prior: True) if scales is None else (
+        lambda prior: {scales[prior], scales[index]} != {"close", "wide"})
     return next((prior for prior in range(index - 1, -1, -1)
-                 if labels[prior] == labels[index] and same_cast(prior)), None)
+                 if labels[prior] == labels[index] and same_cast(prior) and same_scale(prior)), None)
 
 
 def _words(text: str, size: int = 5) -> set[str]:
     return set(re.findall(rf"[a-z]{{{size},}}", text.lower().replace("'s", "")))
 
 
+# Words a light label shares with ordinary style text without naming a kind of light.
+_GENERIC_LIGHT_WORDS = {"light", "lighting", "with", "from", "over", "under", "into"}
+
+
+def _light_words(text: str) -> set[str]:
+    return _words(text, 4) - _GENERIC_LIGHT_WORDS
+
+
 def _for_light(text: str, script: dict[str, Any], beat_index: int) -> str:
-    """Drop clauses about another beat's light, so a style line about the eclipse stays out of dawn."""
+    """Drop clauses about another beat's light, so a style line about the eclipse stays out of dawn.
+
+    Light words are matched from four letters: at five, "pale hazy sky" in the palette matched
+    nothing in "hazy midday sun" and rode into every ash-darkened shot, which then came back pale.
+    """
     beats = script.get("beats") if isinstance(script.get("beats"), list) else []
     light = beat_labels(script, beat_index)[1]
     if not light or not text:
         return text
-    others = set().union(*(_words(beat_labels(script, i)[1]) for i in range(len(beats)))) - _words(light)
-    clauses = [part for part in re.split(r"\s*[;,]\s*", text) if part and not _words(part) & others]
+    others = set().union(*(_light_words(beat_labels(script, i)[1]) for i in range(len(beats)))) - _light_words(light)
+    clauses = [part for part in re.split(r"\s*[;,]\s*", text) if part and not _light_words(part) & others]
     return ", ".join(clauses)
 
 
 def _for_scene(text: str, script: dict[str, Any], beat_index: int, split: str = r"\s*[;,]\s*") -> str:
     """Drop clauses that belong only to another scene, so the fire never sees the modern trench.
 
-    A clause naming another scene's label words is dropped unless it also names this beat's own.
+    A clause headed by a scene label ("Above the island: ...") belongs to that scene alone. Any
+    other clause naming another scene's label words is dropped unless it also names a word only
+    this beat's label has: a word every label shares proves nothing. Both "open sea off the island"
+    and "above the island" contain "island", so the open-sea shots used to be handed "Above the
+    island: a high vantage looking down" and rendered as drone shots.
     """
     beats = script.get("beats") if isinstance(script.get("beats"), list) else []
     scene = beat_labels(script, beat_index)[0]
     if not scene or not text:
         return text
+    other_labels = {beat_labels(script, i)[0] for i in range(len(beats))} - {scene, ""}
     own = _words(scene)
-    others = set().union(*(_words(beat_labels(script, i)[0]) for i in range(len(beats)))) - own
-    clauses = [part for part in re.split(split, text)
-               if part.strip() and (not _words(part) & others or _words(part) & own)]
+    shared = set().union(*(_words(label) for label in other_labels)) if other_labels else set()
+    others = shared - own
+    distinct = own - shared
+
+    def keep(part: str) -> bool:
+        head = re.match(r"\s*([^:.;]{2,60}):", part)
+        if head:
+            label = head.group(1).strip().lower()
+            if label == scene:
+                return True
+            if label in other_labels:
+                return False
+        words = _words(part)
+        return not words & others or bool(words & distinct)
+
+    clauses = [part for part in re.split(split, text) if part.strip() and keep(part)]
     return (" " if split == _SENTENCES else ", ").join(part.strip() for part in clauses)
 
 
@@ -362,7 +440,10 @@ def construct_prompt(
     lighting = "natural daylight with real shadows and no haze"
     if light:
         lighting = f"{light}, held steady for the whole clip (this shot only; later story light never appears early)"
-    atmosphere = "clear air, crisp detail, everyday real-world colour"
+    # A fixed "clear air" contradicted every hazy, smoky or ash-darkened light, and won: 28 reviews on
+    # the volcano run said the sky came back pale and bright instead of ash-darkened.
+    atmosphere = ("air, sky and colour exactly as the lighting above gives them in every frame, crisp detail"
+                  if light else "clear air, crisp detail, everyday real-world colour")
     scope = (
         "Do not restart the story, show an earlier location, or compress multiple scenes into this clip."
         if opening == "continue" else "Do not compress multiple scenes into this clip."
@@ -484,11 +565,13 @@ def build_generation_context(
         "new": "NEW SCENE (hard cut): open directly on this shot's own place and light; nothing from the "
                "previous shot's frame carries over except each named character's exact appearance.",
     }[opening]
+    # No whole-story premise or final payoff here: the video model renders every noun it is given,
+    # not only the "current shot". The volcano run's premise ("eruptions sent lava down its flanks")
+    # and payoff ("a clear, wide daytime view ... a thin steam plume") put a bright lava stream and a
+    # pale sky into shots that asked for a bare ash cone under an ash-darkened sky. The full story
+    # stays in screenplay.txt.
     lines = [
         "SINGLE-SHOT CONTINUITY LOCK",
-        "WHOLE-STORY CONTRACT: "
-        f"{script.get('story_premise') or concept} Goal: {script.get('protagonist_goal', '')} "
-        f"Final payoff: {script.get('ending_payoff', '')}",
         start,
         f"Required ending state: {handoff or 'finish with a clear visual handoff to the next action'}",
         f"Character identity lock: {continuity.get('characters')}",
@@ -538,18 +621,20 @@ def plan_shots(
     labels = [beat_labels(script, beat) for beat in beat_of]
     casts = [[str(c["name"]).strip() for c in beat_cast(script, beat)] for beat in beat_of]
     names_cast = _names_cast(script)
+    scales = [framing_scale(descriptions[beat]) for beat in beat_of]
     shots: list[Shot] = []
     for index in range(count):
         beat_index = beat_of[index]
         subject = descriptions[beat_index]
-        source = continuation_source(labels, index, casts)
+        source = continuation_source(labels, index, casts, scales)
         opening = "continue" if source == index - 1 else "new" if source is None and index else "return"
         if index == 0:
             opening = "new" if labels[0][0] else "continue"
         cast_names = [str(c["name"]).strip() for c in beat_cast(script, beat_index)]
         # Each shot carries only the looks its beat needs (a cub scene never sees the adult).
         shot_continuity = _continuity(script, visual_style, concept, beat_index)
-        camera, framing = _camera_plan(subject, index)
+        camera, framing = _camera_plan(subject, index,
+                                       chosen=_beat_visual(script, beat_index).get("camera"))
         scene_ambience = ambience or "natural location tone and specific diegetic details"
         previous = descriptions[max(0, min(len(descriptions) - 1, math.floor((index - 1) * len(descriptions) / count)))]
         following = descriptions[min(len(descriptions) - 1, math.floor((index + 1) * len(descriptions) / count))]
