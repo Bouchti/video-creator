@@ -8,6 +8,7 @@ The current production routes are:
 - `unreal`: locally rendered UE5 Sequencer cinematics through Movie Render Queue, with no per-render API fee.
 - `pexels`: stock/archival footage, public-domain media, photographs, and diagrams.
 - `cutaway` and `evolution`: authored Blender showrunner formats.
+- `explainer`: no-hero Blender cutaway explainers in the @youbuiltit format (see below).
 
 Hailuo and the old selectable Comfy/animated pipelines have been removed. ComfyUI remains an internal transport for the supported local MiniMax/Wan backends; it does not write narration or captions.
 
@@ -62,6 +63,26 @@ frames, visually validates every beat, registers it only after it passes, and th
 renders the video. This first run for a new subject is substantially longer than reusing an existing
 set. `SHOWRUNNER_AUTO_BUILD_SETS=0` disables automatic expansion; `SHOWRUNNER_ALLOW_REPEATS=1` is an
 explicit rerun override, not the production default.
+
+### Explainer route
+
+`--source explainer` makes pure 3D cutaway explainers with no hero: one cut-open diorama, the build
+told in physical order as a chain of real problems and fixes, one bold word on screen at a time.
+It runs under the same autopilot, showrunner (no-hero `STYLE` voice), Blender runner and quality
+review as `cutaway`, but its sets live in their own registry (`EXPLAINER` in
+`engine/sets/__init__.py`), so the Max route and its consumed-subject history are unaffected.
+
+```powershell
+python main.py --source explainer                                   # trend-backed topic
+python main.py --source explainer "How a septic tank works"         # producer topic
+python main.py --source explainer --set pool                        # a specific explainer set
+python -m agents.set_builder --explainer "BUILD BRIEF" --id septic_tank_explainer --hook overflow_hook
+```
+
+A producer topic is matched to a registered explainer set; when none fits, or every set has been
+used (`EXPLAINER_MAX_USES`, default 1 video per set), the autopilot researches a new subject, has
+the set builder write, preview, measure, review and register a new `*_explainer` set
+(`FORMAT = "explainer"`, no `HERO`), then writes and renders the video.
 
 The Codex and Claude subscription routes use `SHOWRUNNER_QUALITY=efficient`: one strong script, an
 independent critique, and a revision only when needed. Trend selection and the winning topic's fact

@@ -3,6 +3,7 @@ Autopilot: runs the whole 3D video pipeline unattended and repairs what goes wro
 
     python main.py --source evolution                 # (uses the autopilot)
     python main.py --source cutaway                   # (uses the autopilot)
+    python main.py --source explainer                 # (uses the autopilot; no-hero cutaway explainers)
     python -m agents.autopilot --source evolution --angle "..." --set bridge_evolution
     python -m agents.autopilot --resume output/autopilot/<run>.json   # continue an interrupted run
 
@@ -197,6 +198,8 @@ def stage_script(run, source, angle, set_id):
             if source == "evolution":
                 from agents.evolution_writer import run as write
                 path = write(angle=use_angle, set_id=set_id, render=False)
+            elif source == "explainer":
+                path = _explainer_script(run, use_angle, set_id)
             else:
                 from agents.showrunner import NoUnusedStorySets, plan_new_story_set, run as write
                 topic_hint = run["script_topic"]
@@ -245,6 +248,52 @@ def stage_script(run, source, angle, set_id):
             run.event("script", f"attempt {attempt} failed; retrying", detail=str(exc)[:300])
             time.sleep(min(300, 20 * attempt))
     raise GiveUp(f"no script could be written after {max_attempts} attempts")
+
+
+def _explainer_script(run, angle, set_id):
+    """Explainer route: reuse a registered no-hero set, or research, build and register a new one."""
+    from agents import explainer
+
+    def remember_topic(topic):
+        run.set(script_topic=topic)
+
+    hint = run["script_topic"]
+    if run["generated_set"]:                                   # resumed after the new set was accepted
+        return explainer.write(angle, run["generated_set"], topic_hint=hint or run["new_set_plan"],
+                               on_topic=remember_topic)
+    chosen = set_id or (hint or {}).get("set")
+    if not chosen and not run["new_set_plan"]:
+        chosen = explainer.choose_set(angle)                   # "" = any unused set, None = needs a new set
+        if chosen is not None:
+            run.event("script", "explainer set chosen", detail=chosen or "showrunner picks among unused sets")
+    if chosen is not None and not run["new_set_plan"]:
+        try:
+            return explainer.write(angle, chosen or None, topic_hint=hint, on_topic=remember_topic)
+        except explainer.NoUnusedExplainerSets as exc:
+            if set_id or not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True):
+                raise GiveUp(str(exc)) from exc
+            run.event("script", "no registered explainer set can carry today's video", detail=str(exc)[:200])
+    elif not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True) and not run["new_set_plan"]:
+        raise GiveUp("no registered explainer set fits this topic and SHOWRUNNER_AUTO_BUILD_SETS=0")
+    plan = run["new_set_plan"]
+    if not plan:
+        run.event("script", "researching a new explainer subject")
+        try:
+            plan = explainer.plan_new_set(angle)
+        except explainer.NoUnusedExplainerSets as exc:
+            raise GiveUp(str(exc)) from exc
+        run.set(new_set_plan=plan)
+    from agents.set_builder import build_explainer_set
+    run.event("set", "building and visually validating a new explainer set",
+              detail=f"{plan['subject']} ({plan['set_id']})")
+    status = build_explainer_set(plan["build_brief"], plan["set_id"], rounds=_int("SET_BUILD_ROUNDS", 4),
+                                 hook_action=plan.get("hook_action"))
+    if not status.get("accepted"):
+        raise GiveUp(f"new explainer set '{plan['set_id']}' did not pass visual validation; "
+                     f"continue it in {status.get('work')}")
+    run.set(generated_set=plan["set_id"], set=plan["set_id"], set_build=status)
+    run.event("set", "new explainer set accepted and registered", detail=plan["set_id"])
+    return explainer.write(angle, plan["set_id"], topic_hint=plan, on_topic=remember_topic)
 
 
 def _voice_error(exc):
@@ -443,7 +492,7 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     ap = argparse.ArgumentParser(description="Make a 3D video end to end, repairing failures automatically.")
-    ap.add_argument("--source", choices=["evolution", "cutaway"], default="evolution")
+    ap.add_argument("--source", choices=["evolution", "cutaway", "explainer"], default="evolution")
     ap.add_argument("--angle", default=None)
     ap.add_argument("--set", default=None, help="evolution set (default: the first registered)")
     ap.add_argument("--resume", default=None, help="continue a run from its output/autopilot/<run>.json")

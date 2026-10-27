@@ -144,7 +144,8 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
     check_budget("set builder")          # the costliest call in the pipeline: never start one over budget
     backend = active_backend()
     story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
-    measure_cmd = f"python -m agents.set_builder --measure {story_id}" if (story_id or "").endswith("_story") else None
+    measure_cmd = (f"python -m agents.set_builder --measure {story_id}"
+                   if (story_id or "").endswith(("_story", "_explainer")) else None)
     measures = ("(about 3 minutes; it prints collisions, floating characters, Max's on-screen size, static camera, "
                 "flat surfaces, small labels and flicker sources per beat) and fix everything it prints; run it again "
                 "until it prints no measured problems or only problems you cannot fix.")
@@ -507,6 +508,119 @@ simple, robust Blender geometry. Then write exactly these three files:
 Finish with a short summary of the visual ladder."""
 
 
+EXPLAINER_GUIDE = """HOW EXPLAINER SETS WORK. An explainer set is a Max story set WITHOUT a hero: one cut-open 3D
+diorama in which the camera follows how something is built or how it works, in physical order, each
+hidden problem made visible and answered by the real engineering fix (the format of channels like
+@youbuiltit). Everything you need is IN THIS PROMPT: the API REFERENCE at the end (every helper's
+signature and purpose, generated from the code) and the example spec. DO NOT open the engine modules
+or the reference sets to learn them: every file you read is re-sent with every later step and
+multiplies the cost. If a detail is missing, grep for that one definition and read only those lines,
+e.g. `grep -n "def close_on" engine/studio.py`. A finished example of the build quality:
+engine/sets/pumped_storage_mountain_batt_story.py (grep a method by name; never read it whole).
+- engine/studio.py is THE PRODUCTION KIT (natural terrain with carved cutaways, endless ground,
+  concrete, water reservoirs, flanged pipes with flowing water, pumps, solar panels, a house with
+  lights, labels, arrows, close-up camera moves). Build the world with it; extend it in your set,
+  never re-invent it.
+
+The spec is pure data, in the format of the example below, and must define SET_ID, FORMAT =
+"explainer", SUBJECT, MODEL_FACTS, BUILD_ORDER, ACTIONS, OVERLAY_TYPES, beat_actions(), min_seconds()
+and validate(). It must NOT define HERO. ACTIONS kinds:
+  * hook (2-3): staged on the FINISHED build, the most dramatic or surprising moment (one of them is
+    named exactly as the brief's hook action);
+  * rewind (exactly one, named "rewind", no method needed: make_film builds it from the frames);
+  * build (6-10, every one required, in BUILD_ORDER): the build steps in physical order; where the
+    brief names a hidden problem, the build action that answers it SHOWS the problem first (blue
+    arrows, water rising, a crack) and then the fix;
+  * explain (2-4, optional, with "after"): forces, flow, layers, the numbers made visible;
+  * outro (1-2, optional, last): the finished thing in use, with a little life.
+Every action needs kind, shows and seconds (min, max) except hooks and rewind. The validator must
+require a hook first, rewind second, every BUILD_ORDER action exactly once and in order, explainers
+after their prerequisite, outros last, and each action at most once.
+
+The Blender module defines one class whose name ends in Set. Its constructor is
+(scene, sun, fill, bg, total); it builds every model (hidden until its action reveals it) and owns a
+CameraRig. Its run(beats, spans, epilogue_offset) method flattens montage beats exactly like the
+example sets, plays every non-hook, non-rewind action through a_<action>(i, start, end), then stages
+the opening hook at start + epilogue_offset on the finished build, then calls rig.build(). Every
+action named by the spec except rewind needs a method. The class sets QA_ALLOW: a regex of
+"objA x objB" pairs that touch BY DESIGN (a pipe entering a wall); every other intersection is
+reported as a collision. People are optional extras (engine.character.Character) for scale and the
+finale only; nobody is a hero, nobody is harmed.
+
+ASSET PLAN FIRST: at the top of the Blender module write a comment block listing every real-world
+object the video needs, its real shape and proportions, the detail that makes it recognizable at a
+glance and the studio/textures pieces that build it. Then build exactly that.
+
+VISUAL RULES (the reference look: a clean, bright, semi-realistic diorama sliced open):
+- ONE continuous world: the camera glides between steps (studio.close_on, studio.orbit, push-ins);
+  cut only for the hook. The cutaway face shows the ground in clear layers (topsoil, clay, rock,
+  groundwater as a blue band when the subject involves it).
+- The active subject is big and centred in the 9:16 frame; wide shots only briefly, to establish.
+- The camera always moves: never still for more than 2.5 s.
+- Every hidden problem is VISIBLE (big white or blue arrows for pressure, water rising, flow
+  stripes in clear pipes, cracks); every fix visibly answers it.
+- Short 3D labels and fact arrows only where they explain the mechanism, >= 1.8% of the frame
+  height per line, fully inside the frame, up for >= 2 s and through the middle of their beat.
+- No narration, captions, lettering, watermarks or title cards in Blender.
+- No flat colours on big surfaces (engine.studio / engine.textures materials), no coplanar faces
+  (offset touching surfaces >= 5 mm), no live booleans on moving parts (studio.carve once, or
+  studio.section_clip), no void (studio.world_floor + terrain past every frame edge).
+- Only motivated diegetic sound events (events.add); never recurring transition whooshes.
+- Deterministic output: seed random generators. Blender 5.2 Python. Build everything before animation.
+- Hidden objects are excluded from evaluation; use toy.hide_tree/show helpers and keyframe visibility.
+- WHAT THE REVIEWER CHECKS (3 stills per beat: at 1/8, 1/2 and 7/8): every element the narration
+  names is on screen at the beat's middle and at 7/8; screens show a picture, not blank white; time of
+  day reads in the sky (studio.key_sky with the sun lamp).
+- The reference film JSON names this set, uses captions "word", voice "energetic", one beat per
+  required action (hook, rewind, every build action, any explainers/outro you want previewed),
+  140-192 spoken words, a <=13-word hook and a final short question to the viewer as the last
+  sentence plus "cta" with that question. It exists for preview validation; the showrunner writes
+  the production script after the set passes. Numbers only from MODEL_FACTS.
+"""
+
+
+def _example_explainer_spec():
+    p = os.path.join(PROJECT_ROOT, "engine", "sets", "pool_spec.py")
+    return open(p, encoding="utf-8").read() if os.path.isfile(p) else ""
+
+
+def explainer_design_prompt(subject, set_id, hook_action=None):
+    hook = (f"\nOne hook action must be named exactly `{hook_action}` (the showrunner opens the video with it)."
+            if hook_action else "")
+    return f"""Create a completely new 3D cutaway EXPLAINER set (no hero).
+
+Set id: {set_id}
+Subject and build brief: {subject}{hook}
+
+{EXPLAINER_GUIDE}
+
+EXAMPLE SPEC (engine/sets/pool_spec.py, the format to follow; add FORMAT = "explainer"):
+```python
+{_example_explainer_spec()}
+```
+
+API REFERENCE (generated from the code; use these, do not read their source):
+{api_digest()}
+
+Design the explainer first: the build order, which hidden problem each step answers and how the
+viewer SEES it, and the shot for every action. Keep it achievable with simple, robust Blender
+geometry. Then write exactly these three files:
+- engine/sets/{set_id}_spec.py
+- engine/sets/{set_id}.py
+- engine/films/{set_id}.json
+
+Finish with a short summary of the build sequence."""
+
+
+def _is_explainer(set_id):
+    try:
+        import importlib
+        sp = importlib.import_module(f"engine.sets.{set_id}_spec")
+    except Exception:                                # noqa: BLE001
+        return False
+    return getattr(sp, "FORMAT", "") == "explainer" and not getattr(sp, "HERO", None)
+
+
 def _guide(set_id):
     """Return the format-specific repair guide for this set."""
     try:
@@ -516,6 +630,9 @@ def _guide(set_id):
         fmt = ""
     if fmt == "evolution":
         return GUIDE
+    if fmt == "explainer":
+        return (f"{EXPLAINER_GUIDE}\nAPI REFERENCE (generated from the code; do not read their source):\n"
+                f"{api_digest()}")
     try:
         if getattr(importlib.import_module(f"engine.sets.{set_id}_spec"), "HERO", None):
             return (f"{STORY_GUIDE}\nAPI REFERENCE (generated from the code; do not read their source):\n"
@@ -619,14 +736,18 @@ def _require_changed(relative_paths, before, agent_output):
 
 # ------------------- checks, preview render, review -------------------
 
-def static_checks(set_id, story=False) -> list:
+def static_checks(set_id, story=False, explainer=False) -> list:
     """Import the spec and validate the reference script in a fresh interpreter; compile the builder."""
     errs = []
-    identity_check = ("assert getattr(sp, 'HERO', '') == 'Max', 'story spec HERO must be Max'; "
-                      if story else
-                      "assert getattr(sp, 'FORMAT', '') == 'evolution', 'spec FORMAT must be \"evolution\"'; ")
+    if explainer:
+        identity_check = ("assert getattr(sp, 'FORMAT', '') == 'explainer', 'spec FORMAT must be \"explainer\"'; "
+                          "assert not getattr(sp, 'HERO', None), 'an explainer spec has no HERO'; ")
+    elif story:
+        identity_check = "assert getattr(sp, 'HERO', '') == 'Max', 'story spec HERO must be Max'; "
+    else:
+        identity_check = "assert getattr(sp, 'FORMAT', '') == 'evolution', 'spec FORMAT must be \"evolution\"'; "
     story_check = (f"from agents.showrunner import hard_checks; e += hard_checks(f, {set_id!r}); "
-                   if story else "")
+                   if story or explainer else "")
     film_path = _film_file(set_id)
     code = (f"import json; from engine.sets import {set_id}_spec as sp; "
             f"f = json.load(open({film_path!r}, encoding='utf-8')); "
@@ -703,7 +824,8 @@ def preview_render(set_id, work) -> str:
     fake_timings(film, timings)
     import importlib
     spec = importlib.import_module(f"engine.sets.{set_id}_spec")
-    story = bool(getattr(spec, "HERO", None))
+    # story and explainer sets both render through the cutaway runner (hook in the epilogue, rewind)
+    story = bool(getattr(spec, "HERO", None)) or getattr(spec, "FORMAT", "") == "explainer"
     runner = os.path.join(PROJECT_ROOT, "engine", "films",
                           "cutaway_film.py" if story else "evolution_film.py")
     os.environ.setdefault("CUT_PCT" if story else "EVO_PCT", "50")
@@ -755,7 +877,8 @@ def qa_check(set_id, work) -> dict:
 
     from engine.make_film import BLENDER, _run_blender
     spec = importlib.import_module(f"engine.sets.{set_id}_spec")
-    if not getattr(spec, "HERO", None) or os.getenv("SET_BUILD_QA", "1") != "1":
+    measured_format = getattr(spec, "HERO", None) or getattr(spec, "FORMAT", "") == "explainer"
+    if not measured_format or os.getenv("SET_BUILD_QA", "1") != "1":
         return {}
     try:
         fingerprint = json.load(open(os.path.join(work, "preview_manifest.json"), encoding="utf-8"))["fingerprint"]
@@ -978,8 +1101,9 @@ def register(set_id, collection="EVOLUTION"):
 
 # ------------------- the build loop -------------------
 
-def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = False) -> dict:
-    suffix = "_story" if story else "_evolution"
+def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = False,
+              explainer: bool = False, hook_action: str = None) -> dict:
+    suffix = "_explainer" if explainer else "_story" if story else "_evolution"
     set_id = set_id or re.sub(r"[^a-z0-9]+", "_", subject.lower()).strip("_")[:28] + suffix
     files = _files(set_id)
     work = os.path.join(PROJECT_ROOT, "output", "sets", set_id)
@@ -987,7 +1111,8 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
     exists = all(os.path.exists(os.path.join(PROJECT_ROOT, f)) for f in files)
     if not exists:
         log.info(f"[set_builder] designing and writing '{set_id}' for: {subject}")
-        prompt = story_design_prompt(subject, set_id) if story else design_prompt(subject, set_id)
+        prompt = (explainer_design_prompt(subject, set_id, hook_action) if explainer else
+                  story_design_prompt(subject, set_id) if story else design_prompt(subject, set_id))
         log.info(claude_agent(prompt, files)[-1500:])
     else:
         log.info(f"[set_builder] '{set_id}' already exists: checking and improving it")
@@ -1002,7 +1127,9 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
     while rnd < max_rounds:
         rnd += 1
         status["rounds"] = rnd
-        errs = static_checks(set_id, story=story)
+        errs = static_checks(set_id, story=story, explainer=explainer)
+        if not errs and explainer and hook_action:
+            errs += _hook_check(set_id, hook_action)
         if errs:
             log.info(f"[set_builder] round {rnd}: {len(errs)} static problem(s); sending back to Claude")
             claude_agent(fix_prompt(set_id, "\n".join(f"- {e}" for e in errs),
@@ -1021,9 +1148,9 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
         log.info(f"[set_builder] round {rnd}: {len(reports) - len(rejected)}/{len(reports)} beats accepted"
                  + (f" (contact sheet: {sheet})" if sheet else ""))
         if not rejected:
-            register(set_id, "AVAILABLE" if story else "EVOLUTION")
+            register(set_id, "EXPLAINER" if explainer else "AVAILABLE" if story else "EVOLUTION")
             status.update(accepted=True, contact_sheet=sheet)
-            source = "cutaway" if story else "evolution"
+            source = "explainer" if explainer else "cutaway" if story else "evolution"
             log.info(f"[set_builder] ACCEPTED: '{set_id}' is registered. Make a video with:\n"
                      f"  python main.py --source {source} --set {set_id}")
             return status
@@ -1063,6 +1190,22 @@ def _restore(files, folder):
             shutil.copy2(src, os.path.join(PROJECT_ROOT, relative))
 
 
+def _hook_check(set_id, hook_action) -> list:
+    """The topic plan opens on this hook: the set must offer it as a hook action."""
+    code = (f"from engine.sets import {set_id}_spec as sp; a = sp.ACTIONS.get({hook_action!r}) or {{}}; "
+            "print(a.get('kind', ''))")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=PROJECT_ROOT)
+    if r.returncode == 0 and r.stdout.strip().splitlines()[-1:] == ["hook"]:
+        return []
+    return [f"the spec must define a hook action named exactly '{hook_action}' (kind \"hook\"): the planned "
+            "video opens with it"]
+
+
+def build_explainer_set(subject: str, set_id: str = None, rounds: int = 4, hook_action: str = None) -> dict:
+    """Build, visually validate and register a new no-hero cutaway explainer set."""
+    return build_set(subject, set_id=set_id, rounds=rounds, explainer=True, hook_action=hook_action)
+
+
 def build_story_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
     """Build, visually validate and register a new Max cutaway story set."""
     return build_set(subject, set_id=set_id, rounds=rounds, story=True)
@@ -1075,6 +1218,8 @@ def main():
     ap.add_argument("--id", default=None, help="set id (default: from the subject, ending in _evolution)")
     ap.add_argument("--rounds", type=int, default=int(os.getenv("SET_BUILD_ROUNDS") or "4"))
     ap.add_argument("--story", action="store_true", help="build a Max cutaway story instead of evolution")
+    ap.add_argument("--explainer", action="store_true", help="build a no-hero cutaway explainer set")
+    ap.add_argument("--hook", default=None, help="hook action the explainer set must offer (with --explainer)")
     ap.add_argument("--fix", default=None, help="fix an existing set from a scene_review.json (with --report)")
     ap.add_argument("--report", default=None, help="scene_review.json whose rejected windows to fix")
     ap.add_argument("--measure", default=None, help="print the measured quality problems of a story set")
@@ -1094,7 +1239,8 @@ def main():
         return
     if not a.subject:
         ap.error("give a subject, or --fix SET --report FILE")
-    print(json.dumps(build_set(a.subject, a.id, a.rounds, story=a.story), indent=1))
+    print(json.dumps(build_set(a.subject, a.id, a.rounds, story=a.story, explainer=a.explainer,
+                               hook_action=a.hook), indent=1))
 
 
 if __name__ == "__main__":
