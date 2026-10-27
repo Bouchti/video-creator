@@ -5,7 +5,7 @@ New topics become possible by adding a set; the script writer only ever chooses 
 """
 import importlib
 
-AVAILABLE = ["pool_story", "plane_story", "nuclear_story", "boat_story", "record_chasing_giant_pumpkin_story"]          # sets the showrunner writes for (pool = explainer variant)
+AVAILABLE = ["pool_story", "plane_story", "nuclear_story", "boat_story", "record_chasing_giant_pumpkin_story", "pumped_storage_mountain_batt_story"]          # sets the showrunner writes for (pool = explainer variant)
 EVOLUTION = ["bridge_evolution"]               # problem → solution ladders (agents/evolution_writer.py)
 
 

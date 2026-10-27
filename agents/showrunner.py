@@ -261,15 +261,35 @@ class UsageLimit(RuntimeError):
 
     def __init__(self, msg):
         super().__init__(msg)
-        import re as _re
-        m = _re.search(r"resets\s+([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)", msg, _re.I)
-        self.reset = None
-        if m:
-            import datetime as _dt
-            h, mi = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0), int(m.group(2) or 0)
-            now = _dt.datetime.now()
-            t = now.replace(hour=h, minute=mi, second=0, microsecond=0)
-            self.reset = t if t > now else t + _dt.timedelta(days=1)
+        self.reset = parse_reset(msg)
+
+
+def parse_reset(msg):
+    """When a usage limit lifts, from Claude ("resets 3pm") or Codex ("try again at 9:41 AM",
+    "try again at Oct 29th, 2026 9:41 AM", "try again in 2 days 3 hours 5 minutes"). None if unknown."""
+    import datetime as _dt
+    import re as _re
+    now = _dt.datetime.now()
+    m = _re.search(r"try again in\s+((?:\d+\s*(?:days?|hours?|hrs?|minutes?|mins?)[\s,and]*)+)", msg, _re.I)
+    if m:
+        delta = _dt.timedelta()
+        for n, unit in _re.findall(r"(\d+)\s*(day|hour|hr|min)", m.group(1), _re.I):
+            delta += {"day": _dt.timedelta(days=int(n)), "hour": _dt.timedelta(hours=int(n)),
+                      "hr": _dt.timedelta(hours=int(n)), "min": _dt.timedelta(minutes=int(n))}[unit.lower()]
+        return now + delta if delta else None
+    m = _re.search(r"(?:resets|try again at)\s+(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+)?"
+                   r"([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)", msg, _re.I)
+    if not m:
+        return None
+    h, mi = int(m.group(4)) % 12 + (12 if m.group(6).lower() == "pm" else 0), int(m.group(5) or 0)
+    if m.group(1):
+        try:
+            day = _dt.datetime.strptime(f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y")
+            return day.replace(hour=h, minute=mi)
+        except ValueError:
+            pass
+    t = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+    return t if t > now else t + _dt.timedelta(days=1)
 
 
 def codex_unavailable(exc):

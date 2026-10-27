@@ -323,11 +323,23 @@ def parent_keep(child, parent):
     child.matrix_world = mw
 
 
+def _first_visibility_key(o, frame):
+    """No visibility key before `frame` yet: a HIDE here means 'until now it was on stage'. Without a
+    visible key before it, the hide would hold backwards to the start of the film (a turbine or the
+    kids invisible for half the video)."""
+    keyed = [kp.co.x for fc in fcurves(o) if fc.data_path == "hide_render" for kp in fc.keyframe_points]
+    return not any(x < frame for x in keyed)
+
+
 def hide_tree(obj, frame, hidden: bool):
     """Keyframe render/viewport visibility for an object and all its children."""
     stack = [obj]
     while stack:
         o = stack.pop()
+        if hidden and frame > 1 and _first_visibility_key(o, frame):
+            o.hide_render = o.hide_viewport = False
+            o.keyframe_insert("hide_render", frame=frame - 1)
+            o.keyframe_insert("hide_viewport", frame=frame - 1)
         o.hide_render = hidden
         o.hide_viewport = hidden
         o.keyframe_insert("hide_render", frame=frame)
@@ -377,6 +389,7 @@ def value_at(obj, data_path: str, frame: int):
     current = list(getattr(obj, data_path))
     for fc in fcurves(obj):
         if fc.data_path == data_path and fc.array_index < len(current):
+            _normalize_curve(obj, fc)        # read the curve as it will RENDER (see normalize_interpolation)
             current[fc.array_index] = fc.evaluate(frame)
     return current
 
@@ -412,6 +425,16 @@ def set_key_interpolation(owner, fc, kp, interpolation: str):
     """Deliberately set one keyframe's interpolation (recorded, survives normalize_interpolation)."""
     _explicit[(owner.as_pointer(), fc.data_path, int(round(kp.co.x)))] = interpolation
     kp.interpolation = interpolation
+
+
+def _normalize_curve(owner, fc):
+    """normalize_interpolation() for one curve (so values sampled mid-build match the render)."""
+    if "hide" in fc.data_path:
+        return
+    for kp in fc.keyframe_points:
+        want = _explicit.get((owner.as_pointer(), fc.data_path, int(round(kp.co.x))), "BEZIER")
+        if kp.interpolation != want:
+            kp.interpolation = want
 
 
 def normalize_interpolation():

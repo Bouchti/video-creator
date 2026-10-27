@@ -88,7 +88,7 @@ VAL = V((9.5, 0.8, 0))                             # Max's test-lamp spot in the
 TOP = V((-7.05, 1.1, PLAT_Z))                     # Max on the summit, left of the reservoir
 PH = V((1.2, 1.25, FLOOR_Z))                       # Max on the powerhouse floor, between the machines
 YARD_MAX = V((10.4, 8.8, 0))
-KID_SPOTS = [V((11.6, 9.6, 0)), V((12.3, 9.4, 0))]
+KID_SPOTS = [V((11.25, 9.25, 0)), V((11.85, 9.1, 0))]
 MOVIE_MAX = V((14.9, 9.2, 0))
 BENCH = V((15.7, 9.6, 0))
 BENCH_YAW = -20.0
@@ -102,10 +102,13 @@ HOUSE = V((12.6, 12.8, 0))
 HOUSE_PT = V((10.55, 11.3, 2.1))
 SOLAR_PT = V((9.9, 10.0, 1.3))
 
-LIGHTS = {"day": (4.2, (1.0, 0.95, 0.86), 0.22, 900.0),
-          "afternoon": (3.8, (1.0, 0.85, 0.66), 0.18, 800.0),
-          "dusk": (1.5, (1.0, 0.56, 0.33), 0.075, 430.0),
-          "night": (0.55, (0.5, 0.6, 1.0), 0.03, 320.0)}
+# sun energy, sun colour, sky strength, fill energy, SKY SUN ELEVATION (deg): the sky model's own sun sets too,
+# otherwise dusk and night keep a bright blue daytime sky
+LIGHTS = {"day": (4.2, (1.0, 0.95, 0.86), 0.22, 900.0, 42.0),
+          "afternoon": (3.8, (1.0, 0.85, 0.66), 0.18, 800.0, 22.0),
+          "dusk": (1.6, (1.0, 0.56, 0.33), 0.2, 430.0, 1.2),
+          "night": (0.55, (0.5, 0.6, 1.0), 0.5, 320.0, -5.5)}
+LANTERN_GLOW, LANTERN_LIGHT = 9.0, 70.0
 BLUE, YELLOW, RED = "#3FA9F5", "#FFD23F", "#FF4A3A"
 
 
@@ -207,7 +210,7 @@ class PumpedStorageMountainBattStorySet:
     ACTIONS = ACTIONS
     QA_ALLOW = (r"ground_|plug|upres|lake_water|water_surface|ph_|turb0|unit[AB]|tunnel|tailrace|narrow_pipe"
                 r"|connector_pipe|dam|pine|pole|cable|trafo|house|solar|movie|bench|projector|lantern|testlamp"
-                r"|tbm|headdim|press_|arrow|puff|vs_|gauge|cabinet|g_mtn")
+                r"|tbm|headdim|press_|arrow|puff|vs_|gauge|cabinet|g_mtn|puddle")
 
     def __init__(self, scene, sun, fill, bg, total):
         self.scene, self.sun, self.fill, self.bg, self.total = scene, sun, fill, bg, total
@@ -216,6 +219,7 @@ class PumpedStorageMountainBattStorySet:
         self.sec = toy.empty("section_cut", (0, 0, 0))              # static cut plane at the section face
         self.usec = toy.empty("unit_section", (0, UNIT_Y, 0))      # cuts the machines through their axis
         self.flows = []
+        self.sky = next((n for n in scene.world.node_tree.nodes if n.type == "TEX_SKY"), None)
         self._light_state = LIGHTS["afternoon"]
         self._lan_on = False
         self._world()
@@ -282,6 +286,7 @@ class PumpedStorageMountainBattStorySet:
         lo.rotation_euler = (V((SHAFT_X, 1.4, -8.0)) - V(lo.location)).to_track_quat("-Z", "Y").to_euler()
         # the machines: an ordinary turbine first, two reversible pump-turbines later
         self.turb0 = self._unit("turb0", A_X, "#6E8A4F", "#A9AEB4")
+        toy.hide_tree(self.turb0.root, 0, False)       # on stage from the start (it is hidden later, when replaced)
         self.unitA = self._unit("unitA", A_X, "#3D6E9E", "#D9A531")
         self.unitB = self._unit("unitB", B_X, "#3D6E9E", "#D9A531")
         self.feedB = toy.cylinder("unitB_feed", 0.25, 0.8, (B_X - 0.63, 2.62, ZC), rotation=(R(90), 0, 0),
@@ -436,6 +441,26 @@ class PumpedStorageMountainBattStorySet:
                                bottom=fl + 0.006, level=TANK_FULL)
         for o in (self.up.vol, self.up.surf):
             o.parent = self.tank
+        # the drained basin: water hidden, a dark wet puddle left on the floor (one irregular mesh, no bump)
+        rnd = random.Random(7)
+        ring = []
+        for k in range(24):
+            a = 2 * math.pi * k / 24
+            r = 0.55 * (1 + 0.28 * math.sin(3 * a + 0.7) + 0.12 * rnd.uniform(-1, 1))
+            ring.append((0.25 + 1.35 * r * math.cos(a), 1.75 + r * math.sin(a), fl + 0.012))
+        pud = bpy.data.materials.new("upres_puddle")
+        bsdf = toy._principled(pud)
+        toy._set(bsdf, "Base Color", (*toy.srgb("#2E5E7A"), 1))
+        toy._set(bsdf, "Roughness", 0.05)
+        toy._set(bsdf, "Coat Weight", 1.0)
+        self.puddle = st.mesh_obj("upres_puddle", ring, [tuple(range(24))], (pud,), smooth=False)
+        self.puddle.parent = self.tank
+        self.puddle.visible_shadow = False
+        stain = st.concrete("upres_wet", "#7C786F", lift=0.5, panel=1.2)
+        self.wet = toy.box("upres_wetfloor", (2 * (hw - t) - 0.02, TANK_Y1 - TANK_Y0 - t - 0.02, 0.004),
+                           (0, (TANK_Y0 + TANK_Y1 - t) / 2, fl + 0.003), mat=stain, bevel=0, parent=self.tank)
+        for o in (self.puddle, self.wet):
+            toy.hide_tree(o, 0, True)
         toy.hide_tree(self.tank, 0, True)
         self.low = st.Reservoir("lower_lake", LOW_X0, LOW_X1, 0.03, LOW_Y1, bottom=BASIN_Z - 0.06, level=LOW_LEVEL)
         st.dam("dam", DAM_X, 0.02, 11.0, BASIN_Z - 0.1, 3.4, crest=1.0, facing=1)
@@ -486,7 +511,7 @@ class PumpedStorageMountainBattStorySet:
             toy.cylinder(f"movie_post{k}", 0.06, 2.5, (x, 0.05, 1.25), mat=frame_wood, parent=self.screen_root,
                          vertices=12)
         toy.box("movie_frame", (2.75, 0.06, 1.7), (0, 0.05, 1.55), mat=frame_wood, bevel=0.01, parent=self.screen_root)
-        self.screen_mat = st.glow_mat("movie_screen_glow", "#EDEAE2", 0.0)
+        self.screen_mat = self._movie_material()
         toy.box("movie_screen", (2.5, 0.02, 1.5), (0, 0.008, 1.55), mat=self.screen_mat, bevel=0, parent=self.screen_root)
         stool = V((16.1, 10.6, 0))
         toy.box("projector_stool", (0.42, 0.42, 0.55), (stool.x, stool.y, 0.275), mat=frame_wood, bevel=0.02)
@@ -527,8 +552,33 @@ class PumpedStorageMountainBattStorySet:
         yl.energy, yl.size, yl.color = 0.0, 6.0, (0.75, 0.82, 1.0)
         self.yard_light = bpy.data.objects.new("yard_light", yl)
         self.scene.collection.objects.link(self.yard_light)
-        self.yard_light.location = (14.0, 3.5, 5.5)
-        self.yard_light.rotation_euler = (V((15.0, 9.8, 0.6)) - V((14.0, 3.5, 5.5))).to_track_quat("-Z", "Y").to_euler()
+        self.yard_light.location = (13.4, 4.2, 4.2)
+        self.yard_light.rotation_euler = (V((15.0, 9.4, 1.0)) - V((13.4, 4.2, 4.2))).to_track_quat("-Z", "Y").to_euler()
+
+    def _movie_material(self):
+        """The outdoor-movie picture: a cartoon landscape (sunset sky, rolling hills, a sun that crosses the
+        screen as the film plays). Emission is keyed with st.key_glow; the sun's x with key_node_value."""
+        from engine.cutaway import _mat_node_value
+        t = tx._Tree("movie_screen_glow")
+        x, z = t.xyz["x"], t.xyz["z"]
+        sky = t.ramp(t.math("DIVIDE", t.math("ADD", z, 0.75), 1.5),
+                     [(0.0, "#FFB36B"), (0.45, "#FF8FB1"), (0.7, "#8FC8F2"), (1.0, "#3E6FD0")])
+        sun_x = _mat_node_value(t.mat, "sun_x", -0.8).outputs[0]
+        dx, dz = t.math("SUBTRACT", x, sun_x), t.math("SUBTRACT", z, 0.3)
+        dist = t.math("SQRT", t.math("ADD", t.math("MULTIPLY", dx, dx), t.math("MULTIPLY", dz, dz)))
+        sun = t.math("LESS_THAN", dist, 0.17)
+        ridge = t.math("SUBTRACT", t.math("MULTIPLY", t.math("SINE", t.math("ADD", t.math("MULTIPLY", x, 4.0), 1.0)),
+                                           0.1), 0.24)
+        hills = t.math("LESS_THAN", z, ridge)
+        near = t.math("LESS_THAN", z, t.math("SUBTRACT", t.math("MULTIPLY", t.math("SINE", t.math("MULTIPLY", x, 2.3)),
+                                                                0.07), 0.5))
+        col = st._mix_color(t, sun, sky, toy.srgb("#FFE45C") + (1,))
+        col = st._mix_color(t, hills, col, toy.srgb("#3FA34D") + (1,))
+        col = st._mix_color(t, near, col, toy.srgb("#2E7D32") + (1,))
+        t.finish((0.02, 0.02, 0.02, 1.0), 0.9)
+        t.nt.links.new(col, t.bsdf.inputs["Emission Color"])
+        toy._set(t.bsdf, "Emission Strength", 0.0)
+        return t.mat
 
     def _people(self):
         self.max = Character("Max", {"hat": "#FF7A00", "iris": "#7A4A1C"})
@@ -559,6 +609,7 @@ class PumpedStorageMountainBattStorySet:
             self.lantern_lights.append(ld)
         for m in self.lantern_mats + [b for ln in self.parked for b in [bpy.data.materials[ln["glow"]]]]:
             st.key_glow(m, 1, 0.0)
+        self.kids_on(1, True)              # first visibility key = visible (a later hide must not hold backwards)
 
     # ------------------- driver -------------------
 
@@ -588,7 +639,10 @@ class PumpedStorageMountainBattStorySet:
     # ------------------- helpers: light, power, water -------------------
 
     def _key_light(self, f, preset):
-        sun_e, color, bg_v, fill_e = preset
+        sun_e, color, bg_v, fill_e, elev = preset
+        if self.sky is not None:
+            self.sky.sun_elevation = R(elev)
+            self.sky.keyframe_insert("sun_elevation", frame=f)
         self.sun.data.energy, self.sun.data.color = sun_e, color
         self.sun.data.keyframe_insert("energy", frame=f)
         self.sun.data.keyframe_insert("color", frame=f)
@@ -626,11 +680,23 @@ class PumpedStorageMountainBattStorySet:
             return
         self._lan_on = on
         for m, ld in zip(self.lantern_mats, self.lantern_lights):
-            st.key_glow(m, f, 0.0 if on else 3.0)
-            st.key_glow(m, f + ramp, 3.0 if on else 0.0)
-            for ff, v in ((f, 0.0 if on else 25.0), (f + ramp, 25.0 if on else 0.0)):
+            st.key_glow(m, f, 0.0 if on else LANTERN_GLOW)
+            st.key_glow(m, f + ramp, LANTERN_GLOW if on else 0.0)
+            for ff, v in ((f, 0.0 if on else LANTERN_LIGHT), (f + ramp, LANTERN_LIGHT if on else 0.0)):
                 ld.energy = v
                 ld.keyframe_insert("energy", frame=ff)
+
+    def dry(self, f, is_dry=True):
+        """The summit basin is empty from f (water gone, wet floor + puddle) or full of water again."""
+        for o in (self.up.vol, self.up.surf):
+            toy.hide_tree(o, f, is_dry)
+        for o in (self.puddle, self.wet):
+            toy.hide_tree(o, f, not is_dry)
+
+    def conduits_empty(self, f, empty=True):
+        """Hide (or show) the water inside the tunnel and tailrace (an empty battery has dry pipes)."""
+        for root in (self.tunnel, self.tailrace):
+            toy.hide_tree(bpy.data.objects[root["water"]], f, empty)
 
     def level(self, which, f, lv, hold_from=None):
         """Key a reservoir level at f (hold_from: keep the previous level until that frame)."""
@@ -690,8 +756,9 @@ class PumpedStorageMountainBattStorySet:
             mid = (a + b) / 2 - V((0, 0, 0.75))
             st.arrow(f"{tag}{k}", mid - d * L / 2, d * L, f0 + 4 * k, f1, color=YELLOW, width=0.14)
 
-    def head_dim(self, tag, x, f0, f1, keys):
-        """A yellow HEAD dimension at x: keys = [(frame, z_top, z_low)]; visible f0..f1."""
+    def head_dim(self, tag, x, f0, f1, keys, top_lead=None, low_lead=None):
+        """A yellow HEAD dimension at x: keys = [(frame, z_top, z_low)]; visible f0..f1. top_lead / low_lead:
+        x where a thin leader line from the top / bottom tick ends (to the water surfaces it measures)."""
         mat = _mat("headdim_yellow", YELLOW, 0.4)
         toy._set(mat.node_tree.nodes.get("Principled BSDF"), "Emission Color", (*toy.srgb(YELLOW), 1))
         toy._set(mat.node_tree.nodes.get("Principled BSDF"), "Emission Strength", 1.4)
@@ -705,6 +772,10 @@ class PumpedStorageMountainBattStorySet:
         _cone(f"{tag}_cone_low", 0.17, 0.4, (0, 0, 0.2), mat, parent=low, rot=(R(180), 0, 0))
         toy.box(f"{tag}_tick_top", (1.3, 0.06, 0.06), (0, 0, 0), mat=mat, bevel=0, parent=top)
         toy.box(f"{tag}_tick_low", (1.3, 0.06, 0.06), (0, 0, 0), mat=mat, bevel=0, parent=low)
+        for end, lead in ((top, top_lead), (low, low_lead)):
+            if lead is not None:
+                d = lead - x
+                toy.box(f"{end.name}_lead", (abs(d), 0.035, 0.035), (d / 2, 0, 0.012), mat=mat, bevel=0, parent=end)
         for f, zt, zl in keys:
             bar.location = (x, y, zl + 0.2)
             bar.scale = (1, 1, max(0.05, zt - zl - 0.4))
@@ -801,8 +872,9 @@ class PumpedStorageMountainBattStorySet:
         m.brows(f1, 0.0)
 
     def thumbs_up(self, f0, f1):
-        self.max.pose(f0, shoulderL=(-90, 0, 20))
-        self.max.pose(f1 - 4, shoulderL=(-95, 0, 22))
+        """Arm punched up and out to the side (reads from the front; a forward arm is foreshortened)."""
+        self.max.pose(f0, shoulderL=(-30, -128, 0), head=(-6, 0, 0))
+        self.max.pose(f1 - 4, shoulderL=(-32, -134, 0), head=(-8, 0, 0))
         self.max.smile(f0, big=True)
         self.max.pose(f1)
 
@@ -833,13 +905,14 @@ class PumpedStorageMountainBattStorySet:
         for kid in self.kids:
             kid.hop(b + 8, m + 30, height=0.12, period=16, sound="step")
             kid.smile(b + 8, big=True)
-        self.max.point(m + 4, b + int(L * 0.62), hand="R", up_deg=45, side_deg=35)
-        self.max.smile(m + 4, big=True)
-        self.max.point(b + int(L * 0.66), e - 4, hand="L", up_deg=75, side_deg=20)
+        self.max.point(m + 2, b + int(L * 0.6), hand="R", up_deg=35, side_deg=70)      # the panels (screen left)
+        self.max.smile(m + 2, big=True)
+        self.max.point(b + int(L * 0.62), e - 4, hand="R", up_deg=95, side_deg=40)    # up to the mountain
+        self.max.brows(b + int(L * 0.62), 0.8)
         events.add(b + 10, "kids_cheer", gain=0.35)
         st.orbit(self.rig, b, m, center=(9.4, 7.5, 2.0), radius=15.5, ang0=-106, ang1=-86, z0=5.0, z1=3.8, lens=24,
                  cut=True)
-        self.close(m, e, frac=0.36, offset=(0.8, 0, 0), angle=-92)
+        self.close(m, e, frac=0.3, offset=(0.75, 0, -0.1), angle=-92)
 
     def a_fail_flat(self, i, b, e):
         L = e - b
@@ -847,6 +920,7 @@ class PumpedStorageMountainBattStorySet:
         self.light(b, "afternoon")
         self.light(m2, "dusk")
         self.show(self.tank, b)
+        self.dry(b, False)                       # showing the tank showed its puddle too: full of water
         self.show(self.conn, b)
         Puffs("pond_puff", "#C9B79A", count=8, size=0.35, seed=4).emit(range(b + 1, b + 9), lambda f: (7.1, -0.4, 0.3),
                                                                         rise=0.6)
@@ -861,8 +935,8 @@ class PumpedStorageMountainBattStorySet:
         self.level("up", e, TANK_FULL - 0.04, hold_from=b + 16)
         self.turb0.spin(b + 26, e, rps=0.1)
         self.bulb(b + 18, 0.0)
-        self.bulb(b + 34, 0.3)
-        self.bulb(e, 0.25)
+        self.bulb(b + 34, 0.8)                   # a faint, sad glow
+        self.bulb(e, 0.6)
         events.add(b + 18, "pour", duration=L - 20, gain=0.2)
         self.max.point(b + 40, b + int(L * 0.3), hand="L", up_deg=80, side_deg=30)   # taps the dim bulb
         self.scratch_head(b + int(L * 0.3), m1 + 10)
@@ -898,6 +972,9 @@ class PumpedStorageMountainBattStorySet:
             self.tank.keyframe_insert("location", frame=f)
             self.max.root.location = p + ride
             self.max.root.keyframe_insert("location", frame=f)
+        flight = [lift0 + int((land - lift0) * t) for t, _ in path]
+        for ob in (self.tank, self.max.root):              # final curve BEFORE the camera samples it (the film
+            toy.set_interpolation(ob, "location", flight, "BEZIER")   # runner normalizes inherited holds later)
         self.max.wave(lift0 + 6, land - 4, hand="R")
         self.max.smile(lift0 + 6, big=True)
         events.add(lift0, "rumble", duration=land - lift0, gain=0.7)
@@ -915,17 +992,13 @@ class PumpedStorageMountainBattStorySet:
                 g.keyframe_insert("scale", frame=f)
         keys = [(f, self.tank_level_world(f), LOW_LEVEL) for f in range(lift0, land + 1, 4)] + [(m, TANK_HIGH.z + TANK_FULL,
                                                                                                LOW_LEVEL)]
-        self.head_dim("headdim_rise", 6.2, lift0 + 4, m, keys)
-        self.label("HEAD 150 m", (2.9, -1.0, 7.6), land - 4, m, size=1.0, tilt=-4, color=YELLOW, outline="#3A2A00")
+        self.head_dim("headdim_rise", 9.0, land - 2, m, keys, top_lead=-2.2, low_lead=10.8)
+        self.label("HEAD 150 m", (6.0, -1.0, 7.0), land - 4, m, size=1.0, tilt=-4, color=YELLOW, outline="#3A2A00")
         self.thumbs_up(m + 6, b + int(L * 0.8))
         self.max.point(b + int(L * 0.8), e - 2, hand="L", up_deg=20, side_deg=40)    # down to the valley
-        keys = []                                                     # follow the flying reservoir (and Max)
-        for f in list(range(b, m, 3)) + [m]:
-            p = V(toy.value_at(self.tank, "location", f))
-            aim = V((0.4 * p.x + 0.6, 0.5, 0.55 * (p.z + 1.5) + 2.0))
-            dist = 21.0 - 2.0 * (f - b) / max(1, m - b)
-            keys.append((f, aim + V((0.4, -dist, 1.5)), aim))
-        self.rig.track(b, m, keys, lens=24, fstop=8.0, cut=True)
+        # ride along with Max (close, he waves) ... then the whole drop he just created, measured
+        self.close(b, land, frac=0.21, swing=22, offset=(0.4, 0, -0.9), lens=28)
+        self.wide(land, m, (2.6, -29.0, 6.9), (2.4, -28.0, 6.6), (2.6, 0.5, 6.4), (2.5, 0.5, 6.3))
         self.close(m, e, frac=0.36, offset=(-0.5, 0, 0))
 
     def a_fail_pipe(self, i, b, e):
@@ -951,10 +1024,9 @@ class PumpedStorageMountainBattStorySet:
         events.add(b + 20, "creak", gain=0.4)
         for k, j in enumerate((1, 3, 5)):                              # friction pushes back at the bends
             p, prev = self.zig[j], self.zig[j - 1]
-            d = (prev - p).normalized() * 0.95
-            st.arrow(f"friction{k}", p + V((0, -0.35, 0)) - d * 0.2, d, b + int(L * 0.1) + 4 * k, m1, color=RED,
-                     width=0.12)
-        self.label("FRICTION", (1.6, -1.0, 3.2), b + int(L * 0.16), m1, size=0.6, tilt=-5, color=RED, outline="#3A0505")
+            d = (prev - p).normalized() * 1.6
+            st.arrow(f"friction{k}", p + V((0, -0.7, 0)) - d * 0.25, d, b + 3 + 3 * k, m1, color=RED, width=0.24)
+        self.label("FRICTION", (1.6, -1.0, 3.2), b + 6, m1, size=0.7, tilt=-5, color=RED, outline="#3A0505")
         self.at(b, VAL, 0)
         self.max.point(m1 + 6, m1 + 40, hand="L", up_deg=80, side_deg=30)
         self.max.brows(m1 + 10, -0.5)
@@ -967,7 +1039,7 @@ class PumpedStorageMountainBattStorySet:
 
     def a_tunnel(self, i, b, e):
         L = e - b
-        bore0, bore1, m = b + int(L * 0.03), b + int(L * 0.33), b + int(L * 0.47)
+        bore0, bore1, m = b + int(L * 0.03), b + int(L * 0.32), b + int(L * 0.62)
         flood = bore1 + 4
         self.light(b, "day")
         self.lanterns_glow(b, False, ramp=1)
@@ -1017,7 +1089,7 @@ class PumpedStorageMountainBattStorySet:
         events.add(flood, "water_rush", duration=e - flood, gain=0.7)
         events.add(flood + 22, "power_up", gain=0.6)
         self.arrows_tunnel("tun_down", flood + 6, m)
-        self.label("7 m TUNNEL", (0.4, -1.0, -3.0), flood + 4, m, size=0.6, tilt=-4, color=BLUE, outline="#06263A")
+        self.label("7 m TUNNEL", (-0.4, -1.0, -2.6), flood + 4, m, size=0.62, tilt=-4, color=BLUE, outline="#06263A")
         self.at(b, VAL, 0)
         self.cheer(self.max, m + 8, e - 4)
         self.max.smile(m + 4, big=True)
@@ -1032,10 +1104,10 @@ class PumpedStorageMountainBattStorySet:
 
     def a_fail_empty(self, i, b, e):
         L = e - b
-        m1, m2 = b + int(L * 0.34), b + int(L * 0.76)
-        dry, stop = b + int(L * 0.6), b + int(L * 0.7)
+        m1, m2 = b + int(L * 0.4), b + int(L * 0.82)
+        dry, stop = b + int(L * 0.37), b + int(L * 0.5)
         self.light(b, "day")
-        self.light(b + int(L * 0.32), "dusk", ramp=24)
+        self.light(b + int(L * 0.34), "dusk", ramp=24)
         self.light(m2, "night")
         self.f_tun.speed(dry - 10, 1.4)
         self.f_tun.speed(stop, 0.0)
@@ -1046,6 +1118,8 @@ class PumpedStorageMountainBattStorySet:
         self.f_tail.on(stop + 4, 0.25)
         self.level("up", dry, TANK_DRY, hold_from=b)
         self.level("low", dry, LOW_LEVEL + 0.2, hold_from=b)
+        self.dry(dry + 2)                                    # the last water is gone: wet floor, one puddle
+        self.conduits_empty(stop + 4)
         self.turb0.spin(b, dry, rps=1.5)
         self.turb0.spin(dry, stop, rps=0.45)
         self.bulb(dry - 2, 6.0)
@@ -1055,11 +1129,11 @@ class PumpedStorageMountainBattStorySet:
         events.add(dry, "bubbles", gain=0.6)
         self.arrows_tunnel("empty_down", b + 4, m1)
         self.at(b, TOP, 90)
-        self.max.pose(m1 + 6, spine=(10, 0, 0), head=(18, 0, 0))
-        self.max.pose(dry - 4, spine=(12, 0, 0), head=(22, 0, 0))
-        self.max.turn(dry, 0, frames=8)
-        self.jaw_drop(dry + 6, m2)
-        events.add(dry + 8, "boing", gain=0.3)
+        self.max.pose(m1 + 2, spine=(14, 0, 0), head=(24, 0, 0))          # peers over the rim into the basin
+        self.max.pose(m1 + 22, spine=(16, 0, 0), head=(26, 0, 0))
+        self.max.turn(m1 + 24, 0, frames=8)
+        self.jaw_drop(m1 + 30, m2)
+        events.add(m1 + 32, "boing", gain=0.3)
         self.lanterns_glow(m2, True, ramp=6)
         self.kids_on(m2, True)
         self.wide(b, m1, (1.2, -17.0, 6.5), (0.8, -15.5, 6.0), (-0.5, 0.5, 5.5), (-1.0, 0.5, 5.0))
@@ -1107,6 +1181,8 @@ class PumpedStorageMountainBattStorySet:
         self.f_tail.on(pump0 + 14, 1.0)
         self.level("up", e, TANK_FULL, hold_from=pump0 + 10)
         self.level("low", e, LOW_LEVEL, hold_from=pump0 + 10)
+        self.conduits_empty(pump0, False)                    # pumped water fills the tunnel again...
+        self.dry(pump0 + 10, False)                          # ...and the summit basin
         events.add(pump0, "power_up", gain=0.6)
         events.add(pump0 + 6, "pump", duration=e - pump0 - 6, gain=0.6)
         self.arrows_face("solar_in", pump0 + 2, e)
@@ -1120,8 +1196,8 @@ class PumpedStorageMountainBattStorySet:
 
     def a_fail_shudder(self, i, b, e):
         L = e - b
-        m1, m2 = b + int(L * 0.3), b + int(L * 0.8)
-        shake0 = b + int(L * 0.18)
+        m1, m2 = b + int(L * 0.45), b + int(L * 0.8)
+        shake0 = b + int(L * 0.3)
         self.light(b, "dusk")
         self.lanterns_glow(b, True, ramp=1)
         self.unitA.spin(b, e, rps=1.25)                       # fixed speed: locked to the grid
@@ -1136,10 +1212,10 @@ class PumpedStorageMountainBattStorySet:
         self.level("low", e, LOW_LEVEL + 0.18)
         keys = [(f, TANK_HIGH.z + TANK_FULL + (0.78 - TANK_FULL) * st.smooth((f - b - 2) / max(1, m1 - b - 2)),
                  LOW_LEVEL + 0.15 * st.smooth((f - b - 2) / max(1, m1 - b - 2))) for f in range(b, m1 + 1, 4)]
-        self.head_dim("headdim_shudder", 4.6, b + 2, m1, keys)
-        mid = b + int(L * 0.16)
-        self.label("HEAD 175 m", (1.6, -1.0, 8.4), b + 3, mid, size=0.95, tilt=-4, color=YELLOW, outline="#3A2A00")
-        self.label("HEAD 125 m", (1.6, -1.0, 8.4), mid + 1, m1, size=0.95, tilt=4, color=YELLOW, outline="#3A2A00")
+        self.head_dim("headdim_shudder", 0.4, b + 2, m1, keys, top_lead=-2.2, low_lead=4.0)
+        mid = b + int(L * 0.22)
+        self.label("HEAD 175 m", (2.5, -1.0, 9.0), b + 3, mid, size=0.85, tilt=-4, color=YELLOW, outline="#3A2A00")
+        self.label("HEAD 125 m", (2.5, -1.0, 9.0), mid + 1, m1, size=0.85, tilt=4, color=YELLOW, outline="#3A2A00")
         self.unitA.shudder(shake0, e, amp=0.035)
         self.unitB.shudder(shake0 + 4, e, amp=0.035)
         rnd = random.Random(21)
@@ -1157,13 +1233,13 @@ class PumpedStorageMountainBattStorySet:
         self.at(b, PH, 0)
         self.shiver(m1, m2 - 2)
         self.kids_on(m2, True)
-        self.wide(b, m1, (2.2, -13.0, 7.0), (1.8, -12.2, 6.8), (1.4, 0.5, 6.2), (1.2, 0.5, 6.1))
+        self.wide(b, m1, (-0.3, -17.5, 5.6), (-0.6, -16.6, 5.3), (-0.5, 0.5, 5.0), (-0.7, 0.5, 4.8))
         self.close(m1, m2, frac=0.27, offset=(0, 0, 0.5), lens=28)
         self.kids_shot(m2, e, "cover")
 
     def a_variable_speed(self, i, b, e):
         L = e - b
-        c0, m = b + int(L * 0.08), b + int(L * 0.55)
+        c0, m = b + int(L * 0.06), b + int(L * 0.5)
         self.light(b, "dusk")
         self.lanterns_glow(b, False, ramp=1)
         self.kids_on(b, False)
@@ -1191,21 +1267,22 @@ class PumpedStorageMountainBattStorySet:
         self.label("285-315 rpm", (SHAFT_X, 0.2, -4.98), c0 + 24, e, size=0.24, tilt=3, color="#3DDC6E",
                  outline="#06301A")
         self.at(b, PH, 0)
-        self.max.pose(b + int(L * 0.3), shoulderR=(-120, 30, 0), head=(-6, 0, 0))     # wipes his brow
-        self.max.pose(b + int(L * 0.36))
-        self.thumbs_up(b + int(L * 0.4), m)
-        self.max.smile(m, big=True)
-        self.close(b, m, frac=0.27, offset=(0, 0, 0.5), lens=28)
-        self.wide(m, e, (2.3, -4.7, -6.0), (1.9, -4.1, -6.2), (1.4, 1.6, -6.4), (1.3, 1.6, -6.5), lens=26)
+        w0 = m + 4                                             # wipes his brow (hand to forehead) ...
+        self.max.pose(w0, shoulderR=(-28, 150, 0), head=(10, 0, 6))
+        self.max.pose(w0 + 12, shoulderR=(-28, 140, 0), head=(6, 0, -6))
+        self.max.pose(w0 + 18)
+        self.max.brows(w0, -0.4)
+        self.max.brows(w0 + 18, 0.0)
+        self.thumbs_up(w0 + 20, e - 2)                         # ... and punches the air: it works
+        self.max.smile(w0 + 20, big=True)
+        self.wide(b, m, (2.3, -4.7, -6.0), (1.9, -4.1, -6.2), (1.4, 1.6, -6.4), (1.3, 1.6, -6.5), lens=26)
+        self.close(m, e, frac=0.3, offset=(0, 0, 0.35), lens=28)
 
     def movie(self, f0, f1):
         st.key_glow(self.screen_mat, f0 - 1, 0.0)
-        st.key_glow(self.screen_mat, f0 + 4, 2.4)
-        sock = toy._principled(self.screen_mat).inputs["Emission Color"]
-        pal = ("#8FD3FF", "#FFE38A", "#FF9EC4", "#A6F2A0", "#FFFFFF", "#B9A2FF")
-        for k, f in enumerate(range(f0, f1, 10)):
-            sock.default_value = (*toy.srgb(pal[k % len(pal)]), 1)
-            sock.keyframe_insert("default_value", frame=f)
+        st.key_glow(self.screen_mat, f0 + 4, 2.2)
+        key_node_value(self.screen_mat, "sun_x", f0, -0.8)        # the film plays: its sun crosses the sky
+        key_node_value(self.screen_mat, "sun_x", f0 + 600, 0.8)
         self.show(self.beam, f0)
         events.add(f0, "switch", gain=0.5)
 
@@ -1222,7 +1299,9 @@ class PumpedStorageMountainBattStorySet:
 
     def a_finale(self, i, b, e):
         L = e - b
-        s1, s2, mv, m = b + int(L * 0.22), b + int(L * 0.42), b + int(L * 0.48), b + int(L * 0.54)
+        s1, s2 = b + int(L * 0.22), b + int(L * 0.4)
+        sA, cl = b + int(L * 0.3), b + int(L * 0.46)          # valley shot from sA, the close family shot from cl
+        mv, m = s2 + 8, cl
         self.light(b, "day")
         self.lanterns_glow(b, False, ramp=1)
         st.key_glow(self.led, b, 4.0)
@@ -1253,28 +1332,28 @@ class PumpedStorageMountainBattStorySet:
         self.arrows_tunnel("night_down", s1 + 14, s2)
         self.arrows_face("night_out", s1 + 18, s2, down=False)
         # power reaches the house: lights, projector, movie; lanterns off
-        self.arrows_line("to_house", s2 + 2, m)
-        self.house.lights(s2 + 14, True)
-        events.add(s2 + 14, "power_up", gain=0.5)
+        self.arrows_line("to_house", sA + 2, cl)
+        self.house.lights(sA + 18, True)
+        events.add(sA + 18, "power_up", gain=0.5)
         self.yard(s2 - 1, 0.0)
-        self.yard(s2 + 8, 450.0)
+        self.yard(s2 + 8, 900.0)
         self.movie(mv, self.total + 400)
         self.kids_on(s2, True)
         self.seat_kids(s2, e + 2)
-        self.max.cut_place(b, MOVIE_MAX, 160)
+        self.max.cut_place(b, MOVIE_MAX, -25)                  # faces us; the kids and the screen behind him
         self.max.pose(b + 4)
-        self.max.turn(m + int((e - m) * 0.45), 0, frames=10)
-        self.cheer(self.max, m + int((e - m) * 0.55), e - 4)
-        self.max.smile(m + 6, big=True)
+        self.max.point(cl + 4, cl + int((e - cl) * 0.4), hand="L", up_deg=60, side_deg=55)   # look, the movie!
+        self.cheer(self.max, cl + int((e - cl) * 0.45), e - 4)
+        self.max.smile(cl + 2, big=True)
         for k, kid in enumerate(self.kids):                    # outer arms up (they sit side by side)
             joint, sgn = ("shoulderL", -1) if k == 0 else ("shoulderR", 1)
             for f, a in ((m + 30 + 6 * k, 0), (m + 40 + 6 * k, 150), (m + 70 + 6 * k, 160), (m + 82 + 6 * k, 0)):
                 kid.key(joint, f, rot_deg=(0, sgn * a, 0))
             kid.smile(m + 30, big=True)
         events.add(m + 40, "kids_cheer", gain=0.7)
-        self.wide(b, s2, (1.6, -18.0, 4.0), (0.6, -19.5, 5.6), (-0.2, 0.5, 3.0), (-0.6, 0.5, 4.0))
-        self.wide(s2, m, (7.6, 2.0, 4.6), (8.6, 3.0, 4.0), (12.2, 10.6, 1.4), (13.0, 10.4, 1.2))
-        self.close(m, e, frac=0.34, angle=-95, swing=14, offset=(0.9, 0, 0))
+        self.wide(b, sA, (1.6, -18.0, 4.0), (0.6, -19.5, 5.6), (-0.2, 0.5, 3.0), (-0.6, 0.5, 4.0))
+        self.wide(sA, cl, (6.4, -2.2, 4.6), (7.4, -1.0, 4.0), (10.6, 9.6, 1.6), (11.6, 10.2, 1.4))
+        self.close(cl, e, frac=0.3, angle=-100, swing=14, offset=(0.9, 0, 0.25))
 
     # ------------------- hooks (epilogue, after the finale) -------------------
 
@@ -1289,6 +1368,8 @@ class PumpedStorageMountainBattStorySet:
         for fl in (self.f_tun, self.f_tail):
             fl.speed(h0 - 1, 0.0)
             fl.on(h0, 0.2)
+        self.dry(h0)                                          # drained: wet floor and a puddle at his boots
+        self.conduits_empty(h0)
         for ln in self.parked:
             self.show(ln, h0, False)
         self.kids_on(h0, True)

@@ -65,15 +65,40 @@ def _step(name, args, workspace):
     return f"{name.lower()}: {path or json.dumps(args)[:80]}"
 
 
-def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout):
+_USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
+
+
+def _claude_building_allowed():
+    """Set building is the costliest AI work in the pipeline (an agent re-reads its whole context on
+    every step: one design used ~12M tokens). When Codex is the configured backend, running out of
+    Codex quota must NOT silently move that work onto the Claude subscription."""
+    from agents.showrunner import BACKEND
+    return BACKEND != "codex" or os.getenv("SET_BUILDER_CLAUDE_FALLBACK", "0") == "1"
+
+
+def _call_token_cap():
+    """Hard ceiling for ONE Claude set-builder call: SET_BUILDER_CALL_TOKENS (default 3M), and never more
+    than what is left of the run's CLAUDE_TOKEN_BUDGET."""
+    from agents.showrunner import token_budget, tokens_used
+    try:
+        cap = int(os.getenv("SET_BUILDER_CALL_TOKENS") or 3_000_000)
+    except ValueError:
+        cap = 3_000_000
+    if token_budget():
+        cap = min(cap, max(0, token_budget() - tokens_used()))
+    return cap
+
+
+def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout, cap_tokens=0):
     """Run `claude -p --output-format stream-json`, logging each tool call as it happens (so a long
-    build visibly progresses). Returns (final result event or None, tail of raw output)."""
+    build visibly progresses) and KILLING the agent as soon as its running token usage passes
+    cap_tokens (0 = no cap). Returns (result event or None, raw output tail, usage so far, stopped)."""
     import threading
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, encoding="utf-8", errors="replace", cwd=workspace, env=env)
     timer = threading.Timer(timeout, p.kill)
     timer.start()
-    result, tail = None, []
+    result, tail, per_message, stopped = None, [], {}, False
     try:
         p.stdin.write(stdin_text)
         p.stdin.close()
@@ -86,13 +111,26 @@ def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout):
             if event.get("type") == "result":
                 result = event
             elif event.get("type") == "assistant":
-                for part in (event.get("message") or {}).get("content") or []:
+                msg = event.get("message") or {}
+                for part in msg.get("content") or []:
                     if part.get("type") == "tool_use":
                         log.info(f"[claude] {_step(part.get('name', ''), part.get('input') or {}, workspace)}")
+                usage = msg.get("usage") or {}
+                if usage:                             # one API message can arrive as several events
+                    seen = per_message.setdefault(msg.get("id") or len(per_message), {})
+                    for k in _USAGE_KEYS:
+                        seen[k] = max(seen.get(k, 0), int(usage.get(k) or 0))
+                spent = sum(sum(m.values()) for m in per_message.values())
+                if cap_tokens and spent > cap_tokens and not stopped:
+                    stopped = True
+                    log.warning(f"[set_builder] Claude agent passed its token cap ({spent:,} > {cap_tokens:,}); "
+                                "stopping it")
+                    p.kill()
         p.wait()
     finally:
         timer.cancel()
-    return result, "".join(tail)
+    spent = {k: sum(m.get(k, 0) for m in per_message.values()) for k in _USAGE_KEYS}
+    return (None if stopped else result), "".join(tail), spent, stopped
 
 
 def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400) -> str:
@@ -113,7 +151,11 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
 
     def rules_for(kind):
         text = ("\n\nYou may create or edit ONLY these files: " + ", ".join(allowed) +
-                ". Every other file is read-only. The pipeline renders and tests after you finish. ")
+                ". Every other file is read-only. The pipeline renders and tests after you finish. "
+                "WORK ECONOMICALLY (every step re-sends everything you have read so far): never read a whole "
+                "file longer than ~300 lines; grep for the definitions you need and read only those ranges; read "
+                "each file once; write each file in ONE full write (or a few large edits), never dozens of "
+                "one-line edits; measure at most 3 times. ")
         if kind == "codex":
             from engine.make_film import BLENDER
             text += ("When inspecting files, issue one simple read/search command at a time; never chain PowerShell "
@@ -156,6 +198,11 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             except RuntimeError as exc:
                 if codex_unavailable(exc):
                     limit = UsageLimit(str(exc)[:500])
+                    if not _claude_building_allowed():
+                        raise UsageLimit(f"Codex is out of quota ({str(exc)[-600:]}). Set building does not fall "
+                                         "back to the Claude subscription: one design can use millions of "
+                                         "tokens. Resume after the Codex reset, or set "
+                                         "SET_BUILDER_CLAUDE_FALLBACK=1 to allow it.") from exc
                     if activate_fallback(str(limit)[:180], failed_backend=backend):
                         backend = active_backend()
                         rules = rules_for(backend)
@@ -164,6 +211,10 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 else:
                     raise
         if backend != "codex":
+            if not _claude_building_allowed():
+                raise UsageLimit("Codex is unavailable and set building does not fall back to the Claude "
+                                 "subscription (SET_BUILDER_CLAUDE_FALLBACK=0). Resume after the Codex reset.")
+            check_budget("set builder")      # again: the check above ran while the backend was still Codex
             exe = shutil.which("claude")
             if not exe:
                 raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
@@ -182,7 +233,14 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                    "--permission-mode", "acceptEdits", "--tools", *tools, "--allowedTools", *permitted]
             log.info(f"[set_builder] Claude ({BUILD_MODEL}) is working on the set (usually 15-40 minutes); "
                      "its steps follow")
-            data, tail = _run_claude_streaming(cmd, prompt + rules, workspace, env, timeout)
+            cap = _call_token_cap()
+            data, tail, spent, stopped = _run_claude_streaming(cmd, prompt + rules, workspace, env, timeout, cap)
+            if stopped:
+                from agents.showrunner import BudgetExceeded
+                _record_claude_usage({"usage": spent}, "set builder (stopped at its token cap)")
+                raise BudgetExceeded(f"the set-builder agent was stopped at its token cap ({cap:,} tokens, counting "
+                                     "cache reads); nothing was copied back. Raise SET_BUILDER_CALL_TOKENS / "
+                                     "CLAUDE_TOKEN_BUDGET, or build the set on Codex.")
             if data is None:
                 raise RuntimeError(f"claude -p failed: {tail[-400:]}")
             result_text = str(data.get("result") or "")
@@ -288,12 +346,14 @@ Then write the three files:
 Finish with a short summary of the ladder."""
 
 
-STORY_GUIDE = """HOW MAX STORY SETS WORK (read these files first, in this order):
-- engine/sets/pool_story_spec.py and engine/sets/pool_story.py: the smallest complete Max story.
-- engine/sets/plane_story_spec.py and engine/sets/plane_story.py: a self-contained outdoor story.
-- engine/sets/boat_story_spec.py and engine/sets/boat_story.py: a detailed cutaway reference.
-- engine/films/cutaway_film.py, engine/toy.py, engine/camera.py and engine/character.py.
-- engine/studio.py: THE PRODUCTION KIT. Build the world and the hero objects with it (natural terrain
+STORY_GUIDE = """HOW MAX STORY SETS WORK. Everything you need is IN THIS PROMPT: the API REFERENCE at the end
+(every helper's signature and purpose, generated from the code) and the example spec. DO NOT open the
+engine modules or the reference sets to learn them: every file you read is re-sent with every later step
+and multiplies the cost (reading the reference sets once made one design cost 11 million tokens). If a
+detail is missing, grep for that one definition and read only those lines, e.g.
+`grep -n "def close_on" engine/studio.py`. Examples of a finished set: engine/sets/pumped_storage_mountain_
+batt_story.py (grep a method by name; never read it whole).
+- engine/studio.py is THE PRODUCTION KIT. Build the world and the hero objects with it (natural terrain
   with carved tunnels/caverns, endless ground, concrete, water reservoirs, flanged pipes with flowing
   water, a real pump-turbine, solar panels, a house with lights, lanterns, cutaways, close-up camera
   moves). It already follows every quality rule below; extend it in your set, never re-invent it.
@@ -339,10 +399,86 @@ VISUAL AND SAFETY RULES:
   * No flicker: no coplanar faces (offset touching surfaces >= 5 mm), no bump on squashed objects, no
     live booleans on moving parts (studio.carve once, or studio.section_clip).
   * No void: studio.world_floor + terrain blocks reaching well past every frame edge; no black band.
+- WHAT THE REVIEWER CHECKS (it sees 3 stills per beat: at 1/8, 1/2 and 7/8 of the beat):
+  * Every element the narration names (the machine, the label, the arrows, the kids' reaction) must be
+    on screen at the beat's MIDDLE and at 7/8, not only between those moments. Keep labels and fact
+    arrows up for >= 2 s and through the middle of their beat; keep them inside the frame.
+  * Time of day must read in the SKY: dusk and night scenes key studio.key_sky(scene, f, ~1 / ~-5)
+    together with the sun lamp, otherwise the sky stays bright blue.
+  * An emptied reservoir uses studio.Reservoir.empty(f) (wet floor + puddle); a thin water sheet reads as
+    a FULL basin. Refill with .fill(f).
+  * Screens, monitors and displays show a picture (procedural shapes), never a blank glowing white.
+  * Max's gestures (pointing, thumbs up, wiping his brow) are raised to the SIDE so they read from the
+    front; an arm raised straight at the camera is invisible.
 - The reference film JSON names this set, uses captions "word", one beat per required action, 140-192
   spoken words, a <=13-word hook and a final question. It exists for preview validation; the
   showrunner writes the production script after the set passes.
 """
+
+
+# What a story-set agent needs to know about the engine, as signatures + one-line docs (~8k tokens instead
+# of ~110k for the source files). (module, None = every public name | "Class" | ("name", ...))
+_DIGEST = [("engine/studio.py", None), ("engine/toy.py", None), ("engine/camera.py", None),
+           ("engine/character.py", "Character"), ("engine/textures.py", None), ("engine/events.py", None),
+           ("engine/machines.py", ("Puffs", "Spray")), ("engine/cutaway.py", ("flow_material", "key_node_value")),
+           ("engine/sets/plane_story.py", ("label", "arrow"))]
+
+
+def api_digest(modules=None) -> str:
+    """Signatures and first docstring lines of the engine helpers, generated from the source."""
+    import ast
+    out = []
+
+    def sig(fn, drop_self=False):
+        a = ast.unparse(fn.args)
+        if drop_self and a.startswith("self"):
+            a = a[4:].lstrip(", ")
+        doc = (ast.get_docstring(fn) or "").strip().splitlines()
+        return f"{fn.name}({a})" + (f"  # {doc[0][:120]}" if doc else "")
+
+    for rel, only in modules or _DIGEST:
+        path = os.path.join(PROJECT_ROOT, rel)
+        if not os.path.isfile(path):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        out.append(f"## {rel[:-3].replace('/', '.')}")
+        for node in tree.body:
+            name = getattr(node, "name", "")
+            if not name or name.startswith("_"):
+                continue
+            if isinstance(only, str) and name != only or isinstance(only, tuple) and name not in only:
+                continue
+            if isinstance(node, ast.FunctionDef):
+                out.append(sig(node))
+            elif isinstance(node, ast.ClassDef):
+                doc = (ast.get_docstring(node) or "").strip().splitlines()
+                out.append(f"class {name}" + (f"  # {doc[0][:120]}" if doc else ""))
+                for m in node.body:
+                    if isinstance(m, ast.FunctionDef) and (not m.name.startswith("_") or m.name == "__init__"):
+                        out.append("    ." + sig(m, drop_self=True))
+    return "\n".join(out)
+
+
+def method_map(set_id) -> str:
+    """'a_tunnel: lines 980-1046' for every method of a set module (fixers read only what they change)."""
+    import ast
+    path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py")
+    if not os.path.isfile(path):
+        return ""
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    rows = []
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            rows += [f"{node.name}.{m.name}: lines {m.lineno}-{m.end_lineno}" for m in node.body
+                     if isinstance(m, ast.FunctionDef)]
+        elif isinstance(node, ast.FunctionDef):
+            rows.append(f"{node.name} (module level): lines {node.lineno}-{node.end_lineno}")
+    return "\n".join(rows)
+
+
+def _example_spec():
+    p = os.path.join(PROJECT_ROOT, "engine", "sets", "pool_story_spec.py")
+    return open(p, encoding="utf-8").read() if os.path.isfile(p) else ""
 
 
 def story_design_prompt(subject, set_id):
@@ -352,6 +488,14 @@ Set id: {set_id}
 Subject and build brief: {subject}
 
 {STORY_GUIDE}
+
+EXAMPLE SPEC (engine/sets/pool_story_spec.py, the format to follow):
+```python
+{_example_spec()}
+```
+
+API REFERENCE (generated from the code; use these, do not read their source):
+{api_digest()}
 
 Design the story first. The thing Max builds must be unambiguous; every failure must teach one true
 physical principle, and the following fix must solve exactly that failure. Keep it achievable with
@@ -374,7 +518,8 @@ def _guide(set_id):
         return GUIDE
     try:
         if getattr(importlib.import_module(f"engine.sets.{set_id}_spec"), "HERO", None):
-            return STORY_GUIDE
+            return (f"{STORY_GUIDE}\nAPI REFERENCE (generated from the code; do not read their source):\n"
+                    f"{api_digest()}")
     except Exception:                                # noqa: BLE001
         pass
     return ("This is a hand-built cutaway set (rendered by engine/films/cutaway_film.py with toy.py, camera.py "
@@ -391,9 +536,13 @@ Set: engine/sets/{set_id}.py (spec: engine/sets/{set_id}_spec.py, script: engine
 Problems to fix:
 {problems}
 
-Read the files involved (and the listed images, with the Read tool) and fix the cause in the set's
-code. Keep every action name and the spec's STAGE_ORDER unchanged unless a problem says the spec
-itself is wrong. Finish with one line per problem saying what you changed."""
+WHERE THINGS ARE in engine/sets/{set_id}.py (read ONLY the methods you change and the helpers they call,
+by line range; never the whole file):
+{method_map(set_id)}
+
+Fix the cause in the set's code; look at a listed image only when the text does not tell you enough.
+Keep every action name and the spec's STAGE_ORDER unchanged unless a problem says the spec itself is
+wrong. Finish with one line per problem saying what you changed."""
 
 
 def fix_code(set_id: str, error: str, allowed=None):
@@ -727,6 +876,7 @@ def review_preview(set_id, work) -> list:
                 h.update(fh.read())
         return h.hexdigest()
 
+    measured = qa_check(set_id, work)          # facts first: a beat that fails them skips the paid vision review
     reports, pending, previous = [], [], None
     for k, (beat, sp) in enumerate(zip(film["beats"], spans)):
         acts = list(beat.get("actions") or [beat.get("action")])
@@ -750,6 +900,9 @@ def review_preview(set_id, work) -> list:
         if not tech["valid"]:
             r = {**w, "valid": False, "fatal_problems": tech["fatal_problems"], "problems": tech["problems"],
                  "fix": ""}
+        elif any(not _advisory(x) for x in measured.get(k + 1, [])):
+            r = {**w, "valid": False, "fatal_problems": [], "problems": [], "fix": "",
+                 "reason": "measured problems; vision review skipped until they are fixed"}
         else:
             key = cache_key(w, images, previous)
             if key in cache:
@@ -782,7 +935,7 @@ def review_preview(set_id, work) -> list:
             reports.append({**w, **result, "images": [p for _, p in images]})
 
     reports.sort(key=lambda r: r["window"])
-    reports = _merge_qa(reports, qa_check(set_id, work))
+    reports = _merge_qa(reports, measured)
     for r in reports:
         problems = r.get("fatal_problems") or r.get("problems") or [r.get("reason", "review unavailable")]
         log.info(f"[set_builder] beat {r['beat']:02d} [{r['action']}] "

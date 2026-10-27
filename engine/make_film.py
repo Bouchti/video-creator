@@ -400,6 +400,11 @@ def _rewind_montage(film, beats, spans, frames_dir):
 
 
 def main():
+    try:                                               # run on its own (manual render, --redo): read .env like main.py
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+    except ImportError:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("film", help="name of engine/films/<film>.json + <film>_film.py")
     ap.add_argument("--reuse-voice", action="store_true")

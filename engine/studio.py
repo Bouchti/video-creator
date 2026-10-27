@@ -17,6 +17,7 @@ OBJECTS    st.dam, st.pipe (hollow, flanged, optional flowing water), st.PumpTur
            st.solar_array, st.House, st.lantern
 CUTAWAY    st.section_clip(obj, section) + st.Cutaway: open a hero object only while explaining its
            inside, closed whenever the camera turns
+LIGHT      st.key_sky(scene, frame, elevation_deg)      dusk / night skies (key with the sun lamp)
 CAMERA     st.max_height(char), st.close_on(rig, f0, f1, who)  keeps a character big (~40% of frame)
            with a slow swing; st.orbit(...), st.establish(...)  moving wide shots
 LABELS     st.label / st.arrow (re-exported callouts)
@@ -508,6 +509,11 @@ class Reservoir:
 
         res = st.Reservoir("upper", -8, 2, 0.05, 12, bottom=20, level=24)
         res.key_level(f0, 24); res.key_level(f1, 20.4)        # drains between f0 and f1
+        res.empty(f2)                                          # DRAINED: water gone, wet floor + a puddle
+        res.fill(f3)                                           # water back (then key_level as usual)
+
+    A nearly-empty reservoir must use empty(): a thin water sheet still reads as a FULL basin on screen.
+    Parent res.parts() to a moving container if the basin moves.
     """
 
     def __init__(self, name, x0, x1, y0, y1, bottom, level, color="#2B86C9", density=0.5):
@@ -536,6 +542,42 @@ class Reservoir:
         no_shadow(self.vol, self.surf)
         self._apply(level)
         self.level = level
+        # the drained look: a darker wet floor and one irregular glossy puddle (single mesh, no bump)
+        rnd = random.Random(len(name))
+        cx, cy, rx, ry = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) * 0.22, (y1 - y0) * 0.2
+        ring = []
+        for k in range(24):
+            a = 2 * math.pi * k / 24
+            r = 1 + 0.28 * math.sin(3 * a + 0.7) + 0.12 * rnd.uniform(-1, 1)
+            ring.append((cx + rx * r * math.cos(a), cy + ry * r * math.sin(a), bottom + 0.012))
+        pud = bpy.data.materials.new(f"{name}_puddle")
+        bsdf = toy._principled(pud)
+        toy._set(bsdf, "Base Color", (*toy.srgb("#2E5E7A"), 1))
+        toy._set(bsdf, "Roughness", 0.05)
+        toy._set(bsdf, "Coat Weight", 1.0)
+        self.puddle = mesh_obj(f"{name}_puddle", ring, [tuple(range(24))], (pud,), smooth=False)
+        self.wet = toy.box(f"{name}_wetfloor", (x1 - x0 - 0.04, y1 - y0 - 0.02, 0.004), (cx, cy, bottom + 0.003),
+                           mat=concrete(f"{name}_wet", "#6F6B63", lift=0.5, panel=1.2), bevel=0)
+        no_shadow(self.puddle, self.wet)
+        for o in (self.puddle, self.wet):
+            toy.hide_tree(o, 0, True)
+
+    def parts(self):
+        return [self.vol, self.surf, self.puddle, self.wet]
+
+    def empty(self, frame):
+        """Drained from `frame`: the water disappears, a wet floor and one puddle remain."""
+        for o in (self.vol, self.surf):
+            toy.hide_tree(o, frame, True)
+        for o in (self.puddle, self.wet):
+            toy.hide_tree(o, frame, False)
+
+    def fill(self, frame):
+        """Water again from `frame` (key the level as usual)."""
+        for o in (self.vol, self.surf):
+            toy.hide_tree(o, frame, False)
+        for o in (self.puddle, self.wet):
+            toy.hide_tree(o, frame, True)
 
     def _apply(self, level):
         top = max(self.bottom + 0.002, level - 0.06)
@@ -918,6 +960,24 @@ class Cutaway:
     def close(self, f, frames=12):
         toy.key_hold(self.section, "location", f - 1)
         self._at(f + frames, self.y_closed)
+
+
+# ------------------- light -------------------
+
+def key_sky(scene, frame, elevation_deg, strength=None):
+    """Set the SKY's own sun (the physical sky model) at `frame`: ~40 deg day, ~20 afternoon, ~1 dusk (orange
+    horizon), ~-5 night (deep blue). Without it dusk and night keep a bright blue daytime sky. Key it with
+    the same frames as the sun lamp's energy/colour; strength optionally keys the sky brightness too."""
+    nodes = scene.world.node_tree.nodes
+    sky = next((n for n in nodes if n.type == "TEX_SKY"), None)
+    if sky is not None:
+        sky.sun_elevation = math.radians(elevation_deg)
+        sky.keyframe_insert("sun_elevation", frame=frame)
+    if strength is not None:
+        bg = next((n for n in nodes if n.type == "BACKGROUND"), None)
+        if bg is not None:
+            bg.inputs["Strength"].default_value = strength
+            bg.inputs["Strength"].keyframe_insert("default_value", frame=frame)
 
 
 # ------------------- camera -------------------
