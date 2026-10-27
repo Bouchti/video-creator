@@ -339,10 +339,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["cutaway", "evolution", "pexels", "local-ai", "unreal"],
+    parser.add_argument("--source", choices=["cutaway", "explainer", "evolution", "pexels", "local-ai", "unreal"],
                         default=DEFAULT_SOURCE,
                         help="local-ai (durable MiniMax/Wan production; default), cutaway (3D cross-section "
-                             "explainer: the showrunner picks a filmable topic, critiques and renders), "
+                             "story starring Max: trial and error, critiqued and rendered), "
+                             "explainer (no-hero 3D cutaway explainer in the @youbuiltit format: the build in "
+                             "physical order, problem -> fix; builds a new set when none fits), "
                              "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
                              "truss -> suspension bridge), "
                              "unreal (local UE5 Sequencer + Movie Render Queue), or pexels "
@@ -371,7 +373,7 @@ if __name__ == "__main__":
     if args.publish_live and not args.publish:
         parser.error("--publish-live requires at least one --publish PLATFORM")
 
-    if args.source in ("evolution", "cutaway"):
+    if args.source in ("evolution", "cutaway", "explainer"):
         # The 3D pipelines run under the autopilot: script → voice → Blender render (every ~3 s window
         # validated as it renders) → sound + captions → final check, and every failure is repaired and
         # redone automatically (agents/autopilot.py). A positional topic is the angle to develop.
