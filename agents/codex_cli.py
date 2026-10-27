@@ -52,6 +52,26 @@ def _effort(requested: str, cap_env: str = "SHOWRUNNER_CODEX_EFFORT_CAP") -> str
     return order[min(order.index(requested), order.index(cap))]
 
 
+def _failure(stdout: str, stderr: str) -> str:
+    """Why a codex exec run failed, from its structured error events (never from the raw tail of
+    stdout: that is usually a file the agent was reading, and its words must not be mistaken for a
+    usage-limit or capacity message)."""
+    reasons = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") or {}
+        if event.get("type") in ("error", "turn.failed") or item.get("type") == "error":
+            err = event.get("error") or item or event
+            msg = err.get("message") if isinstance(err, dict) else str(err)
+            reasons.append(str(msg or json.dumps(event))[:400])
+    errors = [ln for ln in (stderr or "").splitlines() if "ERROR" in ln or "error:" in ln.lower()]
+    text = " | ".join(dict.fromkeys(reasons)) or " | ".join(errors[-3:]) or (stderr or "").strip()[-400:]
+    return text or "no error event (see the agent's last message)"
+
+
 def _usage(stdout: str) -> dict:
     usage = {}
     for line in stdout.splitlines():
@@ -66,6 +86,17 @@ def _usage(stdout: str) -> dict:
         if key != "calls":
             TOTAL_USAGE[key] += int(usage.get(key) or 0)
     return usage
+
+
+def _grant_current_user(path: str) -> None:
+    """The elevated Windows sandbox writes files as a separate sandbox user and rewrites the workspace
+    ACL without us: grant ourselves inherited full control first, or we cannot read what it wrote."""
+    user = os.getenv("USERNAME") or ""
+    if os.getenv("USERDOMAIN"):
+        user = f"{os.environ['USERDOMAIN']}\\{user}"
+    result = subprocess.run(["icacls", path, "/grant", f"{user}:(OI)(CI)F"], capture_output=True)
+    if result.returncode:
+        log.warning("[codex] could not grant %s access to %s (icacls exit %s)", user, path, result.returncode)
 
 
 def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web: bool = False,
@@ -97,6 +128,8 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
             # The default (unelevated) Windows sandbox denies every write, even inside the workspace:
             # patches are rejected and the agent ends with "the workspace is read-only".
             cmd += ["-c", f'windows.sandbox="{os.getenv("CODEX_WINDOWS_SANDBOX", "elevated")}"']
+            if cwd:
+                _grant_current_user(os.path.abspath(cwd))
         if schema is not None:
             schema_path = os.path.join(tmp, "schema.json")
             Path(schema_path).write_text(json.dumps(schema), encoding="utf-8")
@@ -113,9 +146,9 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
                      f"{int(usage.get('cached_input_tokens') or 0):,}",
                      f"{int(usage.get('output_tokens') or 0):,}",
                      f"{int(usage.get('reasoning_output_tokens') or 0):,}")
-        combined = (result.stderr or "") + "\n" + (result.stdout or "")
         if result.returncode:
-            error = RuntimeError(f"codex exec failed (exit {result.returncode}): {combined[-800:]}")
+            error = RuntimeError(f"codex exec failed (exit {result.returncode}): "
+                                 f"{_failure(result.stdout or '', result.stderr or '')[-800:]}")
             if _allow_model_fallback and (_capacity_error(error) or _unsupported_model_error(error)):
                 last_error = error
                 for alternate in _model_fallbacks(primary):
@@ -135,7 +168,8 @@ def run(prompt: str, *, schema: dict | None = None, effort: str = "medium", web:
                 raise last_error
             raise error
         if not os.path.exists(answer):
-            raise RuntimeError(f"codex exec returned no final answer: {combined[-800:]}")
+            raise RuntimeError(f"codex exec returned no final answer: "
+                               f"{_failure(result.stdout or '', result.stderr or '')[-800:]}")
         text = Path(answer).read_text(encoding="utf-8").strip()
     if schema is None:
         return text, usage

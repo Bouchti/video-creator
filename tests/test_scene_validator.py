@@ -270,3 +270,19 @@ class SetBuilderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoidTests(unittest.TestCase):
+    def test_black_band_below_the_world_is_fatal(self):
+        rng = np.random.default_rng(0)
+        scene = (rng.random((480, 270, 3)) * 200 + 30).astype(np.uint8)
+        void = scene.copy()
+        void[-120:] = 0                                   # the ground ends a quarter above the bottom
+        with tempfile.TemporaryDirectory() as d:
+            ok, bad = os.path.join(d, "ok.png"), os.path.join(d, "bad.png")
+            Image.fromarray(scene).save(ok)
+            Image.fromarray(void).save(bad)
+            self.assertTrue(sv.technical_check([ok])["valid"])
+            report = sv.technical_check([bad])
+        self.assertFalse(report["valid"])
+        self.assertIn("void", report["fatal_problems"][0])

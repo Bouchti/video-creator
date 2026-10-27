@@ -87,7 +87,9 @@ scene.render.image_settings.file_format = "PNG"
 if os.getenv("CUT_PROBE"):                    # debugging: run a script against the staged scene, no render
     exec(open(os.environ["CUT_PROBE"], encoding="utf-8").read())
 elif "--qa" in args:
+    import time
     from engine import qa
+    _t0 = time.time()
     from engine.character import Character
     chars = {}
     for v in vars(stage).values():
@@ -111,6 +113,21 @@ elif "--qa" in args:
         for pair, f in sorted(objs.items(), key=lambda kv: kv[1]):
             print(f"QA object f{f}: {pair}")
         rep["count"] += len(objs)
+        rep["objects"] = objs
+    print(f"QA geometry checks: {time.time() - _t0:.0f} s")
+    _t1 = time.time()
+    if os.getenv("QA_QUALITY", "1") == "1":     # the channel's quality gates (hero size, motion, textures...)
+        spec = importlib.import_module(f"engine.sets.{film['set']}_spec")
+        qual = qa.quality(scene, chars, getattr(spec, "HERO", None), labelled, render_frame,
+                          step=int(os.getenv("QA_QUALITY_STEP", "5")))
+        for beat, items in qual["beats"].items():
+            for it in items:
+                print(f"QA {beat} f{it['frames'][0]}: {it['issue']}")
+        rep["quality"] = qual["beats"]
+        print(f"QA quality gates: {time.time() - _t1:.0f} s")
+        rep["count"] += qual["count"]
+    with open(os.path.join(out_dir, "qa.json"), "w", encoding="utf-8") as fh:
+        json.dump(rep, fh, indent=2)
     print(f"QA issues: {rep['count']}")
 elif only_frames:
     for f in only_frames:

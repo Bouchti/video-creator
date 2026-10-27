@@ -205,3 +205,284 @@ def run_objects(scene, frames, allow=None, skip=None):
                 if tb is not None and _boxes_touch(ba, bb) and ta.overlap(tb):
                     found[pair] = f
     return found
+
+
+# ------------------- production quality gates (the channel's standard) -------------------
+
+HERO_MIN = 0.18          # Max's on-screen height (fraction of the frame) when he is the one acting...
+HERO_SHARE = 0.35        # ...for at least this share of each beat (the rest may be wide/establishing)
+STATIC_SECONDS = 2.5     # a camera that does not move for longer than this is "static"
+FLAT_AREA = 0.03         # a flat (untextured) surface covering more than this share of the frame is flagged
+FAR = 30.0               # ...unless it is background this far from the camera (soft in depth of field)
+TEXT_MIN = 0.018         # a label's letters must be at least this share of the frame height
+_TEXTURE_NODES = {"TEX_NOISE", "TEX_VORONOI", "TEX_WAVE", "TEX_IMAGE", "TEX_MUSGRAVE", "TEX_GRADIENT",
+                  "TEX_MAGIC", "TEX_CHECKER", "TEX_BRICK", "TEX_WHITE_NOISE", "BUMP", "ATTRIBUTE",
+                  "NEW_GEOMETRY", "VALTORGB"}
+_FX = re.compile(r"(label|lbl|arrow|glow|spark|puff|bubble|splash|drop|water|flow|spray|steam|smoke|ray|beam|"
+                 r"cloud|sky|glass|window|screen|bulb|lamp|lantern|mark|_p\d+$|tuft|g_)", re.I)
+
+
+def _screen_box(scene, cam, objs):
+    """Projected bbox (x0, y0, x1, y1) in frame units of `objs`, or None when all are behind the camera."""
+    pts = [world_to_camera_view(scene, cam, p) for o in objs for p in _corners(o)]
+    pts = [p for p in pts if p.z > 0]
+    if not pts:
+        return None
+    return (min(p.x for p in pts), min(p.y for p in pts), max(p.x for p in pts), max(p.y for p in pts))
+
+
+def _on_screen(box):
+    return box is not None and box[2] >= 0 and box[0] <= 1 and box[3] >= 0 and box[1] <= 1
+
+
+def _is_flat(mat):
+    """A material with no texture, bump or variation (one constant colour) that is not emissive/clear."""
+    if mat is None or not mat.use_nodes or mat.node_tree is None:
+        return True
+    nodes = mat.node_tree.nodes
+    if any(n.type in _TEXTURE_NODES for n in nodes):
+        return False
+    if any(n.type in ("VOLUME_ABSORPTION", "VOLUME_SCATTER", "EMISSION", "BSDF_GLASS") for n in nodes):
+        return False
+    bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is not None:
+        for key in ("Emission Strength", "Transmission Weight", "Alpha"):
+            sock = bsdf.inputs.get(key)
+            if sock is None or sock.is_linked:
+                continue
+            if (key == "Alpha" and sock.default_value < 0.95) or (key != "Alpha" and sock.default_value > 0.2):
+                return False
+    return True
+
+
+def _coplanar_pairs(objs, dg, max_faces=250):
+    """Pairs of objects with overlapping faces in the same plane facing the same way (z-fighting)."""
+    import random as _r
+    data = {}
+    objs_by = {o.name: o for o in objs}
+    for o in objs:
+        ev = o.evaluated_get(dg)
+        try:
+            me = ev.to_mesh()
+        except RuntimeError:
+            continue
+        if me is None or not me.polygons:
+            ev.to_mesh_clear()
+            continue
+        mw = ev.matrix_world
+        rot = mw.to_3x3()
+        verts = [mw @ v.co for v in me.vertices]
+        polys = [p for p in me.polygons if p.area > 1e-4]
+        sample = polys if len(polys) <= max_faces else _r.Random(len(o.name)).sample(polys, max_faces)
+        centres = [(mw @ p.center, (rot @ p.normal).normalized()) for p in sample]
+        tree = BVHTree.FromPolygons(verts, [tuple(p.vertices) for p in me.polygons])
+        lo = Vector((min(v.x for v in verts), min(v.y for v in verts), min(v.z for v in verts)))
+        hi = Vector((max(v.x for v in verts), max(v.y for v in verts), max(v.z for v in verts)))
+        data[o.name] = (tree, centres, (lo, hi))
+        ev.to_mesh_clear()
+    found = []
+    names = list(data)
+    same = {n: (objs_by[n].data.name, tuple(round(x, 4) for row in objs_by[n].matrix_world for x in row))
+            for n in names}
+    for i, a in enumerate(names):
+        ta, ca, ba = data[a]
+        for b in names[i + 1:]:
+            tb, cb, bb = data[b]
+            if not _boxes_touch(ba, bb, pad=0.01) or same[a] == same[b]:
+                continue                                    # identical copies parked together render as one
+            if (ba[1] - ba[0]).length < 0.05 or (bb[1] - bb[0]).length < 0.05:
+                continue                                    # specks too small to show a flicker
+            hits = 0
+            for c, n in ca:
+                loc, nb, _idx, dist = tb.find_nearest(c)
+                if loc is not None and dist < 0.002 and nb.dot(n) > 0.995:
+                    hits += 1
+                    if hits >= 3:
+                        found.append(" x ".join(sorted((a, b))))
+                        break
+    return found
+
+
+def _support(scene, dg, origin, distance, own):
+    """Is there a surface (not the character itself) within `distance` straight below `origin`?"""
+    o, left = origin.copy(), distance
+    for _ in range(8):
+        hit, loc, _n, _i, obj, _m = scene.ray_cast(dg, o, Vector((0, 0, -1)), distance=left)
+        if not hit or obj is None:
+            return False
+        if obj.name not in own:
+            return True
+        left -= (o.z - loc.z) + 0.002                      # passed through its own shoe: keep going
+        o = Vector((loc.x, loc.y, loc.z - 0.002))
+        if left <= 0:
+            return False
+    return False
+
+
+def _painted(o):
+    """Lettering fixed on an object (a boat's name, a machine tag) rather than a callout label. Callouts
+    are named label_*/lbl* (engine label helpers) or float free (no parent)."""
+    chain, p = [o], o.parent
+    while p is not None:
+        chain.append(p)
+        p = p.parent
+    if any(re.match(r"(label|lbl)", x.name, re.I) or "label" in x.name.lower() for x in chain):
+        return False
+    return o.parent is not None
+
+
+def _longest_still(track, fps):
+    """Longest stretch (frames) in which the camera neither moves 4 cm nor turns ~1 degree."""
+    start, longest = 0, 0
+    for k in range(1, len(track)):
+        f, p, d = track[k]
+        f0, p0, d0 = track[start]
+        if (p - p0).length > 0.04 or d.angle(d0) > 0.018:
+            start = k
+        else:
+            longest = max(longest, f - f0)
+    return longest
+
+
+def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=None):
+    """The channel's quality gates, per beat (pure geometry, no rendering):
+      hero_small   Max (the hero) is under HERO_MIN of the frame height for most of the beat
+      hero_absent  Max is not on screen in the beat at all
+      static       the camera does not move for > STATIC_SECONDS
+      flat         large surfaces in one flat colour (no texture): toy-like, unrecognisable
+      text_small   a label's letters are too small to read on a phone
+      floating     a character stands on nothing (no surface under the feet, not seated)
+      coplanar     two surfaces in the same plane: they flicker (z-fighting)
+      squashed     a bumped material on an object squashed > 12x (black/glossy artefacts)
+      live_boolean a boolean modifier on/with an animated object (re-meshes every frame: flicker)
+    characters: {name: root}; hero: the hero's name prefix (or None); beats: [(label, f0, f1)] timeline frames."""
+    cam = scene.camera
+    issues = {}
+    char_objs = {name: [o for o in [root] + list(root.children_recursive) if o.type == "MESH"]
+                 for name, root in characters.items()}
+    char_names = {o.name for objs in char_objs.values() for o in objs}
+    meshes = [o for o in scene.objects if o.type == "MESH" and o.name not in char_names]
+    # ---- scene construction problems (independent of the frame) ----
+    for o in meshes:
+        chain, p = [o], o.parent
+        while p is not None:
+            chain.append(p)
+            p = p.parent
+        animated = any(x.animation_data is not None for x in chain)
+        for m in o.modifiers:
+            if m.type == "BOOLEAN" and m.show_render and m.object is not None and (
+                    animated or m.object.animation_data is not None):
+                issues.setdefault("all", []).append({"frames": [0, 0], "issue": (
+                    f"live_boolean: {o.name} is cut by {m.object.name} while moving (re-meshes every frame and "
+                    "flickers): apply the cut once (studio.carve) or cut in the shader (studio.section_clip)")})
+        sc = o.matrix_world.to_scale()
+        lo, hi = min(abs(sc.x), abs(sc.y), abs(sc.z)), max(abs(sc.x), abs(sc.y), abs(sc.z))
+        if hi > 0 and lo / hi < 1 / 12 and any(
+                m is not None and m.use_nodes and any(n.type == "BUMP" for n in m.node_tree.nodes)
+                for m in getattr(o.data, "materials", [])):
+            issues.setdefault("all", []).append({"frames": [0, 0], "issue": (
+                f"squashed: {o.name} is scaled {hi / max(lo, 1e-6):.0f}x thinner on one axis and its material has "
+                "bump (renders black/glossy): build it at its real size or use a material without bump")})
+    for label, b0, b1 in beats:
+        hits = []
+        frames = list(range(b0, b1 + 1, step)) or [b0]
+        hero_fracs, track, flat_seen, text_seen, float_frames = [], [], {}, {}, {}
+        for f in frames:
+            scene.frame_set(frame_map(f))
+            dg = bpy.context.evaluated_depsgraph_get()
+            cm = cam.matrix_world
+            track.append((f, cm.translation.copy(), (cm.to_3x3() @ Vector((0, 0, -1))).normalized()))
+            if hero is not None:                             # "Max" also covers "MaxBoat", "MaxPilot"...
+                vis = [o for nm, objs in char_objs.items() if nm.startswith(hero) for o in objs if _visible(o)]
+                box = _screen_box(scene, cam, vis) if vis else None
+                hero_fracs.append(min(1.0, box[3]) - max(0.0, box[1]) if _on_screen(box) else 0.0)
+            for o in meshes:
+                if not _visible(o) or _FX.search(o.name):
+                    continue
+                mats = [m for m in getattr(o.data, "materials", []) if m is not None]
+                if mats and not all(_is_flat(m) for m in mats):
+                    continue
+                box = _screen_box(scene, cam, [o])
+                if not _on_screen(box):
+                    continue
+                centre = sum((Vector(c) for c in _corners(o)), Vector()) / 8
+                if (centre - cm.translation).length > FAR:
+                    continue
+                area = (min(1.0, box[2]) - max(0.0, box[0])) * (min(1.0, box[3]) - max(0.0, box[1]))
+                if area > FLAT_AREA:
+                    flat_seen[o.name] = max(flat_seen.get(o.name, 0.0), area)
+            for o in scene.objects:
+                if o.type != "FONT" or not _visible(o) or max(o.matrix_world.to_scale()) < 0.3 or _painted(o):
+                    continue
+                box = _screen_box(scene, cam, [o])
+                if not _on_screen(box):
+                    continue
+                h = (box[3] - box[1]) / max(1, o.data.body.count("\n") + 1)
+                key = o.data.body.strip().replace("\n", " ")[:40]
+                if h < TEXT_MIN:
+                    text_seen[key] = min(text_seen.get(key, 1.0), h)
+            for name, objs in char_objs.items():
+                vis = [o for o in objs if _visible(o)]
+                if not vis:
+                    continue
+                own = {o.name for o in objs}
+                feet = [o for o in vis if re.search(r"shoe|foot|boot", o.name, re.I)] or vis
+                low_pts = []
+                for o in feet:                                      # real vertices, not rotated bounding boxes
+                    ev = o.evaluated_get(dg)
+                    me = ev.to_mesh()
+                    if me is not None:
+                        mw = ev.matrix_world
+                        low_pts += [mw @ v.co for v in me.vertices]
+                    ev.to_mesh_clear()
+                if not low_pts:
+                    continue
+                low = min(p.z for p in low_pts)
+                body = [p for o in vis for p in _corners(o)]
+                top = max(p.z for p in body)
+                cx, cy = sum(p.x for p in low_pts) / len(low_pts), sum(p.y for p in low_pts) / len(low_pts)
+                supported = _support(scene, dg, Vector((cx, cy, low + 0.12)), 0.12 + 0.08, own) or any(
+                    _support(scene, dg, Vector((cx + dx, cy + dy, low + 0.12)), 0.2, own)
+                    for dx, dy in ((0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)))
+                if not supported:                                   # seated: something right under the hips
+                    supported = _support(scene, dg, Vector((cx, cy, low + (top - low) * 0.42)), 0.6, own)
+                if not supported:
+                    float_frames.setdefault(name, []).append(f)
+        if hero_fracs:
+            if max(hero_fracs) == 0:
+                hits.append((b0, "hero_absent: Max is never on screen in this beat"))
+            elif sum(1 for v in hero_fracs if v >= HERO_MIN) / len(hero_fracs) < HERO_SHARE:
+                hits.append((b0, f"hero_small: Max fills at most {max(hero_fracs):.0%} of the frame height (median "
+                                 f"{sorted(hero_fracs)[len(hero_fracs) // 2]:.0%}); frame him at >= {HERO_MIN:.0%} "
+                                 f"for at least {HERO_SHARE:.0%} of the beat (studio.close_on)"))
+        still = _longest_still(track, fps)
+        if still > STATIC_SECONDS * fps:
+            hits.append((b0, f"static: the camera holds still for {still / fps:.1f} s; keep it moving "
+                             "(studio.close_on swing, studio.orbit, push-ins)"))
+        for nm, area in sorted(flat_seen.items(), key=lambda kv: -kv[1])[:6]:
+            hits.append((b0, f"flat: {nm} is one flat colour over {area:.0%} of the frame; give it a real material "
+                             "(engine.textures / engine.studio)"))
+        for body, h in text_seen.items():
+            hits.append((b0, f"text_small: label '{body}' letters are {h:.1%} of the frame height (need >= "
+                             f"{TEXT_MIN:.1%}): enlarge it or bring the camera closer"))
+        for name, fl in float_frames.items():
+            if len(fl) * step >= 10 and len(fl) >= 0.4 * len(frames):        # a jump is fine, standing on air is not
+                hits.append((fl[0], f"floating: {name} has no surface under the feet in {len(fl)} of "
+                                    f"{len(frames)} sampled frames (from frame {fl[0]})"))
+        if hits:
+            issues[label] = [{"frames": [f, f], "issue": m} for f, m in hits]
+    seen = set()
+    for label, b0, b1 in beats:                              # z-fighting, at each beat's end frame
+        scene.frame_set(frame_map(b1))
+        dg = bpy.context.evaluated_depsgraph_get()
+        objs = [o for o in meshes if _visible(o) and not SOFT.search(o.name) and not _FX.search(o.name)]
+        for pair in _coplanar_pairs(objs, dg):
+            if pair not in seen:
+                seen.add(pair)
+                issues.setdefault(label, []).append({"frames": [b1, b1], "issue": (
+                    f"coplanar: {pair} share a plane and flicker (z-fighting): offset one by >= 5 mm")})
+    report = {"beats": issues, "count": sum(len(v) for v in issues.values())}
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2)
+    return report

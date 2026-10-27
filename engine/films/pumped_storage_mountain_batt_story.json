@@ -1,0 +1,97 @@
+{
+  "title": "Max turns a mountain into a battery (it ran dry first)",
+  "set": "pumped_storage_mountain_batt_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "empty_hook",
+      "action": "empty_hook",
+      "video": "epilogue",
+      "text": "Max's mountain battery just ran dry, and his kids are still holding lanterns."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's rewind to that sunny afternoon."
+    },
+    {
+      "id": "setup",
+      "action": "setup",
+      "text": "His solar panels make spare power. Max wants it saved for tonight's movie."
+    },
+    {
+      "id": "fail_flat",
+      "action": "fail_flat",
+      "text": "First, a pond beside the lake. With almost no drop, the turbine barely turns."
+    },
+    {
+      "id": "raise_head",
+      "action": "raise_head",
+      "text": "Hydropower needs head, a big fall. So Max lifts the reservoir 150 metres.",
+      "overlay": {
+        "type": "stat",
+        "value": "150 m",
+        "text": "of head"
+      }
+    },
+    {
+      "id": "fail_pipe",
+      "action": "fail_pipe",
+      "text": "A skinny, twisting pipe brings it down. Friction chokes it; the bulb flickers."
+    },
+    {
+      "id": "tunnel",
+      "action": "tunnel",
+      "text": "So he bores a seven-metre pressure tunnel. Roughly 200 cubic metres of water rush through each second.",
+      "overlay": {
+        "type": "stat",
+        "value": "200 m³/s",
+        "text": "through a 7 m tunnel"
+      }
+    },
+    {
+      "id": "fail_empty",
+      "action": "fail_empty",
+      "text": "Lights blaze, until the top runs dry. An ordinary turbine can't send water back up."
+    },
+    {
+      "id": "pump_turbines",
+      "action": "pump_turbines",
+      "text": "Two reversible 125-megawatt pump-turbines fix that. Spare daytime solar spins them backwards, pumping the same water uphill.",
+      "overlay": {
+        "type": "label",
+        "text": "Pump-turbines"
+      }
+    },
+    {
+      "id": "fail_shudder",
+      "action": "fail_shudder",
+      "text": "As the top drains, the head falls from 175 to 125 metres. The fixed-speed machines shudder."
+    },
+    {
+      "id": "variable_speed",
+      "action": "variable_speed",
+      "text": "Variable-speed motor-generators shift between about 285 and 315 rpm, staying efficient all the way down.",
+      "overlay": {
+        "type": "stat",
+        "value": "285–315 rpm",
+        "text": "matched to the head"
+      }
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "Solar pumps it up by day; after sunset, power flows within 90 seconds. Movie on, lanterns off. Real plants: 1,500 megawatt-hours, 250 megawatts for six hours, 80 years. Would you build one?",
+      "overlay": {
+        "type": "stat",
+        "value": "1,500 MWh",
+        "text": "250 MW for six hours"
+      }
+    }
+  ],
+  "cta": "Would you build one?"
+}

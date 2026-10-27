@@ -122,6 +122,16 @@ def window_ready(w, frames_dir, settle=2.0) -> bool:
 
 # ------------------- 1. technical QC -------------------
 
+def _void_band(lum) -> float:
+    """Fraction of the frame height, from the bottom edge up, that is uniform black: the world's edge."""
+    rows = 0
+    for row in lum[::-1]:
+        if row.mean() >= 0.03 or row.std() >= 0.02:
+            break
+        rows += 1
+    return rows / max(1, lum.shape[0])
+
+
 def technical_check(paths: list) -> dict:
     """Cheap pixel checks on a few frames: black, blown out, flat, Blender's magenta, frozen."""
     fatal, problems, stats = [], [], []
@@ -146,6 +156,10 @@ def technical_check(paths: list) -> dict:
             fatal.append(f"{name} is blown out white (mean luminance {lum.mean():.2f})")
         if lum.std() < 0.02:
             fatal.append(f"{name} is a flat single colour (no scene visible)")
+        void = _void_band(lum)
+        if void >= 0.08:
+            fatal.append(f"{name} shows an empty black void across the bottom {void:.0%} of the frame "
+                         "(the ground/terrain ends inside the shot)")
         if magenta > 0.03:
             fatal.append(f"{name} shows Blender's magenta missing-texture colour on {magenta:.0%} of the frame")
     if len(arrays) >= 2 and all(np.abs(arrays[0] - b).mean() < 0.002 for b in arrays[1:]):
@@ -198,7 +212,10 @@ subject is not in frame or fully blocked; the frames show a different action tha
 or exploded geometry; black / blank / magenta frames; a camera inside an object.
 Also fatal: a required action or explicit narration detail is visibly missing or wrong in the final
 part of its beat; a character or prop visibly floats, hovers, clips through, or is detached from the
-surface supporting it. Put those failures in fatal_problems, not merely problems.
+surface supporting it; the hero (Max) acts in this window but is so small that his face, hands and
+what he is doing cannot be read on a phone (roughly under a fifth of the frame height); an explanatory
+label is too small to read on a phone or cut off by the frame edge; an empty black void where the world
+ends. Put those failures in fatal_problems, not merely problems.
 Do NOT call stylised low-poly trees, simple models, missing fine detail, motion blur, depth of field or
 a camera angle you would have chosen differently fatal. Line drawings in white/orange are intentional.
 Do not transfer a narrated comparison or external record onto an in-world display. For example, if

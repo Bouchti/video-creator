@@ -38,6 +38,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 
@@ -435,7 +436,10 @@ def main():
     ap.add_argument("--set", default=None, help="evolution set (default: the first registered)")
     ap.add_argument("--resume", default=None, help="continue a run from its output/autopilot/<run>.json")
     a = ap.parse_args()
-    print(run(a.source, a.angle, a.set, a.resume))
+    try:
+        print(run(a.source, a.angle, a.set, a.resume))
+    except GiveUp:                       # already logged with the resume command; no traceback
+        sys.exit(1)
 
 
 if __name__ == "__main__":

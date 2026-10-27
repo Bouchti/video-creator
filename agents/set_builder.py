@@ -53,6 +53,48 @@ class RepairNotApplied(RuntimeError):
 # ------------------- subscription coding agent, isolated from the real worktree -------------------
 
 
+def _step(name, args, workspace):
+    """One short line per agent tool call (what it reads, writes, runs)."""
+    path = args.get("file_path") or args.get("path") or ""
+    if path:
+        path = os.path.relpath(path, workspace) if os.path.isabs(path) else path
+    if name == "Bash":
+        return f"run: {str(args.get('command', ''))[:110]}"
+    if name in ("Glob", "Grep"):
+        return f"{name.lower()}: {str(args.get('pattern', ''))[:80]} {path}".strip()
+    return f"{name.lower()}: {path or json.dumps(args)[:80]}"
+
+
+def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout):
+    """Run `claude -p --output-format stream-json`, logging each tool call as it happens (so a long
+    build visibly progresses). Returns (final result event or None, tail of raw output)."""
+    import threading
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, encoding="utf-8", errors="replace", cwd=workspace, env=env)
+    timer = threading.Timer(timeout, p.kill)
+    timer.start()
+    result, tail = None, []
+    try:
+        p.stdin.write(stdin_text)
+        p.stdin.close()
+        for line in p.stdout:
+            tail = (tail + [line])[-20:]
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "result":
+                result = event
+            elif event.get("type") == "assistant":
+                for part in (event.get("message") or {}).get("content") or []:
+                    if part.get("type") == "tool_use":
+                        log.info(f"[claude] {_step(part.get('name', ''), part.get('input') or {}, workspace)}")
+        p.wait()
+    finally:
+        timer.cancel()
+    return result, "".join(tail)
+
+
 def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400) -> str:
     """Run the selected coding subscription in an isolated source mirror.
 
@@ -62,13 +104,32 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
     from agents.showrunner import (UsageLimit, _API_ENV, _capped_effort, _record_claude_usage,
                                    activate_fallback, active_backend, codex_unavailable)
     backend = active_backend()
+    story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
+    measure_cmd = f"python -m agents.set_builder --measure {story_id}" if (story_id or "").endswith("_story") else None
+    measures = ("(about 3 minutes; it prints collisions, floating characters, Max's on-screen size, static camera, "
+                "flat surfaces, small labels and flicker sources per beat) and fix everything it prints; run it again "
+                "until it prints no measured problems or only problems you cannot fix.")
 
-    rules = ("\n\nYou may create or edit ONLY these files: " + ", ".join(allowed) +
-             ". Every other file is read-only. The pipeline renders and tests after you finish. "
-             "When inspecting files, issue one simple read/search command at a time; never chain PowerShell "
-             "commands with semicolons, pipes, or command substitution because the execution policy blocks them.")
-    if backend != "codex":
-        rules += " You cannot run commands."
+    def rules_for(kind):
+        text = ("\n\nYou may create or edit ONLY these files: " + ", ".join(allowed) +
+                ". Every other file is read-only. The pipeline renders and tests after you finish. ")
+        if kind == "codex":
+            from engine.make_film import BLENDER
+            text += ("When inspecting files, issue one simple read/search command at a time; never chain PowerShell "
+                     "commands with semicolons, pipes, or command substitution because the execution policy blocks "
+                     f"them. Python is {sys.executable} and Blender is {BLENDER} (they are not on PATH): before you "
+                     "finish, byte-compile your files and build the set once in Blender background mode, and fix "
+                     "every error you see.")
+            if measure_cmd:
+                text += f" Then measure it: `{sys.executable}{measure_cmd[6:]}` {measures}"
+        elif measure_cmd:
+            text += (f"The ONLY command you can run is `{measure_cmd}` (exactly that, nothing chained): when your "
+                     f"files are written, run it {measures}")
+        else:
+            text += "You cannot run commands."
+        return text
+
+    rules = rules_for(backend)
     with tempfile.TemporaryDirectory(prefix="video_creator_set_agent_") as tmp:
         workspace = os.path.join(tmp, "repo")
         os.makedirs(workspace)
@@ -96,7 +157,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                     limit = UsageLimit(str(exc)[:500])
                     if activate_fallback(str(limit)[:180]):
                         backend = active_backend()
-                        rules += " You cannot run commands."
+                        rules = rules_for(backend)
                     else:
                         raise limit from exc
                 else:
@@ -107,16 +168,22 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
             env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
             tools = ["Read", "Glob", "Grep", "Write", "Edit"]
-            cmd = [exe, "-p", "--output-format", "json", "--model", BUILD_MODEL, "--effort",
+            permitted = list(tools)
+            if measure_cmd:                       # one exact command: everything else needs approval = denied
+                tools.append("Bash")
+                permitted.append(f"Bash({measure_cmd}:*)")
+                env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")   # venv python
+                env.setdefault("BASH_DEFAULT_TIMEOUT_MS", "900000")       # a measurement takes ~3 minutes
+                env.setdefault("BASH_MAX_TIMEOUT_MS", "900000")
+            cmd = [exe, "-p", "--output-format", "stream-json", "--verbose", "--model", BUILD_MODEL, "--effort",
                    _capped_effort(effort, "SET_BUILDER_CLAUDE_EFFORT_CAP"),
                    "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
-                   "--permission-mode", "acceptEdits", "--tools", *tools, "--allowedTools", *tools]
-            r = subprocess.run(cmd, input=prompt + rules, capture_output=True, text=True, encoding="utf-8",
-                               cwd=workspace, env=env, timeout=timeout)
-            try:
-                data = json.loads(r.stdout)
-            except json.JSONDecodeError:
-                raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
+                   "--permission-mode", "acceptEdits", "--tools", *tools, "--allowedTools", *permitted]
+            log.info(f"[set_builder] Claude ({BUILD_MODEL}) is working on the set (usually 15-40 minutes); "
+                     "its steps follow")
+            data, tail = _run_claude_streaming(cmd, prompt + rules, workspace, env, timeout)
+            if data is None:
+                raise RuntimeError(f"claude -p failed: {tail[-400:]}")
             result_text = str(data.get("result") or "")
             if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
                 raise UsageLimit(result_text[:300])
@@ -219,6 +286,10 @@ STORY_GUIDE = """HOW MAX STORY SETS WORK (read these files first, in this order)
 - engine/sets/plane_story_spec.py and engine/sets/plane_story.py: a self-contained outdoor story.
 - engine/sets/boat_story_spec.py and engine/sets/boat_story.py: a detailed cutaway reference.
 - engine/films/cutaway_film.py, engine/toy.py, engine/camera.py and engine/character.py.
+- engine/studio.py: THE PRODUCTION KIT. Build the world and the hero objects with it (natural terrain
+  with carved tunnels/caverns, endless ground, concrete, water reservoirs, flanged pipes with flowing
+  water, a real pump-turbine, solar panels, a house with lights, lanterns, cutaways, close-up camera
+  moves). It already follows every quality rule below; extend it in your set, never re-invent it.
 
 The spec is pure data and must define SET_ID, SUBJECT, HERO = "Max", MODEL_FACTS, STORY_ORDER,
 ACTIONS, beat_actions(), min_seconds() and validate(). It needs two hook actions, then rewind,
@@ -231,6 +302,13 @@ The Blender module defines one class whose name ends in Set. Its constructor is
 engine.character.Character, and owns a CameraRig. Its run(beats, spans, epilogue_offset) method
 plays every non-hook action through a_<action>(i, start, end), stages the opening hook at the
 epilogue offset, then calls rig.build(). Every action named by the spec needs a method.
+The class sets QA_ALLOW: a regex of "objA x objB" pairs that touch BY DESIGN (a pipe entering a
+casing, a lantern in a hand); every other intersection is reported as a collision.
+
+ASSET PLAN FIRST: at the top of the Blender module write a comment block listing every real-world
+object the story needs, its real shape and proportions, the detail that makes it recognizable at a
+glance (a dam's sloped concrete profile and crest road, a turbine's snail casing and runner blades...)
+and the studio/textures pieces that build it. Then build exactly that.
 
 VISUAL AND SAFETY RULES:
 - Use only reusable primitives and the repository's Blender helpers; never require downloaded assets.
@@ -242,6 +320,18 @@ VISUAL AND SAFETY RULES:
 - Deterministic output: seed random generators. Blender 5.2 Python. Build everything before animation.
 - Hidden objects are excluded from evaluation; use toy.hide_tree/show helpers and keyframe visibility.
 - Camera shots use cuts between beats and keep objects away from the vertical-frame edges.
+- QUALITY BAR (the channel's standard). The pipeline MEASURES these on the staged scene (engine/qa.py
+  quality()) and rejects the set until they pass, before any reviewer looks at it:
+  * Max is big and readable: in every beat he fills >= 18% of the frame height for at least 35% of the
+    beat (aim for ~40% with studio.close_on whenever he acts). Wide shots only briefly, to establish.
+  * The camera always moves: never still for more than 2.5 s (close_on swings, studio.orbit, push-ins).
+  * Characters stand ON things: feet on a surface (no hovering), never inside props or each other.
+  * No flat colours: every surface bigger than ~3% of the frame has a real material (engine.studio /
+    engine.textures: concrete, rock_grass, metal, paint, planks...). Realistic shapes, no grey primitives.
+  * Callout labels (studio.label) are >= 1.8% of the frame height per line and fully inside the frame.
+  * No flicker: no coplanar faces (offset touching surfaces >= 5 mm), no bump on squashed objects, no
+    live booleans on moving parts (studio.carve once, or studio.section_clip).
+  * No void: studio.world_floor + terrain blocks reaching well past every frame edge; no black band.
 - The reference film JSON names this set, uses captions "word", one beat per required action, 140-192
   spoken words, a <=13-word hook and a final question. It exists for preview validation; the
   showrunner writes the production script after the set passes.
@@ -311,7 +401,7 @@ def fix_code(set_id: str, error: str, allowed=None):
     return out
 
 
-def fix_scenes(set_id: str, rejected: list, allowed=None):
+def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None):
     """Called by make_film (SCENE_POLICY=fix) and by the builder: the reviewer's rejected windows →
     Claude edits the set's builder."""
     lines = []
@@ -323,6 +413,10 @@ def fix_scenes(set_id: str, rejected: list, allowed=None):
                      f"{r.get('fix')}; frames: {imgs}")
     allowed = allowed or [f"engine/sets/{set_id}.py"]
     before = _content_hashes(allowed)
+    if keep:
+        lines.append("\nThe reviewer ACCEPTED these actions; their shots must still look the same afterwards. "
+                     "Do not change their a_<action> methods, and keep any shared change (ground, camera "
+                     "helpers, characters, materials) from altering them: " + ", ".join(keep))
     out = claude_agent(fix_prompt(set_id, "\n".join(lines),
                                   "The scene reviewer REJECTED these rendered windows of a 3D film."),
                        allowed)
@@ -466,6 +560,111 @@ def preview_render(set_id, work) -> str:
     return ""
 
 
+_HELD = re.compile(r"\(\w*_(hand|handmesh|thumb|finger|palm)\w*\s*/", re.I)     # holding a prop = by design
+# A character's head or body INSIDE something is a defect; limbs touching things (feet in sand, a kid
+# seated on a pumpkin, arms brushing) is normal contact: reported to the fixer, not a rejection.
+_CORE = re.compile(r"\(\w*_(skull|cheek|nose|ear|eye|iris|pupil|brow|hair|ponytail|hat|brim|mouth|mustache|torso|bib)"
+                   r"\w*\s*/", re.I)
+
+
+def _advisory(text):
+    if text.startswith(("cropped:", "occluded:")):
+        return True
+    return text.startswith("collision:") and not _CORE.search(text)
+
+
+def qa_check(set_id, work) -> dict:
+    """The MEASURED quality gates (engine/qa.py run on the staged preview scene, no rendering):
+    collisions, floating characters, Max's on-screen size, camera motion, flat untextured surfaces,
+    label size/crops, coplanar (flickering) faces, squashed bump, live booleans.
+    Returns {beat_number: [issue, ...]} (0 = whole set). Reused while the preview is unchanged."""
+    import importlib
+
+    from engine.make_film import BLENDER, _run_blender
+    spec = importlib.import_module(f"engine.sets.{set_id}_spec")
+    if not getattr(spec, "HERO", None) or os.getenv("SET_BUILD_QA", "1") != "1":
+        return {}
+    try:
+        fingerprint = json.load(open(os.path.join(work, "preview_manifest.json"), encoding="utf-8"))["fingerprint"]
+    except (OSError, ValueError, KeyError):
+        fingerprint = None
+    qa_path = os.path.join(work, "qa.json")
+    try:
+        rep = json.load(open(qa_path, encoding="utf-8"))
+    except (OSError, ValueError):
+        rep = {}
+    if not fingerprint or rep.get("fingerprint") != fingerprint:
+        log.info("[set_builder] measuring the staged scene (collisions, Max's size, camera motion, textures, "
+                 "labels, flicker sources)")
+        if os.path.exists(qa_path):
+            os.remove(qa_path)
+        os.environ.setdefault("QA_STEP", "9")
+        runner = os.path.join(PROJECT_ROOT, "engine", "films", "cutaway_film.py")
+        try:
+            _run_blender([BLENDER, "--background", "--factory-startup", "--python", runner, "--",
+                          _film_file(set_id), os.path.join(work, "timings.json"), work, "--qa"])
+            rep = json.load(open(qa_path, encoding="utf-8"))
+        except (RuntimeError, OSError, ValueError) as exc:
+            log.warning(f"[set_builder] scene measurement failed ({str(exc)[-300:]}); vision review only")
+            return {}
+        rep["fingerprint"] = fingerprint
+        json.dump(rep, open(qa_path, "w", encoding="utf-8"), indent=1)
+    spans = json.load(open(os.path.join(work, "timings.json"), encoding="utf-8"))["beats"]
+    out = {}
+
+    def add(beat, text):
+        items = out.setdefault(beat, [])
+        if text not in items:
+            items.append(text)
+
+    for group in (rep.get("beats") or {}, rep.get("quality") or {}):
+        for label, items in group.items():
+            beat = 0 if label == "all" else int(label[:2])
+            for it in items:
+                text = it["issue"]
+                if text.startswith("collision:") and _HELD.search(text):
+                    continue
+                if text.startswith("collision:"):              # one line per pair of things, not per part
+                    head = text.split(" (")[0]
+                    if any(x.split(" (")[0] == head for x in out.get(beat, [])):
+                        continue
+                add(beat, text)
+    for pair, frame in (rep.get("objects") or {}).items():
+        beat = next((k + 1 for k, sp in enumerate(spans) if sp["start"] + 1 <= frame <= sp["end"] + 1), 0)
+        add(beat, f"object collision: {pair} intersect (move one, or add the pair to QA_ALLOW if they touch by design)")
+    return out
+
+
+def measure(set_id) -> dict:
+    """Stage a story set (no rendering) and return its measured problems {beat: [issue]} (CLI --measure:
+    the building agent runs this itself before it finishes)."""
+    work = os.path.join(PROJECT_ROOT, "output", "sets", set_id, "measure")
+    os.makedirs(work, exist_ok=True)
+    fake_timings(json.load(open(_film_file(set_id), encoding="utf-8")), os.path.join(work, "timings.json"))
+    for name in ("preview_manifest.json", "qa.json"):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    return qa_check(set_id, work)
+
+
+def _merge_qa(reports, qa):
+    """Measured problems reject a beat even when the vision review liked it (they are facts, not taste)."""
+    if not qa:
+        return reports
+    merged = []
+    for k, r in enumerate(reports):
+        issues = qa.get(r["beat"], []) + (qa.get(0, []) if k == 0 else [])
+        fatal = [f"measured: {x}" for x in issues if not _advisory(x)][:10]
+        advisory = [f"measured: {x}" for x in issues if _advisory(x)][:6]
+        if fatal or advisory:
+            r = {**r, "fatal_problems": fatal + list(r.get("fatal_problems") or []),
+                 "problems": advisory + list(r.get("problems") or []), "measured": len(fatal)}
+            if fatal:
+                r["valid"] = False
+        merged.append(r)
+    return merged
+
+
 def review_preview(set_id, work) -> list:
     """Review previews with a persistent image cache and batched turns on every backend."""
     import importlib
@@ -494,7 +693,10 @@ def review_preview(set_id, work) -> list:
                  (os.getenv("SCENE_REVIEW_CLI_MODEL") or os.getenv("SHOWRUNNER_CLI_MODEL") or "opus"))
         meta = {"cache_version": 2, "window": w, "subject": getattr(spec, "SUBJECT", set_id),
                 "backend": review_backend, "model": model, "review_width": sv.REVIEW_W,
-                "jpeg_quality": sv.REVIEW_JPEG_QUALITY, "min_score": sv.min_score()}
+                "jpeg_quality": sv.REVIEW_JPEG_QUALITY, "min_score": sv.min_score(),
+                # a stricter (or otherwise changed) review rubric must not reuse old verdicts
+                "rubric": hashlib.sha256(sv._instructions(w, getattr(spec, "SUBJECT", set_id), previous)
+                                         .encode("utf-8")).hexdigest()}
         h = hashlib.sha256(json.dumps(meta, sort_keys=True).encode("utf-8"))
         for path in ([previous] if previous else []) + [p for _, p in images]:
             with open(path, "rb") as fh:
@@ -556,6 +758,7 @@ def review_preview(set_id, work) -> list:
             reports.append({**w, **result, "images": [p for _, p in images]})
 
     reports.sort(key=lambda r: r["window"])
+    reports = _merge_qa(reports, qa_check(set_id, work))
     for r in reports:
         problems = r.get("fatal_problems") or r.get("problems") or [r.get("reason", "review unavailable")]
         log.info(f"[set_builder] beat {r['beat']:02d} [{r['action']}] "
@@ -612,7 +815,15 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
     else:
         log.info(f"[set_builder] '{set_id}' already exists: checking and improving it")
     status = {"set": set_id, "accepted": False, "rounds": 0, "work": work}
-    for rnd in range(1, rounds + 1):
+    # Keep fixing past `rounds` while it still improves (patience: rounds without a new best), up to a cap.
+    # A round that accepts fewer beats than the best draft is rolled back to that draft before fixing.
+    max_rounds = max(rounds, int(os.getenv("SET_BUILD_MAX_ROUNDS") or "8"))
+    patience = int(os.getenv("SET_BUILD_PATIENCE") or "2")
+    best, best_reports, stale = -1, None, 0
+    best_dir = os.path.join(work, "best_draft")
+    rnd = 0
+    while rnd < max_rounds:
+        rnd += 1
         status["rounds"] = rnd
         errs = static_checks(set_id, story=story)
         if errs:
@@ -639,12 +850,40 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
             log.info(f"[set_builder] ACCEPTED: '{set_id}' is registered. Make a video with:\n"
                      f"  python main.py --source {source} --set {set_id}")
             return status
-        if rnd < rounds:
-            fix_scenes(set_id, rejected, allowed=files)
+        accepted = len(reports) - len(rejected)
+        if accepted > best:
+            best, best_reports, stale = accepted, reports, 0
+            _snapshot(files, best_dir)
+        else:
+            stale += 1
+            if accepted < best:
+                log.info(f"[set_builder] round {rnd}: worse than the best draft ({best} accepted); rolling back")
+                _restore(files, best_dir)
+                reports = best_reports
+                rejected = [r for r in reports if not r.get("valid")]
+        if rnd >= rounds and stale >= patience:
+            break
+        if rnd < max_rounds:
+            fix_scenes(set_id, rejected, allowed=files,
+                       keep=[r["action"] for r in reports if r.get("valid")])
     status["contact_sheet"] = os.path.join(work, f"contact_round{status['rounds']}.png")
-    log.warning(f"[set_builder] NOT accepted after {rounds} rounds: '{set_id}' stays a draft (not registered). "
+    log.warning(f"[set_builder] NOT accepted after {status['rounds']} rounds: '{set_id}' stays a draft (not registered). "
                 f"See {os.path.join(work, 'build_review.json')}; run again to continue improving it.")
     return status
+
+
+def _snapshot(files, folder):
+    for relative in files:
+        dst = os.path.join(folder, relative)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(os.path.join(PROJECT_ROOT, relative), dst)
+
+
+def _restore(files, folder):
+    for relative in files:
+        src = os.path.join(folder, relative)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(PROJECT_ROOT, relative))
 
 
 def build_story_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
@@ -661,7 +900,13 @@ def main():
     ap.add_argument("--story", action="store_true", help="build a Max cutaway story instead of evolution")
     ap.add_argument("--fix", default=None, help="fix an existing set from a scene_review.json (with --report)")
     ap.add_argument("--report", default=None, help="scene_review.json whose rejected windows to fix")
+    ap.add_argument("--measure", default=None, help="print the measured quality problems of a story set")
     a = ap.parse_args()
+    if a.measure:
+        found = measure(a.measure)
+        lines = [f"beat {b:02d}: {x}" if b else f"whole set: {x}" for b, xs in sorted(found.items()) for x in xs]
+        print("\n".join(lines) or "no measured problems")
+        return
     if a.fix:
         rep = json.load(open(a.report, encoding="utf-8"))
         rejected = [w for w in rep.get("windows", rep) if not w.get("valid")]

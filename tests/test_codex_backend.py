@@ -57,6 +57,22 @@ class CodexCliTests(unittest.TestCase):
             self.assertEqual(codex_cli.run("again", model="gpt-5.6-sol")[0], "done")
         self.assertEqual(attempted, ["gpt-5.6-sol", "gpt-6.1-sol", "gpt-6.1-sol"])
 
+    def test_a_file_read_by_the_agent_is_not_mistaken_for_a_usage_limit(self):
+        file_text = "# frame rate limit: render at the usage plan rate until reset\nscene.frame_end = 10"
+        stdout = "\n".join([
+            json.dumps({"type": "item.completed", "item": {"type": "command_execution",
+                                                           "aggregated_output": file_text}}),
+            json.dumps({"type": "turn.failed", "error": {"message": "stream disconnected before completion"}}),
+        ])
+        with patch.object(codex_cli.shutil, "which", return_value="codex"), \
+                patch.object(codex_cli.subprocess, "run",
+                             return_value=subprocess.CompletedProcess(["codex"], 1, stdout, "")):
+            with self.assertRaises(RuntimeError) as ctx:
+                codex_cli.run("build")
+        self.assertIn("stream disconnected", str(ctx.exception))
+        self.assertNotIn("frame rate limit", str(ctx.exception))
+        self.assertFalse(showrunner.codex_unavailable(ctx.exception))
+
     def test_explicit_cwd_is_sent_to_codex_as_the_sandbox_root(self):
         seen = {}
         root = tempfile.mkdtemp()
@@ -78,17 +94,22 @@ class CodexCliTests(unittest.TestCase):
 
         def fake_run(cmd, **kwargs):
             seen.append(cmd)
+            if cmd[0] == "icacls":
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
             with open(cmd[cmd.index("--output-last-message") + 1], "w", encoding="utf-8") as fh:
                 fh.write("done")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
+        root = tempfile.mkdtemp()
         with patch.object(codex_cli.shutil, "which", return_value="codex"), \
                 patch.object(codex_cli.subprocess, "run", side_effect=fake_run), \
                 patch.object(codex_cli.os, "name", "nt"):
-            codex_cli.run("write", cwd=tempfile.mkdtemp(), sandbox="workspace-write")
+            codex_cli.run("write", cwd=root, sandbox="workspace-write")
             codex_cli.run("read")
-        self.assertIn('windows.sandbox="elevated"', seen[0])
-        self.assertFalse(any("windows.sandbox" in a for a in seen[1]))
+        grant, write, read = seen
+        self.assertEqual(grant[:3], ["icacls", os.path.abspath(root), "/grant"])   # we can read its files
+        self.assertIn('windows.sandbox="elevated"', write)
+        self.assertFalse(any("windows.sandbox" in a for a in read))
 
     def test_showrunner_dispatches_to_codex(self):
         with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
