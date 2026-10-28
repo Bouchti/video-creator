@@ -304,7 +304,7 @@ class ExtrasAndLastRevisionTests(unittest.TestCase):
             self.assertIn("Also on screen (use it for jokes): the rubber duck rides the wave",
                           showrunner._set_brief("boat_story"))
 
-    def test_a_retry_continues_from_the_newest_revision_and_its_notes(self):
+    def test_a_retry_continues_from_the_better_revision_and_its_notes(self):
         scores = ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy", "pacing", "visual_sync",
                   "learn")
         old = {"scores": {k: 6 for k in scores}, "problems": ["old notes"]}
@@ -316,6 +316,20 @@ class ExtrasAndLastRevisionTests(unittest.TestCase):
             script, _problems, review = showrunner._last_rejected(topic)
         self.assertEqual(script["title"], "newest")
         self.assertEqual(review["problems"], ["new notes"])
+
+    def test_a_retry_does_not_resume_from_a_newest_revision_that_regressed(self):
+        scores = ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy", "pacing", "visual_sync",
+                  "learn")
+        best = {"scores": {k: 7 for k in scores}, "problems": ["best notes"]}
+        regressed = {"scores": {k: 6 for k in scores}, "problems": ["new but worse notes"]}
+        topic = {"set": "pool", "title": "T"}
+        with patch.object(showrunner, "FILMS_DIR", tempfile.mkdtemp()), \
+                patch.object(showrunner, "hard_checks", return_value=[]):
+            showrunner._keep_rejected(
+                topic, {"title": "best"}, best, [], last=({"title": "newest"}, [], regressed))
+            script, _problems, review = showrunner._last_rejected(topic)
+        self.assertEqual(script["title"], "best")
+        self.assertEqual(review["problems"], ["best notes"])
 
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})

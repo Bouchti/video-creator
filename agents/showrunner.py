@@ -97,10 +97,12 @@ The format is TRIAL AND ERROR:
   physical reason in one plain sentence, the FIX is the real engineering solution and says why it
   works, and the next attempt reveals the next problem. Every failure is a true lesson and every
   fix answers exactly that failure. Make cause and effect explicit ("because", "so", "but").
-- THE HERO: endearing and overconfident, never stupid: we laugh WITH him. The comedy is his
-  confidence colliding with physics: deadpan understatement, famous last words ("What could go
-  wrong?"), escalating disasters, a running gag (counting the fails, the kids waiting with towels),
-  and a callback at the end. Short punchy sentences, contractions, fragments, timing.
+- THE HERO: endearing and overconfident, never stupid: we laugh WITH him. Max actively chooses each
+  approach, and every failure beat gives him a distinct confidence setup before physics answers it:
+  a short, natural sentence such as "Max called it bulletproof" or "Max said the river couldn't rise
+  higher." Never repeat one catchphrase or use a cryptic boast fragment. Props and running gags can
+  support the joke, but they cannot replace Max's personality. Escalate his confidence and disasters,
+  then pay both off at the end. Short punchy sentences, contractions, timing.
 - CONCRETE: real numbers people can picture (tons, metres, litres, hours), only from the model
   facts or the fact sheet.
 - EVERY LINE INFORMS: each sentence either moves the story or explains something real. No score,
@@ -1076,8 +1078,8 @@ def _keep_rejected(topic, script, review, problems, last=None):
         with open(path, "w", encoding="utf-8") as fh:
             json.dump({"set": topic.get("set"), "title": topic.get("title"), "script": script, "review": review,
                        "hard_problems": problems,
-                       # the newest revision and ITS notes: a retry continues from here (continuing from the
-                       # best-ranked script reused stale notes and repeated the same revision)
+                       # Keep the newest revision with ITS notes. A retry compares it with the best candidate:
+                       # use fresh notes when it improved, without resuming from it when it regressed.
                        "last": {"script": last[0], "review": last[2]} if last else None},
                       fh, indent=1, ensure_ascii=False)
         log.info(f"[showrunner] rejected script and editor notes kept: {path}")
@@ -1086,7 +1088,12 @@ def _keep_rejected(topic, script, review, problems, last=None):
 
 
 def _last_rejected(topic):
-    """(script, hard problems, review) of the newest kept script for this same set and title, if any."""
+    """Best saved (script, hard problems, review) for this same set and title, if any.
+
+    Each rejection file keeps both the best candidate from the attempt and its newest revision. The
+    newest one owns the freshest notes, but it is not automatically the best starting point: a
+    revision can regress. Compare both with the same ranking used during development.
+    """
     folder = os.path.join(FILMS_DIR, "_rejected")
     try:
         names = sorted((n for n in os.listdir(folder) if n.endswith(".json")), reverse=True)
@@ -1103,7 +1110,8 @@ def _last_rejected(topic):
                 return best
             last = d.get("last") or {}
             if last.get("review"):
-                return last["script"], hard_checks(last["script"], topic["set"]), last["review"]
+                newest = (last["script"], hard_checks(last["script"], topic["set"]), last["review"])
+                return max((best, newest), key=lambda candidate: _rank(candidate[2], candidate[1]))
             return best
     return None
 
