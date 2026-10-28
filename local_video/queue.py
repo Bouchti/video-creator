@@ -27,7 +27,8 @@ from .keyframes import prepare_keyframes, usable_keyframe
 from .config import PipelineConfig, resolve_within
 from .models import ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
 from .planner import (
-    MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, continuation_source, framing_scale, payoff_of, reseed,
+    MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, _continuity, construct_prompt, continuation_source, framing_for, framing_scale, payoff_of,
+    reseed, shot_objects,
 )
 from .project import load_project
 from .preflight import run_preflight
@@ -91,6 +92,46 @@ class FileLock(AbstractContextManager):
         except OSError:
             return False
 
+    @staticmethod
+    def _created_at(pid: int) -> float | None:
+        """Unix time the process started, or None when it cannot be read."""
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            kernel32.GetProcessTimes.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                times = [wintypes.FILETIME() for _ in range(4)]
+                if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                    return None
+                ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                return (ticks - 116444736000000000) / 1e7
+            finally:
+                kernel32.CloseHandle(handle)
+        try:
+            import psutil
+            return psutil.Process(pid).create_time()
+        except Exception:
+            return None
+
+    @classmethod
+    def _owner_alive(cls, pid: int, started: float) -> bool:
+        if not cls._alive(pid):
+            return False
+        # The owner wrote the lock after it started. A process with that pid that started
+        # later is a different program that reused the number (typically after a reboot).
+        created = cls._created_at(pid)
+        return not (created is not None and started and created > started + 1)
+
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -99,9 +140,10 @@ class FileLock(AbstractContextManager):
             try:
                 owner = json.loads(self.path.read_text(encoding="utf-8"))
                 pid = int(owner.get("pid") or 0)
-            except (OSError, ValueError, TypeError):
-                pid = 0
-            if self._alive(pid):
+                started = float(owner.get("started") or 0)
+            except (OSError, ValueError, TypeError, AttributeError):
+                pid, started = 0, 0.0
+            if self._owner_alive(pid, started):
                 raise QueueBusyError(f"The GPU queue is already owned by process {pid}")
             try:
                 self.path.unlink()
@@ -157,26 +199,35 @@ def _prompt_for_backend(shot, backend: str):
     return shot
 
 
+def _rebuilt_prompt(shot, description: str, camera: str) -> str:
+    """A fresh H3 prompt for this shot around a new description, from the fields the shot keeps."""
+    return construct_prompt(
+        subject_action=description,
+        camera_action=camera,
+        ambience=shot.ambience,
+        continuity=shot.continuity or {},
+        framing=framing_for(shot.subject_action, camera),
+        backend="wan" if WAN_SUFFIX in shot.prompt else "minimax",
+        cast_names=list(shot.cast) or None,
+        light=shot.light,
+        handoff=payoff_of(shot.subject_action),
+    )
+
+
 def _retake_prompt(shot, correction: str, has_reference: bool) -> str:
-    """Prioritize visible story progression when retrying a short generated clip."""
-    payoff = payoff_of(shot.subject_action)
-    reference_direction = (
-        "The supplied image is the clip's first frame. Start from it, keep its character, equipment, "
-        "lighting, and geography, and move on to the new action within the first second. Do not replay or "
-        "linger on the previous shot's action."
-        if has_reference else
-        "Establish the current beat immediately; do not add an earlier setup or unrelated establishing shot."
-    )
-    return (
-        "DIRECTOR'S RETAKE — ADVANCE THE STORY IN THIS THREE-SECOND CLIP.\n"
-        f"CURRENT BEAT: {shot.subject_action}\n"
-        f"REQUIRED END-FRAME PAYOFF: {payoff}\n"
-        f"CAMERA: {shot.camera_action}. Use one continuous physical move toward the payoff.\n"
-        f"CONTINUITY IMAGE RULE: {reference_direction}\n"
-        "Keep one protagonist, one location, and stable anatomy. Spend the clip on the new event, not on setup.\n"
-        f"APPLY THIS PRIOR REVIEW NOTE ONLY WHERE IT SUPPORTS THE CURRENT BEAT: {correction[:900]}\n\n"
-        + shot.prompt
-    )
+    """The next take: the reviewer's corrected description of the shot, as a clean H3 prompt.
+
+    Retakes used to stack orders ("DIRECTOR'S RETAKE", the review note, then the whole first
+    prompt) into 1,000+ words that still carried the wording behind the defect; later takes
+    passed no more often than first ones (31% against 28%). The reviewer's revision_prompt is
+    already a positive description written for the generator, so it replaces the beat text; the
+    beat's own end state stays the target. `has_reference` is applied by the backend, which
+    marks the supplied first frame.
+    """
+    correction = correction.strip()
+    # A short note ("Keep the regulator visible.") amends the beat; a full description replaces it.
+    description = correction if len(correction) >= 60 else f"{shot.subject_action} {correction}".strip()
+    return _rebuilt_prompt(shot, description, shot.camera_action)
 
 
 def _repair_prompt(shot) -> str:
@@ -187,15 +238,10 @@ def _repair_prompt(shot) -> str:
     pulled back to a wide aerial on all six takes. A locked-off view of the payoff is the one
     thing it renders reliably, and the narration still carries the beat.
     """
-    payoff = payoff_of(shot.subject_action)
-    prompt = shot.prompt.replace(shot.camera_action, "locked-off static camera") if shot.camera_action else shot.prompt
-    return (
-        "SIMPLE HELD SHOT. One unbroken view held from the first frame to the last.\n"
-        f"THE FRAME SHOWS: {payoff}\n"
-        "CAMERA: locked off on a tripod. The framing, distance and angle stay exactly the same in "
-        "every frame. The only motion is natural motion inside the scene, such as water, smoke, "
-        "steam, cloud or light.\n\n" + prompt
-    )
+    held = (f"{payoff_of(shot.subject_action)} The framing, distance and angle stay exactly the same "
+            "in every frame; the only motion is natural motion inside the scene, such as water, "
+            "smoke, steam, cloud or light.")
+    return _rebuilt_prompt(shot, held, "locked-off static camera")
 
 
 def _is_infrastructure_failure(exc: Exception) -> bool:
@@ -278,6 +324,7 @@ class QueueRunner:
         return continuation_source(
             [(s.scene.lower(), s.light.lower()) for s in manifest.shots], index, [s.cast for s in manifest.shots],
             [framing_scale(s.subject_action) for s in manifest.shots],
+            [shot_objects(manifest.script, s.continuity) for s in manifest.shots],
         )
 
     def _reference_for(self, manifest: ProjectManifest, index: int) -> Path | None:
@@ -319,11 +366,7 @@ class QueueRunner:
             review = (prior.get("validation") or {}).get("semantic_review") or {}
             correction = str(review.get("revision_prompt") or "").strip()
             if not correction and not review.get("valid", True):
-                correction = (
-                    f"Render the assigned current action exactly: {shot.subject_action}. "
-                    f"Use {shot.camera_action}. Preserve the required start and end states, one continuous take, "
-                    "one protagonist, stable anatomy and identity."
-                )
+                correction = shot.subject_action
             if correction and not review.get("valid", True):
                 revision_notes.append((float(review.get("average_score") or 0), correction[:1200]))
         for attempt_index in range(maximum_attempts):
@@ -792,6 +835,32 @@ class QueueRunner:
         manifest.save()
         return target
 
+    @staticmethod
+    def _upgrade_prompts(manifest: ProjectManifest) -> None:
+        """Give a project planned before prompts followed H3's layout the new prompt on resume.
+
+        Done for every unfinished shot before anything renders: the next shot's early render reads
+        its stored prompt, so upgrading shot by shot let each one's first take go out in the old
+        wording.
+        """
+        beats = manifest.script.get("beats") if isinstance(manifest.script.get("beats"), list) else []
+        upgraded = []
+        for shot in manifest.shots:
+            if shot.status == "accepted" or not shot.subject_action:
+                continue
+            if len(beats) == len(manifest.shots):
+                # The world lock saved at planning time predates the per-scene filters: a resumed
+                # shore shot still carried "Open Pacific sea: a tropical ocean seen from a
+                # palm-lined beach", drew it, and its reviewer judged it against it.
+                shot.continuity = _continuity(manifest.script, manifest.visual_style, manifest.concept, shot.index)
+            prompt = _rebuilt_prompt(shot, shot.subject_action, shot.camera_action)
+            if prompt != shot.prompt:
+                shot.prompt = prompt
+                upgraded.append(shot.id)
+        if upgraded:
+            manifest.record("shot_prompts_upgraded", shots=upgraded)
+            manifest.save()
+
     def _prepare_minimax(self, manifest: ProjectManifest) -> None:
         """Start FreeVideo when MiniMax is wanted, and never fall back to Wan silently."""
         if "minimax" not in self._backend_sequence(manifest) or not isinstance(self.backends.get("minimax"), MiniMaxAdapter):
@@ -898,6 +967,7 @@ class QueueRunner:
         lock_path = self.config.output_root / ".gpu-generation.lock"
         with FileLock(lock_path):
             self._silence_accepted_clips(manifest)
+            self._upgrade_prompts(manifest)
             # Start FreeVideo before preflight checks the backends: a stopped server is not a
             # missing one. A missing model or a failed/too-long voiceover stops the run before GPU work.
             try:

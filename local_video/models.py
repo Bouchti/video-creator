@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
@@ -17,6 +18,22 @@ SCHEMA_VERSION = 1
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _replace_with_retry(source: str, target: Path, attempts: int = 20, delay: float = 0.25) -> None:
+    """os.replace, retried while another process briefly holds the target open.
+
+    On Windows a rename over a file fails with "Access is denied" while any reader (a
+    `status` call, an editor, antivirus, the search indexer) has it open; that hold lasts
+    milliseconds, so a manifest save must wait it out instead of crashing a long run."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 class ProjectState(str, Enum):
@@ -139,7 +156,7 @@ class ProjectManifest:
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, target)
+            _replace_with_retry(temporary, target)
         except Exception:
             try:
                 os.unlink(temporary)

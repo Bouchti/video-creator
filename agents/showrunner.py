@@ -764,7 +764,8 @@ def _rules(set_id):
     outros = ", ".join(k for k, v in sp.ACTIONS.items() if v["kind"] == "outro")
     fails = [k for k, v in sp.ACTIONS.items() if v["kind"] == "fail"]
     max_group = 3 if fails else 4
-    ladder = (f"\n- The fail_* actions are the hero's failures ({', '.join(fails)}): give each its own beat, name the"
+    who = "the hero's failures" if getattr(sp, "HERO", None) else "the design's failures"
+    ladder = (f"\n- The fail_* actions are {who} ({', '.join(fails)}): give each its own beat, name the"
               f"\n  real cause, and make the NEXT beat the fix that answers it. Never use stickers for fail counts,"
               f"\n  scores or attempts (no 'Fail #', no scoreboards).") if fails else ""
     lo, hi = word_budget(set_id)

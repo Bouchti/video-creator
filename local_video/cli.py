@@ -78,6 +78,21 @@ def _shot_selection(value: str | None) -> set[int] | None:
     return selected
 
 
+def _write_post_text(manifest) -> None:
+    """Write `final_post.txt` (TikTok / YouTube / Instagram text) next to a finished render.
+
+    main.py writes it only after its own run ends, so a run finished here (a resume after a
+    crash, a manual --redo) would otherwise have no post text. Never fails the command."""
+    final = Path(manifest.project_dir) / "final.mp4"
+    if manifest.state != ProjectState.COMPLETED.value or not manifest.script or not final.is_file():
+        return
+    try:
+        from agents.post_text import write
+        print(f"Post text: {write(manifest.script, str(final))}")
+    except Exception as exc:
+        print(f"WARNING: post text not written: {exc}", file=sys.stderr)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create and control durable local AI-video projects.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -157,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest = reset_shot(args.project, args.shot, config)
             manifest = QueueRunner(config, progress=_progress).run(manifest, shots={args.shot})
             _print_status(manifest)
+            _write_post_text(manifest)
             return 0 if manifest.shots[args.shot - 1].status == "accepted" else 1
         if args.command == "set-reference":
             manifest = set_reference_image(args.project, args.image, config)
@@ -200,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                 manifest = reset_shot(manifest.project_dir, number, config)
         manifest = QueueRunner(config, progress=_progress).run(manifest, shots=selection)
         _print_status(manifest)
+        _write_post_text(manifest)
         return 0 if manifest.state == ProjectState.COMPLETED.value else 1
     except (ValueError, FileNotFoundError, RuntimeError, QueueBusyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

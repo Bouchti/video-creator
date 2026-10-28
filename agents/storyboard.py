@@ -6,6 +6,10 @@ QA all work on it unchanged. No Blender code is written per video, and nothing h
 
     problems = validate(storyboard)        # [] = renderable
     set_id = compile_set(storyboard)       # writes engine/sets/<set_id>_spec.py and <set_id>.py
+
+A storyboard with "hero": false is a no-hero explainer (agents/explainer.py): the same ladder filmed
+with nobody in it, compiled into an explainer spec (FORMAT "explainer", no HERO) that the explainer
+writer and its build-up voice use.
 """
 import json
 import os
@@ -17,37 +21,63 @@ from engine.kit import vocab
 _ID = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
 
 S = {"type": "string"}
-SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "required": ["world", "subject", "title", "model_facts", "gag", "steps", "hooks"],
-    "properties": {
-        "world": {"type": "string", "enum": list(vocab.WORLDS)},
-        "subject": S,
-        "title": S,
-        "model_facts": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["name", "fact"],
-            "properties": {"name": S, "fact": S}}},
-        "gag": {"type": "string", "enum": list(vocab.GAGS)},
-        "steps": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False,
-            "required": ["id", "kind", "change", "event", "weather", "label"],
-            "properties": {"id": S, "kind": {"type": "string", "enum": list(vocab.STEP_KINDS)},
-                           "change": {"type": "string", "enum": list(vocab.CHANGES)},
-                           "event": {"type": "string", "enum": list(vocab.EVENTS)},
-                           "weather": {"type": "string", "enum": list(vocab.WEATHER)},
-                           "label": S}}},
-        "hooks": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["id", "step"],
-            "properties": {"id": S, "step": S}}},
-    },
-}
+
+
+def schema(world: str = vocab.WORLD) -> dict:
+    """The storyboard schema for one world: its changes, events and weather are the only choices."""
+    v = vocab.for_world(world)
+    return {
+        "type": "object", "additionalProperties": False,
+        "required": ["world", "subject", "title", "model_facts", "gag", "steps", "hooks"],
+        "properties": {
+            "world": {"type": "string", "enum": [world]},
+            "subject": S,
+            "title": S,
+            "model_facts": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False, "required": ["name", "fact"],
+                "properties": {"name": S, "fact": S}}},
+            "gag": {"type": "string", "enum": list(v.GAGS)},
+            "steps": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["id", "kind", "change", "event", "weather", "label"],
+                "properties": {"id": S, "kind": {"type": "string", "enum": list(v.STEP_KINDS)},
+                               "change": {"type": "string", "enum": list(v.CHANGES)},
+                               "event": {"type": "string", "enum": list(v.EVENTS)},
+                               "weather": {"type": "string", "enum": list(v.WEATHER)},
+                               "label": S}}},
+            "hooks": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False, "required": ["id", "step"],
+                "properties": {"id": S, "step": S}}},
+        },
+    }
+
+
+SCHEMA = schema()                       # the embankment's
+
+
+def has_hero(sb: dict) -> bool:
+    return sb.get("hero", True) is not False
+
+
+def world_vocab(sb: dict):
+    """The vocabulary of the storyboard's world, or None when the kit has no such world."""
+    if sb.get("world") not in vocab.worlds():
+        return None
+    try:
+        return vocab.for_world(sb["world"])
+    except ImportError:
+        return None
 
 
 def validate(sb: dict) -> list:
     """Every reason this storyboard could not be filmed as written (empty list = renderable)."""
     p = []
-    if sb.get("world") not in vocab.WORLDS:
-        p.append(f"world must be one of {vocab.WORLDS}")
+    if sb.get("hero", True) not in (True, False):
+        p.append("hero must be true (a Max story) or false (a no-hero explainer)")
+    v = world_vocab(sb)
+    if v is None:
+        return p + [f"world must be one of {vocab.worlds()}"]
+    calm, thing = v.CALM, v.THING
     steps = sb.get("steps") or []
     if not 5 <= len(steps) <= 11:
         p.append(f"{len(steps)} steps; a story has 5-11 (setup, fail/fix pairs, finale)")
@@ -57,51 +87,58 @@ def validate(sb: dict) -> list:
         p.append(f"ids must be snake_case 3-31 characters: {bad}")
     if len(set(ids)) != len(ids):
         p.append("every step and hook id must be unique (and not 'rewind')")
-    if steps and (steps[0].get("kind") != "setup" or steps[0].get("event") != "calm"):
-        p.append("the first step must be kind 'setup' with event 'calm' (the promise on a calm day)")
+    if has_hero(sb):
+        if steps and (steps[0].get("kind") != "setup" or steps[0].get("event") != calm):
+            p.append(f"the first step must be kind 'setup' with event '{calm}' (the promise on a calm day)")
+    elif steps and steps[0].get("kind") not in ("setup", "fail") or \
+            steps and steps[0].get("kind") == "setup" and steps[0].get("event") != calm:
+        # an explainer may open on the crudest build itself ("If you pile sand ..., you have a levee")
+        p.append(f"the first step must be the first fail (the crudest build) or a 'setup' with event '{calm}'")
+    if any(s.get("kind") == "setup" for s in steps[1:]):
+        p.append("only the first step can be a setup")
     if steps and steps[-1].get("kind") != "finale":
         p.append("the last step must be the finale")
     built, first_done, shape = set(), False, "flat"
     for k, s in enumerate(steps):
         kind, change, event = s.get("kind"), s.get("change"), s.get("event")
-        ev, ch = vocab.EVENTS.get(event), vocab.CHANGES.get(change)
+        ev, ch = v.EVENTS.get(event), v.CHANGES.get(change)
         where = f"step {k + 1} '{s.get('id')}'"
         if ev is None or ch is None:
             p.append(f"{where}: unknown change '{change}' or event '{event}'")
             continue
         if ch.get("first"):
             if first_done:
-                p.append(f"{where}: '{change}' builds the barrier and can only be the first build")
+                p.append(f"{where}: '{change}' builds the {thing} and can only be the first build")
             first_done = True
         elif change != "none" and not first_done:
-            p.append(f"{where}: '{change}' needs the barrier built first (sand_wall)")
+            p.append(f"{where}: '{change}' needs the {thing} built first ({v.FIRST_BUILD})")
         if change != "none" and change in built:
             p.append(f"{where}: '{change}' is already built")
         built.add(change)
         built.update(ch.get("adds", []))
         shape = ch.get("profile") or shape
-        allowed = vocab.EVENT_PROFILES.get(event)
+        allowed = v.EVENT_PROFILES.get(event)
         if allowed and shape not in allowed:
-            p.append(f"{where}: event '{event}' is built for a {' or '.join(allowed)} barrier, but it is {shape} here")
-        shape = {"seep_slump": "slumped", "overtop_scour": "gouged"}.get(event, shape)
+            p.append(f"{where}: event '{event}' is built for a {' or '.join(allowed)} {thing}, but it is {shape} here")
+        shape = ev.get("leaves") or shape
         missing = [n for n in ev.get("needs", []) if n not in built]
         if missing:
             p.append(f"{where}: event '{event}' needs {missing} built in this or an earlier step")
         if kind == "fail" and ev["outcome"] != "fail":
             p.append(f"{where}: a fail step needs a failing event, not '{event}'")
         if kind in ("fix", "finale") and ev["outcome"] != "hold":
-            p.append(f"{where}: a {kind} step needs an event where the barrier holds, not '{event}'")
+            p.append(f"{where}: a {kind} step needs an event where the {thing} holds, not '{event}'")
         if kind == "fix" and (k == 0 or steps[k - 1].get("kind") != "fail"):
             p.append(f"{where}: every fix answers the failure right before it")
         if kind == "fail" and (k + 1 >= len(steps) or steps[k + 1].get("kind") != "fix"):
             p.append(f"{where}: every failure is followed by the fix that answers it")
-        if kind in ("fail", "fix") and event in ("calm", "storm_holds"):
+        if kind in ("fail", "fix") and event in (calm, *v.FINALE_EVENTS):
             p.append(f"{where}: '{event}' only opens or closes the story")
-        if event != "calm" and not first_done:
-            p.append(f"{where}: nothing can happen to the barrier before it is built")
+        if event != calm and not first_done:
+            p.append(f"{where}: nothing can happen to the {thing} before it is built")
         label = s.get("label") or ""
-        if len(label) > vocab.LABEL_MAX:
-            p.append(f"{where}: label '{label}' is over {vocab.LABEL_MAX} characters")
+        if len(label) > v.LABEL_MAX:
+            p.append(f"{where}: label '{label}' is over {v.LABEL_MAX} characters")
         if kind in ("fail", "fix") and not label.strip():
             p.append(f"{where}: fail and fix steps name their idea in a short label")
     step_ids = {s.get("id"): s for s in steps}
@@ -124,23 +161,30 @@ def spec_source(sb: dict, set_id: str) -> str:
     what each event shows (never the planner's guess)."""
     actions = {}
     steps = {s["id"]: s for s in sb["steps"]}
-    gag = sb.get("gag") == "duck"
+    gag = sb.get("gag") not in (None, "none")
+    hero = has_hero(sb)
+    v = world_vocab(sb)
+
+    def must_see(event):                       # nobody to see in a no-hero explainer
+        return [n for n in v.EVENT_MUST_SEE[event] if hero or n != "Max"]
+
     for h in sb["hooks"]:
         s = steps[h["step"]]
-        ev = vocab.EVENTS[s["event"]]
+        ev = v.EVENTS[s["event"]]
         actions[h["id"]] = {"kind": "hook", "shows": f"The payoff moment first: {ev['shows']}.",
-                            "must_see": vocab.EVENT_MUST_SEE[s["event"]],
-                            "extras": vocab.GAG_DOES[s["event"]] if gag else "",
-                            "seconds": vocab.SECONDS["hook"], "replays": s["id"]}
+                            "must_see": must_see(s["event"]),
+                            "extras": v.GAG_DOES.get(s["event"], "") if gag else "",
+                            "seconds": v.SECONDS["hook"], "replays": s["id"]}
     actions["rewind"] = {"kind": "rewind", "shows": "Freeze frame, record scratch, the story plays BACKWARDS (VHS look) "
                                                     "to the calm day where it starts."}
     for s in sb["steps"]:
-        ev, ch = vocab.EVENTS[s["event"]], vocab.CHANGES[s["change"]]
-        shows = (f"{ch['does'][0].upper()}{ch['does'][1:]}. Then " if s["change"] != "none" else "") + ev["shows"] + "."
+        ev = v.EVENTS[s["event"]]
+        does = v.CHANGES[s["change"]]["does"] if hero else v.BUILT[s["change"]]
+        shows = (f"{does[0].upper()}{does[1:]}. Then " if s["change"] != "none" else "") + ev["shows"] + "."
         kind = {"setup": "story", "finale": "story"}.get(s["kind"], s["kind"])
-        actions[s["id"]] = {"kind": kind, "shows": shows, "must_see": vocab.EVENT_MUST_SEE[s["event"]],
-                            "extras": vocab.GAG_DOES[s["event"]] if gag else "",
-                            "seconds": vocab.SECONDS[s["kind"]], "label": (s.get("label") or "").upper()}
+        actions[s["id"]] = {"kind": kind, "shows": shows, "must_see": must_see(s["event"]),
+                            "extras": v.GAG_DOES.get(s["event"], "") if gag else "",
+                            "seconds": v.SECONDS[s["kind"]], "label": (s.get("label") or "").upper()}
     facts = {f["name"]: f["fact"] for f in sb.get("model_facts") or []}
     for s in sb["steps"]:
         if s.get("label"):
@@ -154,7 +198,7 @@ from engine.kit.spec_rules import make_rules
 SET_ID = {set_id!r}
 KIT = {sb["world"]!r}
 SUBJECT = {sb["subject"]!r}
-HERO = "Max"
+{'HERO = "Max"' if hero else 'FORMAT = "explainer"'}
 MODEL_FACTS = {json.dumps(facts, indent=4, ensure_ascii=False)}
 STORY_ORDER = {json.dumps(_names(sb))}
 ACTIONS = {json.dumps(actions, indent=4, ensure_ascii=False)}
@@ -168,36 +212,38 @@ beat_actions, min_seconds, validate = make_rules(ACTIONS, STORY_ORDER)
 
 def builder_source(sb: dict, set_id: str) -> str:
     cls = "".join(w.capitalize() for w in set_id.split("_")) + "Set"
+    module, world_cls = world_vocab(sb).WORLD_CLASS
     return f'''"""KIT SET {set_id}: staged entirely by the kit from its storyboard (generated; do not edit by hand)."""
 import json
 
-from engine.kit.embankment import EmbankmentSet
+from {module} import {world_cls}
 
 STORYBOARD = json.loads({json.dumps(json.dumps(sb, ensure_ascii=False))})
 
 
-class {cls}(EmbankmentSet):
+class {cls}({world_cls}):
     STORYBOARD = STORYBOARD
 '''
 
 
 def reference_film(sb: dict, set_id: str) -> dict:
     """A plain narration for previews and static checks (the showrunner writes the real script)."""
-    steps = {s["id"]: s for s in sb["steps"]}
+    hero = has_hero(sb)
+    v = world_vocab(sb)
+    lines = v.REFERENCE_LINES
     hook = sb["hooks"][0]
-    beats = [{"action": hook["id"], "text": "This is Max. His barrier just lost to the river.",
-              "overlay": {"type": "none"}},
-             {"action": "rewind", "text": "Let's rewind to a sunny day.", "overlay": {"type": "none"}}]
+    beats = [{"action": hook["id"], "text": lines["hook_hero" if hero else "hook"], "overlay": {"type": "none"}},
+             {"action": "rewind", "text": "Let's rewind to the start.", "overlay": {"type": "none"}}]
     for s in sb["steps"]:
-        ev = vocab.EVENTS[s["event"]]
+        ev = v.EVENTS[s["event"]]
         if s["kind"] == "setup":
-            text = "Max promised his kids a backyard that never floods. How hard could it be, really?"
+            text = lines["setup_hero" if hero else "setup"]
         elif s["kind"] == "finale":
-            text = "Now every fix works together, the river rises, and the yard stays dry. Which fix would you build?"
+            text = lines["finale"]
         elif s["kind"] == "fail":
-            text = f"The river rose and it failed, because {ev['teaches']}."
+            text = f"{lines['fail']} {ev['teaches']}."
         else:
-            text = f"So Max fixed it, and it held, because {ev['teaches']}."
+            text = f"So {'Max fixed it' if hero else 'the fix went in'}, and it held, because {ev['teaches']}."
         words = text.split()
         beats.append({"action": s["id"], "text": " ".join(words[:30]), "overlay": {"type": "none"}})
     if not beats[-1]["text"].endswith("?"):
@@ -208,7 +254,7 @@ def reference_film(sb: dict, set_id: str) -> dict:
 
 def set_id_for(sb: dict) -> str:
     base = re.sub(r"[^a-z0-9]+", "_", (sb.get("title") or sb.get("subject") or "story").lower()).strip("_")
-    return ("kit_" + base)[:40].rstrip("_") + "_story"
+    return ("kit_" + base)[:40].rstrip("_") + ("_story" if has_hero(sb) else "_explainer")
 
 
 def compile_set(sb: dict, set_id: str = None, root: str = None) -> str:

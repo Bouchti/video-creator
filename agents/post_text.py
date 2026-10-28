@@ -18,7 +18,7 @@ RULES = """Write the posting text for this short vertical video.
 - TikTok caption: line 1 is the funniest hook (at most ~70 characters, it shows before "more"),
   then 1-2 short lines on what happens and what the viewer learns, then the video's closing
   question on its own line. 1-3 fitting emojis. Then 5-6 hashtags: 2 searchable topic tags,
-  1-2 broad science/how-it-works tags, #learnontiktok, #fyp.
+  1-2 broad tags for the video's field (#science, #history, ...), #learnontiktok, #fyp.
 - Cover: which moment of the first 2 seconds to use as the cover, and a cover text of at most
   6 words.
 - YouTube Shorts: a searchable title (a real question people type, then the hook, under 100
@@ -29,7 +29,7 @@ RULES = """Write the posting text for this short vertical video.
 - Instagram Reels: a caption whose first line is the hook (the first ~125 characters show before
   "more"), then 2-4 short lines that tell the story and the most surprising fact (with its number),
   line breaks between ideas, 2-4 emojis, then the closing question on its own line. Then 8-12
-  hashtags mixing broad (#science, #engineering), topic and niche tags (no #fyp, no #learnontiktok).
+  hashtags mixing broad tags for the video's field (#science, #history, ...), topic and niche tags (no #fyp, no #learnontiktok).
   Plus an alt text: one plain sentence describing what is seen in the video, for accessibility.
 - Never ask people to like, comment, follow or subscribe: end on the question only.
 - Only facts that are in the script or the fact sheet. Plain text, no markdown headers."""
@@ -72,7 +72,11 @@ def _normalise(film):
     meta = dict(value.get("meta") or {})
     meta.setdefault("caption", value.get("description", ""))
     meta.setdefault("hashtags", value.get("hashtags", []))
-    meta.setdefault("facts", value.get("fact_sheet", value.get("research_summary", "")))
+    facts = value.get("fact_sheet") or value.get("research_summary") or ""
+    if not facts and value.get("research_sources"):         # main pipeline: the evidence it was checked against
+        facts = "\n\n".join(f"{s.get('title', '')}: {s.get('evidence', '')[:1200]}"
+                            for s in value["research_sources"] if isinstance(s, dict))
+    meta.setdefault("facts", facts)
     value["meta"] = meta
     if not value.get("cta") and value.get("beats"):
         last = value["beats"][-1].get("text", "")

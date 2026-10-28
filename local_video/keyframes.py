@@ -24,7 +24,7 @@ import requests
 from .comfy import ComfyClient, ComfyError
 from .config import PipelineConfig, env_int
 from .models import ProjectManifest, Shot
-from .planner import PHOTO_LOOK, continuation_source, framing_for, framing_scale
+from .planner import PHOTO_LOOK, continuation_source, framing_for, framing_scale, shot_objects
 
 log = logging.getLogger("pipeline")
 
@@ -72,12 +72,13 @@ def fresh_openings(manifest: ProjectManifest) -> list[int]:
     labels = [(s.scene.lower(), s.light.lower()) for s in manifest.shots]
     casts = [s.cast for s in manifest.shots]
     scales = [framing_scale(s.subject_action) for s in manifest.shots]
+    objects = [shot_objects(manifest.script, s.continuity) for s in manifest.shots]
     indices = []
     for index, shot in enumerate(manifest.shots):
         if index == 0:
             if not manifest.reference_image:
                 indices.append(index)
-        elif shot.scene and continuation_source(labels, index, casts, scales) is None:
+        elif shot.scene and continuation_source(labels, index, casts, scales, objects) is None:
             indices.append(index)
     return indices
 
@@ -118,7 +119,7 @@ def keyframe_prompt(shot: Shot) -> str:
     """
     continuity = shot.continuity or {}
     light = shot.light or continuity.get("time_of_day")
-    parts = [f"Photograph, {framing_for(shot.subject_action)}"]
+    parts = [f"Photograph, {framing_for(shot.subject_action, shot.camera_action)}"]
     if light:
         parts.append(f"Light and sky in every part of the frame: {light}")
     parts.append(f"Subject: {shot.subject_action}")

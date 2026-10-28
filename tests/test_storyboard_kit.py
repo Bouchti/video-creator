@@ -61,6 +61,33 @@ class CompileTests(unittest.TestCase):
         builder = open(os.path.join(root, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
         self.assertIn("class KitTestStorySet(EmbankmentSet)", builder)
 
+    def test_a_no_hero_storyboard_compiles_into_an_explainer_set(self):
+        root = tempfile.mkdtemp()
+        for d in ("engine/sets", "engine/films"):
+            os.makedirs(os.path.join(root, d))
+        explainer = dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:]), hero=False)
+        self.assertEqual(sbm.validate(explainer), [])           # opens on the crudest build, no setup step
+        set_id = sbm.compile_set(explainer, root=root)
+        self.assertTrue(set_id.startswith("kit_") and set_id.endswith("_explainer"), set_id)
+        ns = {}
+        exec(compile(open(os.path.join(root, "engine", "sets", f"{set_id}_spec.py"), encoding="utf-8").read(),
+                     "spec", "exec"), ns)
+        self.assertEqual((ns["KIT"], ns["FORMAT"]), ("embankment", "explainer"))
+        self.assertNotIn("HERO", ns)
+        for a, v in ns["ACTIONS"].items():
+            self.assertNotIn("Max", v.get("shows", "") + " ".join(v.get("must_see", [])), a)
+        film = json.load(open(os.path.join(root, "engine", "films", f"{set_id}.json"), encoding="utf-8"))
+        self.assertEqual(ns["validate"](film["beats"]), [])
+        self.assertNotIn("Max", " ".join(b["text"] for b in film["beats"]))
+        builder = open(os.path.join(root, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
+        self.assertIn("(EmbankmentSet)", builder)
+        self.assertIn('\\"hero\\": false', builder)
+
+    def test_only_an_explainer_may_skip_the_calm_setup(self):
+        no_setup = dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:]))
+        self.assertTrue(any("first step must be kind 'setup'" in p for p in sbm.validate(no_setup)))
+        self.assertEqual(sbm.validate(dict(sbm.LEVEE, hero=False)), [])      # a calm opening is still allowed
+
     def test_an_invalid_storyboard_is_never_compiled(self):
         bad = dict(sbm.LEVEE, steps=sbm.LEVEE["steps"][:2])
         with self.assertRaises(ValueError):
@@ -98,6 +125,21 @@ class PlannerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             kit_planner.plan_kit_story(call=call)
 
+    def test_an_explainer_plan_is_the_same_storyboard_without_the_hero(self):
+        seen = {}
+
+        def call(system, prompt, schema, effort="high", tools=None):
+            seen.update(system=system, prompt=prompt, schema=schema)
+            return self._plan(dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:])))
+        plan = kit_planner.plan_kit_explainer(angle="how levees hold back a flood", call=call)
+        self.assertIs(plan["storyboard"]["hero"], False)        # set by the route, never by the model
+        self.assertTrue(plan["set_id"].endswith("_explainer"))
+        self.assertEqual(seen["schema"], kit_planner.PLAN_SCHEMA)
+        self.assertIn("how levees hold back a flood", seen["prompt"])
+        self.assertIn("NO hero", seen["prompt"])
+        self.assertNotIn("Max shovels", seen["prompt"])
+        self.assertNotIn("TRIAL AND ERROR", seen["system"])
+
 
 class BuildKitSetTests(unittest.TestCase):
     def setUp(self):
@@ -121,6 +163,16 @@ class BuildKitSetTests(unittest.TestCase):
             status = sb.build_kit_set({"storyboard": sbm.LEVEE, "set_id": "kit_x_story"})
         self.assertTrue(status["accepted"])
         self.assertIn('"kit_x_story"', open(os.path.join(self.root, "engine", "sets", "__init__.py")).read())
+
+    def test_a_no_hero_storyboard_is_registered_as_an_explainer_not_a_max_story(self):
+        explainer = dict(copy.deepcopy(sbm.LEVEE), hero=False)
+        with patch.object(sb, "preview_render", return_value=""), patch.object(sb, "qa_check", return_value={}), \
+                patch.object(sb, "review_preview", return_value=[]):
+            status = sb.build_kit_set({"storyboard": explainer, "set_id": "kit_x_explainer"})
+        registry = open(os.path.join(self.root, "engine", "sets", "__init__.py")).read()
+        self.assertEqual(status["set"], "kit_x_explainer")
+        self.assertIn('EXPLAINER = ["kit_x_explainer"]', registry)
+        self.assertIn('AVAILABLE = ["boat_story"]', registry)
 
     def test_a_measured_defect_is_a_kit_bug_not_a_retry(self):
         with patch.object(sb, "preview_render", return_value=""), \

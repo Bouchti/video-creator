@@ -97,10 +97,11 @@ def validate(sp, beats) -> list:
     """The set's action rules without the hook / rewind opening: the build in order, explainers after
     their prerequisite, an outro only at the end."""
     errs = []
+    most = 1 if getattr(sp, "KIT", None) else 4          # the kit stages one step per beat
     for k, b in enumerate(beats):
         n = len(_beat_actions(sp, b))
-        if not 1 <= n <= 4:
-            errs.append(f"beat {k + 1} has {n} actions; 1-4 allowed")
+        if not 1 <= n <= most:
+            errs.append(f"beat {k + 1} has {n} actions; 1-{most} allowed")
     acts = [a for b in beats for a in _beat_actions(sp, b)]
     unknown = [a for a in acts if a not in sp.ACTIONS]
     if unknown:
@@ -131,13 +132,15 @@ def rules(set_id, words_per_second, budget) -> str:
     explain = "; ".join(f"{k} after {v['after']}" for k, v in sp.ACTIONS.items() if v.get("kind") == "explain")
     outros = ", ".join(k for k, v in sp.ACTIONS.items() if v.get("kind") == "outro")
     lo, hi = budget
+    montage = ("- Every beat plays exactly ONE action (no montages: each step is its own beat)." if getattr(sp, "KIT", None)
+               else '- A beat plays ONE action, or a quick MONTAGE of 2-4 consecutive actions ("actions": ["rebar",\n'
+                    '  "shotcrete"]) to race through steps that are not the point.')
     return f"""STRUCTURE RULES (the renderer enforces them):
 - No hook and no rewind. Beat 1 plays the first build action ({order[0] if order else 'the first step'}) and
   its narration starts with "If you" and says "you have a <thing>".
 - Then these build actions exactly once each, in this order: {' → '.join(order)}.
 - Optional explainer actions after their prerequisite: {explain or 'none'}.{(' Optional outro (last beat only): ' + outros + '.') if outros else ''}
-- A beat plays ONE action, or a quick MONTAGE of 2-4 consecutive actions ("actions": ["rebar",
-  "shotcrete"]) to race through steps that are not the point.
+{montage}
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
   {words_per_second} x 0.75 words. Beat 1 at most {OPEN_MAX_WORDS} words, every other beat at most {BEAT_MAX_WORDS}. 8-15 beats.
 - Word budget: aim for {hi - 37}-{hi - 12} words and count before returning; the hard range is {lo}-{hi}.

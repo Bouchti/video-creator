@@ -2,12 +2,59 @@
 The kit's vocabulary (pure data, no Blender): everything a storyboard may ask for. The planner can
 only combine these; the kit (engine/kit/embankment.py) implements and has been tested on each one.
 
+Every world has a vocabulary module with these same names (for_world below); generated worlds keep theirs
+in engine/kit/worlds/<world>_vocab.py.
+
 EMBANKMENT world: a cutaway riverbank seen from the front. Water on the left, Max's barrier in the
 middle, the protected yard (house, trampoline, kids) on the right, with a buried sand layer under it all.
 Fits levees, dikes, sea walls, flood berms and embankment dams.
 """
 
-WORLDS = ("embankment",)
+import importlib
+
+WORLD = "embankment"
+WORLD_CLASS = ("engine.kit.embankment", "EmbankmentSet")   # (module, class) that stages this world's storyboards
+FIRST_BUILD = "sand_wall"                                 # the change every ladder starts from
+THING = "barrier"                                         # what the ladder builds, in validator messages
+CALM = "calm"                                             # the event of the setup step (nothing happens yet)
+FINALE_EVENTS = ("storm_holds",)                          # events that only close the story
+# What the planner is told about the world (with Max / with no hero) and which news fits it.
+DESCRIPTION = """A cutaway riverbank seen from the front: a river on the left, the barrier Max builds in the middle, his
+yard (house, trampoline, two kids) on the right, and a buried sand layer under it all. It fits levees,
+dikes, flood walls, sea walls, flood berms and embankment dams. Max is a cheerful, overconfident DIY dad."""
+DESCRIPTION_NO_HERO = """A cutaway riverbank seen from the front: a river on the left, the barrier in the middle, a yard (house,
+trampoline, two kids for scale) on the right, and a buried sand layer under it all. It fits levees,
+dikes, flood walls, sea walls, flood berms and embankment dams. There is NO hero: nobody builds on
+screen, each part builds itself in physical order and the camera follows the mechanism."""
+NEWS = ("flood barriers (levees, dikes, flood walls, sea walls, embankment dams, flood season, a failure, an "
+        "audit, a record flood)")
+FITS = "levees, dikes, flood walls, sea walls, flood berms and embankment dams"
+# The plain narration of a world's reference film (previews and static checks only; "fail" is followed by
+# the event's "teaches").
+REFERENCE_LINES = {
+    "hook_hero": "This is Max. His barrier just lost to the river.",
+    "hook": "This barrier just lost to the river.",
+    "setup_hero": "Max promised his kids a backyard that never floods. How hard could it be, really?",
+    "setup": "A river, a backyard, and one job: keep the yard dry when the water rises.",
+    "fail": "The river rose and it failed, because",
+    "finale": "Now every fix works together, the river rises, and the yard stays dry. Which fix would you build?",
+}
+
+
+def worlds() -> tuple:
+    """Every world the kit can film: the embankment and each verified world in engine/kit/worlds."""
+    from engine.kit.worlds import REGISTERED
+    return (WORLD,) + tuple(w for w in REGISTERED if w != WORLD)
+
+
+def for_world(name: str):
+    """The vocabulary module of a world (this module for the embankment)."""
+    if name == WORLD:
+        return importlib.import_module(__name__)
+    return importlib.import_module(f"engine.kit.worlds.{name}_vocab")
+
+
+WORLDS = (WORLD,)                    # the hand-built worlds; worlds() adds the generated ones
 
 # Water levels (engine/kit/geometry.level): low/normal sit in the river bed, high/flood against the first wall's
 # height, "overtop" just above the barrier's CURRENT crest.
@@ -30,12 +77,23 @@ CHANGES = {
                      "adds": ["patch", "nestbox"]},
 }
 
+# The same changes in a no-hero explainer (storyboard "hero": false): the build happens with nobody building it.
+BUILT = {
+    "none": "nothing new is built",
+    "sand_wall": "a tall, steep wall of pure sand rises between the river and the yard",
+    "clay_core_widen": "a dark clay core grows inside the barrier and the barrier widens to gentle slopes",
+    "berm_wells": "a wide, low soil berm spreads on the yard side and relief wells drop in at its toe",
+    "raise_armor": "the crest rises well above the flood line, grass covers the slopes and rock riprap lines the "
+                   "river side",
+    "fill_burrows": "the burrow is packed shut and a nest box for the squirrel appears far from the barrier",
+}
+
 # What HAPPENS in a step's mechanism part. outcome: fail | hold. needs: changes that must already exist.
 EVENTS = {
     "calm": {"outcome": "hold", "level": "low", "shows": "a sunny day, a low river, the empty bank where the barrier "
                                                          "will stand",
              "focus": "site"},
-    "seep_slump": {"outcome": "fail", "level": "high",
+    "seep_slump": {"outcome": "fail", "level": "high", "leaves": "slumped",
                    "shows": "the river rises; blue flow arrows pass straight through the sand body; the yard-side "
                             "face darkens with water and slumps down",
                    "focus": "body", "teaches": "water flows easily through the big gaps between sand grains"},
@@ -51,7 +109,7 @@ EVENTS = {
                            "shows": "flow arrows still travel under, but the heavy berm presses the ground down and "
                                     "the relief wells let the water out calmly into a ditch",
                            "focus": "under", "teaches": "weight holds the ground down and wells release the pressure"},
-    "overtop_scour": {"outcome": "fail", "level": "overtop",
+    "overtop_scour": {"outcome": "fail", "level": "overtop", "leaves": "gouged",
                       "shows": "the river rises over the crest; a sheet of water pours down the yard-side slope and "
                                "scours a deep gouge into the bare soil",
                       "focus": "crest", "teaches": "water pouring over the top erodes bare soil from the back"},

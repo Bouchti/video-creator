@@ -19,9 +19,13 @@ Topic flow:
                   match means a new set is needed. Without an angle the showrunner scores every
                   unused explainer set against current trends.
   2. write        the showrunner researches, writes, critiques and saves the film JSON.
-  3. new set      when no registered set fits (or every one is used up), plan_new_set researches a
-                  fresh, trend-backed subject and returns a build brief; the autopilot has
-                  agents/set_builder build, preview, review and register it, then writes the video.
+  3. new set      when no registered set fits (or every one is used up), a new one is made the way
+                  Max stories are (SHOWRUNNER_SET_MODE=kit, the default): agents/kit_planner
+                  plan_kit_explainer plans a trend-backed STORYBOARD in the tested kit's vocabulary
+                  with "hero": false, and set_builder.build_kit_set compiles it, checks it with the
+                  measured gates and registers it in EXPLAINER. No Blender code is written per video.
+                  SHOWRUNNER_SET_MODE=agent keeps the old path: plan_new_set writes a build brief and
+                  an agent codes a new set.
 
   EXPLAINER_MAX_USES=1   videos per explainer set before it counts as used (raise it to film new
                          angles on an existing set; SHOWRUNNER_ALLOW_REPEATS=1 ignores the limit)
@@ -237,6 +241,12 @@ def main():
     a = ap.parse_args()
     chosen = choose_set(a.angle, a.set)
     if chosen is None:
+        if (os.getenv("SHOWRUNNER_SET_MODE") or "kit").strip().lower() == "kit":
+            from agents.kit_planner import plan_kit_explainer
+            print(json.dumps(plan_kit_explainer(angle=a.angle), indent=1, ensure_ascii=False))
+            print("No registered explainer set fits: run `python main.py --source explainer` to film this "
+                  "storyboard with the kit automatically.")
+            return
         print(json.dumps(plan_new_set(a.angle), indent=1, ensure_ascii=False))
         print("No registered explainer set fits: build it with "
               "`python -m agents.set_builder --explainer \"<build_brief>\" --id <set_id>` "

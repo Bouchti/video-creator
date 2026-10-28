@@ -63,7 +63,11 @@ def run_preflight(
             problems.append("Claude Code (`claude -p`, subscription login) is required for fail-closed visual QC")
 
     narration = str(manifest.script.get("spoken_script") or "")
-    if manifest.narration_enabled and narration.strip():
+    # A redo or resume reuses the rendered narration (QueueRunner._narration), so it needs no
+    # credits; checking anyway refused a six-shot redo once the keys ran low.
+    rendered = (Path(manifest.project_dir) / "audio" / "narration.mp3").is_file()
+    checks["narration_reused"] = rendered
+    if manifest.narration_enabled and narration.strip() and not rendered:
         keys = elevenlabs_keys()
         checks["elevenlabs_keys"] = len(keys)
         if not keys:

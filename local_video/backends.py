@@ -17,6 +17,7 @@ import requests
 from .comfy import ComfyClient
 from .config import PipelineConfig, minimum_clip_seconds, probe_model
 from .models import Shot
+from .planner import plain_description, with_first_frame
 
 
 @dataclass
@@ -117,7 +118,7 @@ class MiniMaxAdapter(BackendAdapter):
 
     def workflow(self, shot: Shot, reference_image: Path | None = None) -> dict[str, Any]:
         inputs: dict[str, Any] = {
-            "text": shot.prompt,
+            "text": with_first_frame(shot.prompt) if reference_image else shot.prompt,
             "width": self.config.minimax_width,
             "height": self.config.minimax_height,
             "seconds": self.clip_seconds(shot),
@@ -233,7 +234,7 @@ class WanAdapter(BackendAdapter):
                     inputs["text"] = shot.negative_prompt
                     negative_set = True
                 elif "positive" in title or not negative_set:
-                    inputs["text"] = shot.prompt
+                    inputs["text"] = plain_description(shot.prompt)
             elif class_type == "Wan22ImageToVideoLatent":
                 latent_id = node_id
                 inputs.update(width=self.config.wan_width, height=self.config.wan_height,

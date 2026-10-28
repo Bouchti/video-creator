@@ -218,12 +218,18 @@ MAX_CLIP_SPEEDUP = 1.25
 
 def speech_frames(
     words: list[dict[str, Any]], beat_texts: list[str], total_seconds: float, fps: int = 30,
+    longest: list[float] | None = None,
 ) -> list[int] | None:
     """Frame counts that cut to each beat's shot as its first word is spoken.
 
     The voice speeds up and slows down sentence by sentence, so equal-length shots drift:
     the melting pottery appeared over "Boudica watches". None when the voice cannot be aligned.
+    `longest` caps each shot at what its generated clip can fill; a shot timed past that froze
+    its last frame at the cut, so the cut moves off the word and a neighbour takes the time.
     """
+    limits = [MAX_SHOT_SECONDS] * len(beat_texts)
+    if longest and len(longest) == len(beat_texts):
+        limits = [min(MAX_SHOT_SECONDS, max(MIN_SHOT_SECONDS, value)) for value in longest]
     if len(beat_texts) < 2 or not words:
         return None
     tokens: list[str] = []
@@ -251,13 +257,30 @@ def speech_frames(
         cuts.append(float(words[heard[max(before)]]["end"]))
     cuts.append(float(total_seconds))
     for i in range(1, len(cuts) - 1):  # forward: keep the shot before within bounds
-        cuts[i] = min(max(cuts[i], cuts[i - 1] + MIN_SHOT_SECONDS), cuts[i - 1] + MAX_SHOT_SECONDS)
+        cuts[i] = min(max(cuts[i], cuts[i - 1] + MIN_SHOT_SECONDS), cuts[i - 1] + limits[i - 1])
     for i in range(len(cuts) - 2, 0, -1):  # backward: keep the shot after within bounds
-        cuts[i] = max(min(cuts[i], cuts[i + 1] - MIN_SHOT_SECONDS), cuts[i + 1] - MAX_SHOT_SECONDS)
-    if any(not MIN_SHOT_SECONDS - 1e-6 <= b - a <= MAX_SHOT_SECONDS + 1e-6 for a, b in zip(cuts, cuts[1:])):
-        return None
+        cuts[i] = max(min(cuts[i], cuts[i + 1] - MIN_SHOT_SECONDS), cuts[i + 1] - limits[i])
+    if any(not MIN_SHOT_SECONDS - 1e-6 <= b - a <= limit + 1e-6 for a, b, limit in zip(cuts, cuts[1:], limits)):
+        # The clips cannot cover the voice together: time to speech alone (a short freeze).
+        return speech_frames(words, beat_texts, total_seconds, fps) if longest else None
     marks = [round(cut * fps) for cut in cuts]
     return [b - a for a, b in zip(marks, marks[1:])]
+
+
+def clip_capacities(manifest: ProjectManifest) -> list[float] | None:
+    """Longest on-screen time each accepted clip fills without freezing its last frame.
+
+    Assembly slows a clip by up to MAX_CLIP_STRETCH and borrows the next transition from it.
+    None when any clip length is unknown (then timing follows the voice alone)."""
+    capacities = []
+    for index, shot in enumerate(manifest.shots):
+        raw = (shot.validation or {}).get("duration")
+        if not raw:
+            return None
+        transition = 0.0 if index == len(manifest.shots) - 1 else MAX_TRANSITION_SECONDS
+        # Rounded down to a whole frame so the stretched clip never ends one frame short.
+        capacities.append(int((float(raw) * MAX_CLIP_STRETCH - transition) * 30) / 30)
+    return capacities
 
 
 def fit_shots_to_speech(manifest: ProjectManifest, words: list[dict[str, Any]]) -> bool:
@@ -266,7 +289,7 @@ def fit_shots_to_speech(manifest: ProjectManifest, words: list[dict[str, Any]]) 
     if len(beats) != len(manifest.shots):
         return False
     frames = speech_frames(words, [str(b.get("text") or "") for b in beats],
-                           manifest.duration_seconds, manifest.fps)
+                           manifest.duration_seconds, manifest.fps, clip_capacities(manifest))
     if not frames:
         return False
     for shot, count in zip(manifest.shots, frames):

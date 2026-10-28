@@ -595,8 +595,15 @@ def produce(args):
             raise RuntimeError("--remix needs a previous full render (work/video.mp4)")
         return _finish(args, film, beats, spans, words, total, work, voice_path, video)
 
-    # ---- render ----
+    # ---- prepare: a kit film's whole scene is built and every object measured before any frame renders ----
     resume = getattr(args, "resume", False)
+    if film.get("set") and not (args.preview or args.frames or redo):
+        from engine import sets as _sets
+        if getattr(_sets.spec(film["set"]), "KIT", None):
+            from agents.set_builder import prepare_kit_film
+            prepare_kit_film(film_json, timings_path, work)
+
+    # ---- render ----
     baked_frames = None                                # (older renders: stickers baked into the kept frames)
     from agents import scene_validator as sv
     validate = sv.enabled(film) and not (args.preview or args.frames)

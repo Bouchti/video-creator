@@ -147,6 +147,18 @@ def focus(event, shape):
     raise KeyError(event)
 
 
+def build_focus(change, shape):
+    """The region of a no-hero BUILD shot (x0, x1, z0, z1): the part being built, big, with nobody building it
+    ("none": the barrier as it stands before the event). `shape` is the barrier's profile after the change."""
+    xw, xl = toes(shape)
+    H = crest_height(shape)
+    if change == "berm_wells":
+        return (xl - 0.8, WELLS_X[1] + 0.5, SAND_MID, 1.4)
+    if change == "fill_burrows":
+        return (tunnel_ends(shape)[0] - 0.3, NESTBOX[0] + 0.7, -0.3, H + 1.4)
+    return (xw - 0.3, xl + 0.4, -0.3, H + 0.5)              # the barrier body: sand wall, core, raised crest
+
+
 def result_focus(event, shape):
     """The closer RESULT shot that ends every beat: Max reacting beside the part of the event that reaches
     him, so he is big while the mechanism is still on screen at 7/8 (x0, x1, z0, z1)."""

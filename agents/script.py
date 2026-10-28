@@ -615,6 +615,27 @@ labels, logos, or written numbers.
    - Never more than three beats in a row with the same shot size, and never more than three in a
      row of the same subject. The main subject appears in at most half of the beats; the rest are
      its details, its surroundings, its effects and the stand-ins above.
+15. SAY IT ONCE, SHOW IT ONCE, MAKE IT LAND. A test video about one cannon shot showed the enemy
+   fleet flying the other side's flag, two smoke bursts under "exactly one shot", and a cannonball
+   already resting beside a tipped kettle under "the ball crashed into a soup kettle". So:
+   - When two sides appear (nations, fleets, armies, teams), give each its own `recurring_objects`
+     entry with its marking described concretely ("a red, white and blue horizontal tricolour" /
+     "a yellow banner with a black double-headed eagle"), and repeat that marking in every
+     description that shows that side. Show both sides in one shot only when the beat is about
+     them meeting.
+   - Keep movable things out of `location`. "A broad river with sailing ships on the water" puts
+     extra ships, flying whatever flag the generator likes, into every shot of that river, including
+     the one about a single ship. The location is the place only; each beat names what is in it.
+   - Numbers in the narration are literal on screen. The beat that shows "one shot" or "three ships"
+     says "exactly one" / "exactly three" and frames tightly enough that nothing else of that kind
+     is in view (one gun port, not a whole broadside). A once-only event is shown once; later beats
+     show only its aftermath, stated as such ("the smoke of that one shot, already drifting, no new
+     firing").
+   - An impact (hit, struck, crashed into, smashed, exploded) is shown AS it lands, never after: the
+     first frame has the target intact, the object arrives fast, and the last sentence of the
+     description is the violent reaction ("the cannonball slams into the iron kettle, which bursts
+     sideways in a spray of broth and dented iron"), not the calm aftermath. Objects only, never
+     a person hit.
 
 """
 

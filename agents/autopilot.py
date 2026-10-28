@@ -223,10 +223,16 @@ def stage_script(run, source, angle, set_id):
                     if not plan:
                         run.event("script", "all existing Max subjects are consumed; researching a new one")
                         if kit:
+                            from agents import kit_world
                             from agents.kit_planner import plan_kit_story
                             from agents.showrunner import _history
                             published = "\n".join(f"- {h.get('title')}" for h in _history()[-40:]) or "- none"
-                            plan = plan_kit_story(published)
+                            try:              # the world (and every object in it) exists before the story
+                                world = (kit_world.ensure_world(use_angle, run.event) if use_angle
+                                         else kit_world.pick_world())
+                            except kit_world.WorldNotBuilt as exc:
+                                raise GiveUp(str(exc)) from exc
+                            plan = plan_kit_story(published, world=world)
                         else:
                             plan = plan_new_story_set()
                         run.set(new_set_plan=plan)
@@ -304,18 +310,41 @@ def _explainer_script(run, angle, set_id):
     elif not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True) and not run["new_set_plan"]:
         raise GiveUp("no registered explainer set fits this topic and SHOWRUNNER_AUTO_BUILD_SETS=0")
     plan = run["new_set_plan"]
+    kit = (os.getenv("SHOWRUNNER_SET_MODE") or "kit").strip().lower() == "kit"
     if not plan:
         run.event("script", "researching a new explainer subject")
         try:
-            plan = explainer.plan_new_set(angle)
+            if kit:                   # the Max architecture: a storyboard the tested kit films, no code written
+                from agents import kit_world
+                from agents.kit_planner import plan_kit_explainer
+                from agents.showrunner import _history
+                published = "\n".join(f"- {h.get('title')}" for h in _history()[-40:]) or "- none"
+                try:                  # the world (and every object in it) exists before the storyboard
+                    world = kit_world.ensure_world(angle, run.event) if angle else kit_world.pick_world()
+                except kit_world.WorldNotBuilt as exc:
+                    raise GiveUp(str(exc)) from exc
+                plan = plan_kit_explainer(published, angle, world=world)
+            else:
+                plan = explainer.plan_new_set(angle)
         except explainer.NoUnusedExplainerSets as exc:
             raise GiveUp(str(exc)) from exc
         run.set(new_set_plan=plan)
-    from agents.set_builder import build_explainer_set
-    run.event("set", "building and visually validating a new explainer set",
-              detail=f"{plan['subject']} ({plan['set_id']})")
-    status = build_explainer_set(plan["build_brief"], plan["set_id"], rounds=_int("SET_BUILD_ROUNDS", 4),
-                                 hook_action=plan.get("hook_action"))
+    if plan.get("storyboard"):
+        from agents.set_builder import KitDefect, build_kit_set
+        run.event("set", "filming the planned explainer storyboard with the kit",
+                  detail=f"{plan['title']} ({plan['set_id']})")
+        try:
+            status = build_kit_set(plan)
+        except KitDefect as defect:
+            raise GiveUp(str(defect)) from defect
+        plan["set_id"] = status["set"]
+        run.set(new_set_plan=plan)
+    else:
+        from agents.set_builder import build_explainer_set
+        run.event("set", "building and visually validating a new explainer set",
+                  detail=f"{plan['subject']} ({plan['set_id']})")
+        status = build_explainer_set(plan["build_brief"], plan["set_id"], rounds=_int("SET_BUILD_ROUNDS", 4),
+                                     hook_action=plan.get("hook_action"))
     if not status.get("accepted"):
         raise GiveUp(f"new explainer set '{plan['set_id']}' did not pass visual validation; "
                      f"continue it in {status.get('work')}")
@@ -334,7 +363,7 @@ def _voice_error(exc):
 def stage_render(run, film_json):
     """make_film with scene validation + auto-fix; every failure is classified, repaired, resumed."""
     from agents import scene_validator as sv
-    from agents.set_builder import RepairNotApplied, fix_code
+    from agents.set_builder import KitDefect, RepairNotApplied, fix_code
     from engine.make_film import BlenderFailed, produce
 
     film = json.load(open(film_json, encoding="utf-8"))
@@ -410,6 +439,10 @@ def stage_render(run, film_json):
         except RepairNotApplied as exc:
             raise GiveUp(f"automatic scene repair could not edit the set; stopped before wasting another render: "
                          f"{exc}") from exc
+        except KitDefect as exc:
+            # the prepare stage found a missing or broken object before any frame: a kit bug, same on a retry
+            run.event("render", "the kit scene failed its prepare check; nothing was rendered", detail=str(exc)[:400])
+            raise GiveUp(str(exc)) from exc
         except Exception as exc:                          # noqa: BLE001
             if _is_budget(exc):
                 return _give_up(run, film_json, set_id, exc)

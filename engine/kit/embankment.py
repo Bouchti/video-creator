@@ -11,6 +11,10 @@ Beat template (every step): SETUP (first 40%, close on Max building or reacting)
 MECHANISM (the event, framed by studio.frame_all around the event's focus, its label and Max) with the
 result and Max's reaction inside the same shot. A change is still happening at the beat's middle and
 finished by 7/8, where the reviewer looks.
+
+A storyboard with "hero": false (a no-hero explainer, agents/explainer.py) films the same world and
+events with no Max: the setup shot frames the part being built (geometry.build_focus) as it builds
+itself, and the mechanism shots frame only what the event shows.
 """
 import math
 import random
@@ -131,6 +135,13 @@ def _value(nt, name, v=0.0):
     n.name = n.label = name
     n.outputs[0].default_value = v
     return n
+
+
+class _Absent:
+    """Max in a no-hero explainer: every gesture the staging asks of him does nothing."""
+
+    def __getattr__(self, _name):
+        return lambda *args, **kwargs: None
 
 
 def soil_material(name, surface):
@@ -338,6 +349,7 @@ class EmbankmentSet:
     def __init__(self, scene, sun, fill, bg, total):
         self.scene, self.sun, self.fill, self.bg, self.total = scene, sun, fill, bg, total
         self.sb = self.STORYBOARD
+        self.hero = self.sb.get("hero", True) is not False
         self.rig = CameraRig()
         self.rnd = random.Random(7)
         self._ground()
@@ -547,18 +559,21 @@ class EmbankmentSet:
         toy.hide_tree(self.squirrel, 1, True)
 
     def _people(self):
-        wood = toy.material("kb_shovel_wood", toy.srgb("#A8743F"), roughness=0.6)
-        steel = toy.material("kb_shovel_steel", toy.srgb("#8E979F"), roughness=0.3, metallic=0.8)
-        self.shovel = toy.empty("kb_shovel", (0, 0, 0))
-        toy.cylinder("kb_shovel_handle", 0.022, 1.0, (0, 0, 0), mat=wood, parent=self.shovel)
-        toy.box("kb_shovel_blade", (0.2, 0.03, 0.26), (0, 0, -0.6), mat=steel, parent=self.shovel)
-        self.max = Character("Max", MAX_LOOK)
-        self.max.place(1, (0, 0, 0), 0)
-        self.max.key("hips", 1, loc=(0, 0, 0.56))
-        self.max.auto_blink(1, self.total + 600, seed=11)
-        self.max.hold(self.shovel, "R")
-        self.shovel.location = (0, -0.04, 0.28)
-        self.kids = []
+        if self.hero:
+            wood = toy.material("kb_shovel_wood", toy.srgb("#A8743F"), roughness=0.6)
+            steel = toy.material("kb_shovel_steel", toy.srgb("#8E979F"), roughness=0.3, metallic=0.8)
+            self.shovel = toy.empty("kb_shovel", (0, 0, 0))
+            toy.cylinder("kb_shovel_handle", 0.022, 1.0, (0, 0, 0), mat=wood, parent=self.shovel)
+            toy.box("kb_shovel_blade", (0.2, 0.03, 0.26), (0, 0, -0.6), mat=steel, parent=self.shovel)
+            self.max = Character("Max", MAX_LOOK)
+            self.max.place(1, (0, 0, 0), 0)
+            self.max.key("hips", 1, loc=(0, 0, 0.56))
+            self.max.auto_blink(1, self.total + 600, seed=11)
+            self.max.hold(self.shovel, "R")
+            self.shovel.location = (0, -0.04, 0.28)
+        else:
+            self.max = _Absent()
+        self.kids = []                                # the family stays: scale and life in the yard
         for k, look in enumerate(KID_LOOKS):
             kid = Character(f"Kid{k + 1}", look)
             kid.place(1, (*g.KIDS_SETUP[k], 0.0), 0)
@@ -754,20 +769,27 @@ class EmbankmentSet:
                                       g.berm_top(g.tunnel_ends("raised")[1] + 0.6))}
             mx.cut_place(s, spots[ch], 90)
             _rest(mx, s)
-            if ch in ("berm_wells", "fill_burrows"):
-                mx.hammer(s + 3, m0 - 2)
-                for f in range(s + 6, m0 - 4, 10):
-                    events.add(f, "hammer", gain=0.5)
-            else:
-                mx.rake(s + 3, m0 - 2)
-                for f in range(s + 6, m0 - 4, 14):
-                    events.add(f, "scoop", gain=0.45)
+            if self.hero:                             # his tool sounds; a build with nobody at it is silent
+                if ch in ("berm_wells", "fill_burrows"):
+                    mx.hammer(s + 3, m0 - 2)
+                    for f in range(s + 6, m0 - 4, 10):
+                        events.add(f, "hammer", gain=0.5)
+                else:
+                    mx.rake(s + 3, m0 - 2)
+                    for f in range(s + 6, m0 - 4, 14):
+                        events.add(f, "scoop", gain=0.45)
             self._build(ch, start, after, s + 2, m0 - 1)
         if step["kind"] != "setup":
             for kid, spot in zip(self.kids, g.KIDS_SPOTS):
                 kid.cut_place(s, (*spot, 0.68), 0)
                 _rest(kid, s)
-        st.close_on(self.rig, s, m0 - 1, mx, frac=0.44, angle=-90 + (10 if k % 2 else -10), swing=12, cut=True)
+        if self.hero:
+            st.close_on(self.rig, s, m0 - 1, mx, frac=0.44, angle=-90 + (10 if k % 2 else -10), swing=12, cut=True)
+        else:
+            prof = after["profile"] if after["barrier"] else "steep"
+            # the empty bank before anything is built, else the part being built (or the barrier as it stands)
+            region = g.build_focus(ch, prof) if after["barrier"] else g.focus("calm", prof)
+            self._frame(step, region, step["event"], prof, s, m0 - 1, k + 1, label=False)
 
     def _build(self, ch, start, after, a, b):
         """Animate what Max builds between frames a and b."""
@@ -832,7 +854,7 @@ class EmbankmentSet:
                 self._jaw_drop(t(0.6), e - 2)
             else:
                 self._shrug(t(0.66), e - 2)
-        else:
+        elif self.hero:
             mx.cheer(t(0.62), e - 2)
             events.add(t(0.62), "boing", gain=0.3)
         if ev_name == "storm_holds":
@@ -840,7 +862,7 @@ class EmbankmentSet:
                 kid.hop(m0 + 4, e - 2, height=0.3, period=16)
             events.add(t(0.3), "kids_cheer", gain=0.8)
         r0 = m0 + int(n * RESULT)                 # the closer result shot that ends the beat
-        if hook:                                  # the hook opens close on Max as it starts to go wrong
+        if hook and self.hero:                    # the hook opens close on Max as it starts to go wrong
             h = m0 + max(8, int(n * 0.36))
             mx.brows(m0 + 2, 0.8)
             st.close_on(self.rig, m0, h - 1, mx, frac=0.44, angle=-80, swing=12, cut=True)
@@ -856,20 +878,21 @@ class EmbankmentSet:
             return spot
         return (x, y, g.berm_top(x) if self.state["berm"] else 0.0)
 
-    def _frame(self, step, region, ev_name, prof, m0, e, k, label_from=None):
+    def _frame(self, step, region, ev_name, prof, m0, e, k, label_from=None, label=True):
         """One framed shot of `region` (x0, x1, z0, z1): everything in it inside the 9:16 frame, seen from a
         little above (the river and yard surfaces read; the cut face shows only the layers that matter), the
         ground line low in the frame and the step's label in the sky above the action, for this shot only (a
-        label never gets cut by the next shot's framing)."""
+        label never gets cut by the next shot's framing). Max is framed too when the story has him."""
         x0, x1, z0, z1 = region
-        spot = self._on_ground(g.max_spot(ev_name, prof), prof)
         pts = [(x, 0.0, z) for x in (x0, x1) for z in (z0, z1)]
-        pts += [(spot[0], spot[1], spot[2] + 1.9), (spot[0], spot[1], spot[2])]
+        if self.hero:
+            spot = self._on_ground(g.max_spot(ev_name, prof), prof)
+            pts += [(spot[0], spot[1], spot[2] + 1.9), (spot[0], spot[1], spot[2])]
         angle = -90 + (6 if k % 2 else -6)
         cx = (x0 + x1) / 2
         bottom = (cx, 0.0, min(z0, -0.3) - 0.15)                     # just below what the event shows
         pts.append(bottom)
-        label = (step.get("label") or "").upper()
+        label = (step.get("label") or "").upper() if label else ""
         shot, size = list(pts), 0.0
         for _ in range(4):                    # size the label from the FINAL camera distance (it widens the shot)
             center = self._aim_for(shot, bottom, angle)
@@ -911,6 +934,8 @@ class EmbankmentSet:
 
     # ---- reactions ----
     def _shrug(self, f0, f1):
+        if not self.hero:
+            return
         m = self.max
         m.pose(f0)
         m.pose(f0 + 5, shoulderL=(-32, -40, 0), shoulderR=(-32, 40, 0), head=(-4, 0, 16))

@@ -1,5 +1,6 @@
 """Explainer route (--source explainer): no-hero cutaway explainers, kept apart from the Max route.
 All AI, Blender and voice work is mocked."""
+import copy
 import json
 import os
 import sys
@@ -8,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from agents import autopilot as ap
+from agents import storyboard as sbm
 from agents import explainer
 from agents import set_builder as sb
 from agents import showrunner as sr
@@ -166,7 +168,35 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual((out, flagged), (video, False))
         self.assertEqual((seen["validate"], seen["preflight"]), ("1", "1"))
 
-    def test_builds_a_new_explainer_set_when_none_fits(self):
+    def test_a_new_explainer_is_a_storyboard_the_kit_films_like_max(self):
+        from agents import kit_planner, kit_world
+        storyboard = dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:]), hero=False)
+        plan = {"title": "How a levee keeps a river out", "set_id": "kit_how_a_levee_explainer",
+                "storyboard": storyboard, "hook_action": "burrow_hook"}
+        written = []
+
+        def write(angle=None, set_id=None, topic_hint=None, on_topic=None, render=False, preview=False):
+            written.append(set_id)
+            return self.film
+
+        with patch.dict(os.environ, {"SHOWRUNNER_AUTO_BUILD_SETS": "1", "SHOWRUNNER_SET_MODE": ""}), \
+                patch.object(explainer, "choose_set", return_value=None), \
+                patch.object(explainer, "plan_new_set", side_effect=AssertionError("agent brief")), \
+                patch.object(kit_world, "ensure_world", return_value="embankment") as world, \
+                patch.object(kit_planner, "plan_kit_explainer", return_value=plan) as planned, \
+                patch.object(sb, "build_explainer_set", side_effect=AssertionError("agent builder")), \
+                patch.object(sb, "build_kit_set", return_value={"accepted": True, "set": plan["set_id"],
+                                                                "work": self.tmp}) as filmed, \
+                patch.object(explainer, "write", write):
+            self.assertEqual(ap.stage_script(self.run, "explainer", "how levees work", None), self.film)
+        self.assertEqual(world.call_args.args[0], "how levees work")       # the world exists before the plan
+        self.assertEqual(planned.call_args.args[1], "how levees work")
+        self.assertEqual(planned.call_args.kwargs["world"], "embankment")
+        filmed.assert_called_once()
+        self.assertEqual(written, ["kit_how_a_levee_explainer"])
+        self.assertEqual(self.run["generated_set"], "kit_how_a_levee_explainer")
+
+    def test_agent_mode_builds_a_new_explainer_set_when_none_fits(self):
         plan = {"subject": "Septic tank", "set_id": "septic_tank_explainer", "build_brief": "A cutaway yard.",
                 "hook_action": "overflow_hook"}
         accepted = {"accepted": True, "set": "septic_tank_explainer", "work": self.tmp}
@@ -176,7 +206,8 @@ class AutopilotTests(unittest.TestCase):
             written.append((set_id, topic_hint))
             return self.film
 
-        with patch.dict(os.environ, {"SET_BUILD_ROUNDS": "4", "SHOWRUNNER_AUTO_BUILD_SETS": "1"}), \
+        with patch.dict(os.environ, {"SET_BUILD_ROUNDS": "4", "SHOWRUNNER_AUTO_BUILD_SETS": "1",
+                                     "SHOWRUNNER_SET_MODE": "agent"}), \
                 patch.object(explainer, "choose_set", return_value=None), \
                 patch.object(explainer, "plan_new_set", return_value=plan), \
                 patch.object(explainer, "write", write), \

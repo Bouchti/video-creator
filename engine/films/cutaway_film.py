@@ -98,8 +98,8 @@ def _run_hookless(stage, beats, spans):
     stage.rig.build()
 
 
-if HOOKLESS:
-    _run_hookless(stage, beats, spans)
+if HOOKLESS and not getattr(stage, "STORYBOARD", None):
+    _run_hookless(stage, beats, spans)          # a kit set's own run() stages a film with no hook beat itself
 else:
     stage.run(beats, spans, EPI)
 print(f"interpolation: {toy.normalize_interpolation()} inherited keys reset to Bezier")

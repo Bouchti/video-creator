@@ -50,8 +50,26 @@ _MOVE_PHRASE = {
 # default for a landscape, a drone view: on the 2026-10-27 volcano run 16 reviews said "high aerial,
 # not the sea-level view the beat describes", in shots that never asked to leave the water.
 EYE_LEVEL = "camera at eye level about two metres above the ground or water, horizon level"
-_CLOSE_CUES = ("extreme close-up", "macro", "close-up", "close shot", "close on ", "close view")
-_OVERHEAD_CUES = ("top-down", "overhead", "looking straight down", "looking down", "from far above", "aerial")
+_CLOSE_CUES = ("extreme close-up", "macro", "close-up", "close shot", "close on ", "close view", "close, low",
+               "close and low", "close low")
+# A description that places the camera itself keeps that place; the eye-level default contradicted
+# "close, low view along the boardwalk" and "the camera rises", and both were rejected as "higher and
+# wider than requested" and "never reaches the homes".
+_HEIGHT_CUES = ("low view", "low angle", "ground level", "floor level", "shore-level", "shore level",
+                "water level", "waterline view", "knee height", "camera rises", "rises from", "crane",
+                "from above", "high view", "eye level", "eye-level")
+
+
+def _states_height(action: str, move: str = "") -> bool:
+    return any(cue in action for cue in _HEIGHT_CUES) or "rising" in move or "crane" in move
+# Camera positions only: a bare "overhead" also means "gulls cross overhead", which turned an eye-level
+# quay shot into a high aerial view.
+_OVERHEAD_CUES = ("top-down", "overhead shot", "overhead view", "from overhead", "looking straight down",
+                  "looking down", "from far above", "aerial")
+
+
+def _overhead(action: str) -> bool:
+    return "eye level" not in action and any(cue in action for cue in _OVERHEAD_CUES)
 
 
 def framing_scale(subject: str) -> str | None:
@@ -59,7 +77,7 @@ def framing_scale(subject: str) -> str | None:
     action = subject.lower()
     if any(cue in action for cue in _CLOSE_CUES):
         return "close"
-    if "wide" in action or any(cue in action for cue in _OVERHEAD_CUES):
+    if "wide" in action or _overhead(action):
         return "wide"
     return None
 
@@ -75,27 +93,33 @@ def _camera_plan(subject: str, index: int, chosen: str | None = None) -> tuple[s
     resolved each contradiction with a generic drone view.
     """
     action = subject.lower()
+    def placed(lens: str, move: str = "") -> str:
+        return lens if _states_height(action, move) else f"{lens}, {EYE_LEVEL}"
+
     if "extreme close-up" in action or "macro" in action:
         return "controlled macro push-in", "macro detail shot"
     if any(cue in action for cue in _CLOSE_CUES):
-        return "slow intimate push-in", f"85mm close-up, {EYE_LEVEL}"
+        return "slow intimate push-in", placed("85mm close-up")
     if "low angle" in action or "looking up" in action or "floor level" in action:
         return "slow low-angle drift", "24mm low-angle wide frame"
-    if any(cue in action for cue in _OVERHEAD_CUES):
+    if _overhead(action):
         return "slow overhead drift", "24mm high aerial wide frame looking down"
     if "side angle" in action or "side shot" in action or "from the side" in action:
-        return "gentle lateral tracking shot", f"35mm side-angle medium-wide frame, {EYE_LEVEL}"
+        return "gentle lateral tracking shot", placed("35mm side-angle medium-wide frame")
     move = _MOVE_PHRASE.get(str(chosen or "").strip().lower()) or CAMERA_MOVES[index % len(CAMERA_MOVES)]
     if "wide" in action:
-        return move, f"24mm wide frame, {EYE_LEVEL}"
+        return move, placed("24mm wide frame", move)
     if "medium" in action or "closer" in action:
-        return move, f"50mm medium frame, {EYE_LEVEL}"
-    return move, f"35mm frame, {EYE_LEVEL}"
+        return move, placed("50mm medium frame", move)
+    return move, placed("35mm frame", move)
 
 
-def framing_for(subject: str) -> str:
+def framing_for(subject: str, camera: str = "") -> str:
     """The lens and camera position a shot is rendered with; its keyframe must be shot the same way."""
-    return _camera_plan(subject, 0)[1]
+    framing = _camera_plan(subject, 0)[1]
+    if _states_height(subject.lower(), camera.lower()):
+        framing = framing.replace(f", {EYE_LEVEL}", "")
+    return framing
 
 
 MIN_DURATION, MAX_DURATION = 30, 90
@@ -170,19 +194,6 @@ def _split_text(text: str, count: int) -> list[str]:
     return [clauses[i % len(clauses)] for i in range(count)]
 
 
-def _stage(index: int, count: int) -> str:
-    ratio = index / max(1, count - 1)
-    if index == 0:
-        return "opening hook"
-    if ratio < 0.48:
-        return "development"
-    if ratio < 0.72:
-        return "escalation"
-    if ratio < 0.88:
-        return "climax"
-    return "satisfying ending"
-
-
 def _seed(project_key: str, index: int) -> int:
     digest = hashlib.sha256(f"{project_key}:{index}".encode()).digest()
     return int.from_bytes(digest[:8], "big") & 0x7FFFFFFF
@@ -229,7 +240,7 @@ def beat_labels(script: dict[str, Any], beat_index: int) -> tuple[str, str]:
 
 def continuation_source(
     labels: list[tuple[str, str]], index: int, casts: list[list[str]] | None = None,
-    scales: list[str | None] | None = None,
+    scales: list[str | None] | None = None, objects: list[frozenset[str]] | None = None,
 ) -> int | None:
     """The earlier shot whose last frame this shot opens on, or None for a fresh opening.
 
@@ -240,6 +251,10 @@ def continuation_source(
     A close shot never opens on a wide frame, nor a wide one on a close frame (`scales`, from
     framing_scale): three seconds cannot travel that far, so "close on a wave over the rock" opened
     on a wide aerial stayed a wide aerial on every take. Such a shot gets its own keyframe.
+    Recurring objects (`objects`, from shot_objects) follow the same idea: a shot never opens on
+    a frame of entirely different objects, and a return needs a frame already showing all of
+    its own. On the 1784 Scheldt run the lone Dutch warship opened on the Austrian convoy's last
+    frame, so all three ships stayed and their eagle banners turned into Dutch flags mid-clip.
     Unlabelled scripts keep the old rule: every shot continues the previous one.
     """
     if index <= 0 or index >= len(labels):
@@ -250,8 +265,17 @@ def continuation_source(
         lambda prior: prior == index - 1 or sorted(casts[prior]) == sorted(casts[index]))
     same_scale = (lambda prior: True) if scales is None else (
         lambda prior: {scales[prior], scales[index]} != {"close", "wide"})
+
+    def same_objects(prior: int) -> bool:
+        if objects is None or not objects[index]:
+            return True
+        if prior == index - 1:
+            return not objects[prior] or bool(objects[prior] & objects[index])
+        return objects[index] <= objects[prior]
+
     return next((prior for prior in range(index - 1, -1, -1)
-                 if labels[prior] == labels[index] and same_cast(prior) and same_scale(prior)), None)
+                 if labels[prior] == labels[index] and same_cast(prior) and same_scale(prior)
+                 and same_objects(prior)), None)
 
 
 def _words(text: str, size: int = 5) -> set[str]:
@@ -320,27 +344,63 @@ def _for_scene(text: str, script: dict[str, Any], beat_index: int, split: str = 
 _SENTENCES = r"(?<=[.;])(?<!\bDr\.)(?<!\bMr\.)(?<!\bMs\.)(?<!\bSt\.)(?<!\bMrs\.)\s+"
 
 
+def _object_name(item: Any) -> str:
+    """A recurring object's name: "Dutch warship: a dark hull..." -> "dutch warship"."""
+    return re.split(r"\s+[—–-]\s+|[:;(]", str(item))[0].strip().lower()
+
+
+def _singular(word: str) -> str:
+    return word[:-1] if len(word) > 4 and word.endswith("s") and not word.endswith("ss") else word
+
+
 def beat_objects(script: dict[str, Any], beat_index: int) -> list[str]:
     """The recurring objects a beat's visual mentions; the rest are not in this shot.
 
     An object matches by its head noun ("The orange ash layer" -> "layer"): matching any word
-    put the buried ash layer into every fire shot that mentions orange flames.
+    put the buried ash layer into every fire shot that mentions orange flames. Plurals match
+    too: "three sailing ships" left the Austrian ships, and their eagle banner, out of the lock.
+    Objects sharing a head noun ("Dutch warship", "Austrian warships") are told apart by the
+    words only their own entry uses ("striped flag" against "eagle banner"); otherwise every
+    warship shot locked both fleets' flags, and the lone Dutch ship opened on the convoy.
     """
     visual = _beat_visual(script, beat_index)
-    text = _words(" ".join(str(visual.get(key) or "") for key in ("description", "continuity_out")), 4)
-    present = []
+    text = {_singular(word) for word in _words(
+        " ".join(str(visual.get(key) or "") for key in ("description", "continuity_out")), 4)}
+    by_head: dict[str, list[str]] = {}
     for item in script.get("recurring_objects") or []:
-        name = re.split(r"\s+[—–-]\s+|[:;(]", str(item))[0]
-        head = re.findall(r"[a-z]{4,}", name.lower().replace("'s", ""))
-        if head and head[-1] in text:
-            present.append(str(item))
-    return present
+        head = re.findall(r"[a-z]{4,}", _object_name(item).replace("'s", ""))
+        if head and _singular(head[-1]) in text:
+            by_head.setdefault(_singular(head[-1]), []).append(str(item))
+    present = set()
+    for items in by_head.values():
+        words = [{_singular(word) for word in _words(item, 4)} for item in items]
+        own = [mine - set().union(*(theirs for theirs in words if theirs is not mine)) for mine in words]
+        scores = [len(distinct & text) for distinct in own]
+        present.update(item for item, score in zip(items, scores) if score == max(scores))
+    return [str(item) for item in script.get("recurring_objects") or [] if str(item) in present]
+
+
+def shot_objects(script: dict[str, Any], continuity: dict[str, Any] | None) -> frozenset[str]:
+    """Names of the recurring objects a planned shot's identity lock carries."""
+    locked = str((continuity or {}).get("recurring_objects") or "")
+    return frozenset(_object_name(item) for item in script.get("recurring_objects") or []
+                     if str(item).strip() and str(item) in locked)
 
 
 def payoff_of(subject_action: str) -> str:
     """The beat's final sentence: what must be on screen when the clip ends."""
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", subject_action) if part.strip()]
     return sentences[-1] if sentences else subject_action
+
+
+# The identity lock's filler when a story has no characters. The reviewer still reads it; the video
+# prompt leaves it out, or a shot of a river gains "one recurring protagonist".
+DEFAULT_CHARACTERS = (
+    "one recurring protagonist with exactly the same face, body, clothing, equipment, "
+    "and color scheme in every shot"
+)
+DEFAULT_LOCATION = "one continuous physical world for"
+DEFAULT_PALETTE = "consistent restrained cinematic palette"
 
 
 def _continuity(
@@ -360,11 +420,11 @@ def _continuity(
     cast = "; ".join(
         f"{c.get('name')}: {character_look(c, beat_index)}" for c in characters if isinstance(c, dict)
     )
-    palette = script.get("color_palette") or "consistent restrained cinematic palette"
+    palette = script.get("color_palette") or DEFAULT_PALETTE
     time_of_day = script.get("time_of_day") or "consistent time of day unless the story explicitly advances"
     objects = script.get("recurring_objects", [])
     location = script.get("location") or (
-        f"one continuous physical world for {concept}; preserve geography, architecture, scale, "
+        f"{DEFAULT_LOCATION} {concept}; preserve geography, architecture, scale, "
         "weather, and recurring props between adjacent shots"
     )
     geography = script.get("screen_geography") or ""
@@ -387,10 +447,7 @@ def _continuity(
         time_of_day = beat_labels(script, beat_index)[1] or time_of_day
         objects = beat_objects(script, beat_index)
     return {
-        "characters": cast or nobody or (
-            "one recurring protagonist with exactly the same face, body, clothing, equipment, "
-            "and color scheme in every shot"
-        ),
+        "characters": cast or nobody or DEFAULT_CHARACTERS,
         "wardrobe": script.get("wardrobe") or "unchanged clothing and accessories between adjacent shots",
         "vehicles": script.get("vehicles") or "identical vehicle design and markings where present",
         "location": location,
@@ -406,6 +463,114 @@ def continuity_text(value: dict[str, Any]) -> str:
     return "; ".join(f"{key.replace('_', ' ')}: {item}" for key, item in value.items() if item)
 
 
+# MiniMax H3 is trained on one prompt layout (MiniMax's h3-prompt-writing guide, which FreeVideo's own
+# prompt assistant and drama agent follow): a plain description under integrated_multimodal_description
+# that opens with "[Shot 1]", the style and the framing, then the sound and the music sections. Its text
+# encoder reads every word as picture content, so instructions written for a chat model ("render only
+# this shot, not a montage", "no flashback", "PREVIOUS SHOT: ...", "one recurring protagonist") were
+# drawn instead of obeyed: across ten projects 72% of first takes were rejected and 70% of GPU time
+# went to rejected takes, with prompts of 450-700 words around a 60-word beat.
+H3_NO_TEXT = "No subtitles, no on-screen text."
+# FreeVideo's wording for a clip whose first frame is supplied (agent/drama.py).
+FIRST_FRAME_LINE = "Continuing from the opening frame, the scene keeps its exact layout, lighting and characters."
+_H3_HEAD = "integrated_multimodal_description: [Shot 1] "
+
+# H3 camera language: move type, amplitude and speed, as prose.
+_CAMERA_PROSE = {
+    "slow push-in": "The camera pushes in slowly with small amplitude.",
+    "slow intimate push-in": "The camera pushes in slowly with small amplitude.",
+    "controlled macro push-in": "The camera pushes in very slowly with small amplitude.",
+    "slow pull-back": "The camera pulls out slowly with small amplitude.",
+    "steady pan left": "The camera pans left at slow speed, following the motion.",
+    "steady pan right": "The camera pans right at slow speed, following the motion.",
+    "slow rising crane move": "The camera pedestals up at slow speed.",
+    "slow orbit around the subject": "The camera arcs slowly around the subject with small amplitude.",
+    "smooth orbit": "The camera arcs slowly around the subject with small amplitude.",
+    "slow low-angle drift": "The camera trucks slowly with small amplitude from the low angle.",
+    "slow overhead drift": "The camera trucks slowly with small amplitude, looking down from above.",
+    "overhead drift": "The camera trucks slowly with small amplitude, looking down from above.",
+    "gentle lateral tracking shot": "The camera trucks sideways at slow speed.",
+    "lateral parallax move": "The camera trucks sideways at slow speed, with parallax.",
+    "gentle tracking shot": "The camera tracks alongside the subject at slow speed.",
+    "controlled handheld follow": "A handheld camera follows the subject at slow speed.",
+    "low-angle dolly": "The camera dollies in slowly from a low angle.",
+    "locked-off static camera": "Static shot: the camera stays locked off on a tripod.",
+}
+
+# The script marks stand-ins "illustrative" for honesty; to the generator the word asks for an
+# illustration, the painterly look the reviewer rejects. The screenplay keeps it.
+_ILLUSTRATIVE_LEAD = re.compile(
+    r"(^|:\s+)illustrative (?:period )?(?:reconstruction|stand-in)(?: (?:for|of) [^,.:;]+)?\s*[,:;]\s*", re.I)
+
+
+def generator_text(text: str) -> str:
+    """Screenplay wording as the video model should read it."""
+    value = _ILLUSTRATIVE_LEAD.sub(r"\1", str(text or ""))
+    value = re.sub(r"\ban illustrative\s+(?=[^aeiouAEIOU\W])", "a ", value)
+    value = re.sub(r"\s*\(illustrative\)|\billustrative\s+", "", value, flags=re.I)
+    value = re.sub(r"\s+([,.;:])", r"\1", value)
+    return re.sub(r"\s{2,}", " ", value).strip()
+
+
+def _sentence(text: str) -> str:
+    value = str(text or "").strip().rstrip(";,")
+    return value if not value or value[-1] in ".!?" else value + "."
+
+
+def camera_prose(move: str) -> str:
+    move = str(move or "").strip()
+    return _CAMERA_PROSE.get(move.lower()) or (_sentence(f"Camera: {move}") if move else "")
+
+
+def h3_prompt(description: str, sound: str) -> str:
+    return (f"{_H3_HEAD}{description.strip()}\n\n"
+            f"overall_soundscape: {_sentence(sound) or 'Natural ambience of the scene.'}\n\n"
+            "non_diegetic_music: N/A")
+
+
+def is_h3(prompt: str) -> bool:
+    return prompt.startswith(_H3_HEAD)
+
+
+def with_first_frame(prompt: str) -> str:
+    """Tell H3 the supplied image is frame 0, right after the opening style-and-framing sentence."""
+    if not prompt.startswith(_H3_HEAD) or FIRST_FRAME_LINE in prompt:
+        return prompt
+    lead_end = prompt.find(". ", len(_H3_HEAD))
+    if lead_end < 0:
+        return prompt
+    return prompt[:lead_end + 2] + FIRST_FRAME_LINE + " " + prompt[lead_end + 2:]
+
+
+def plain_description(prompt: str) -> str:
+    """The description alone, for a generator that does not know H3's sections (Wan)."""
+    if not prompt.startswith(_H3_HEAD):
+        return prompt
+    return prompt[len(_H3_HEAD):].split("\n\noverall_soundscape:", 1)[0].strip()
+
+
+def _named_here(objects: str, action: str) -> list[str]:
+    """The recurring objects this shot's own text names, for the video prompt.
+
+    The identity lock matches objects by head noun, which is right for the reviewer but too loose
+    for the generator, which draws whatever it is given: "wooden merchant sailing ships" on a quay
+    pulled in "Austrian merchant ship ... flying a yellow banner with a black double-headed eagle",
+    and a lone red banner brought the rival city's white banners with it. An object whose name has
+    a proper noun ("Austrian", "Bologna", "Dutch") goes in only when the shot says that name.
+    """
+    words = {_singular(word) for word in re.findall(r"[a-z]+", action.lower())}
+    kept = []
+    for item in (part.strip() for part in re.split(r";\s+(?=[^;:]{1,80}:)", objects) if part.strip()):
+        name = re.sub(r"\(.*?\)", "", item.split(":", 1)[0]).strip()
+        proper = [w for w in re.findall(r"[A-Za-z]+", name) if w[:1].isupper() and w.lower() not in _COMMON_CAPITALS]
+        if not proper or any(_singular(w.lower()) in words for w in proper):
+            kept.append(item)
+    return kept
+
+
+_COMMON_CAPITALS = {"the", "a", "an", "iron", "old", "new", "red", "white", "black"}
+
+
 def construct_prompt(
     *,
     subject_action: str,
@@ -414,53 +579,57 @@ def construct_prompt(
     continuity: dict[str, Any],
     framing: str,
     backend: str,
-    stage: str,
-    story_link: str,
-    generation_context: str,
-    shot_number: int,
-    shot_count: int,
     cast_names: list[str] | None = None,
     light: str = "",
-    opening: str = "continue",
+    handoff: str = "",
 ) -> str:
+    """One H3 prompt: what the camera sees, as plain positive description, about 150-250 words.
+
+    Only this shot's own facts go in. Each line below exists because its absence was a recurring
+    rejection: the cast count (duplicated heroes), the light held steady (night drifting to dawn),
+    the screen geography (fleets swapping sides), and the recurring objects with their markings
+    (the kettle and the ships changed design between shots because no prompt ever described them).
+    """
     suffix = MINIMAX_SUFFIX if backend == "minimax" else WAN_SUFFIX
-    # First takes get what makes retakes pass: the payoff and the exact cast stated up front.
-    cast = ""
+    style = generator_text(continuity.get("visual_style") or "photographic realism")
+    parts = [f"Live-action, {style.rstrip('.')}, {framing}, 9:16 vertical frame."]
+    characters = str(continuity.get("characters") or "")
     if cast_names:
-        cast = (
-            f"ON SCREEN: exactly {len(cast_names)} named character{'s' if len(cast_names) > 1 else ''} "
-            f"({', '.join(cast_names)}), each appearing once; no duplicate or mirrored copies. "
-            "Every other figure is an anonymous extra who looks clearly different: other hair, plain "
-            "drab clothing, never the named character's cloak, colours, or signature item. "
-        )
+        plural = len(cast_names) > 1
+        parts.append(
+            f"Exactly {len(cast_names)} named character{'s' if plural else ''} ({', '.join(cast_names)}), "
+            f"each appearing once: {_sentence(characters)} Every other figure is an anonymous extra in "
+            "plain drab clothing, with other hair and none of their colours or signature items.")
     elif cast_names is not None:
-        cast = "ON SCREEN: none of the story's named characters; only anonymous figures, if any. "
-    environment = continuity.get("location", "a coherent cinematic environment")
-    style = continuity.get("visual_style", "photographic realism")
-    lighting = "natural daylight with real shadows and no haze"
-    if light:
-        lighting = f"{light}, held steady for the whole clip (this shot only; later story light never appears early)"
+        parts.append("None of the story's named characters; any people are anonymous background figures.")
+    elif characters and characters != DEFAULT_CHARACTERS:
+        parts.append(_sentence(characters))
+    parts.append(_sentence(generator_text(subject_action)))
+    end = generator_text(handoff) or generator_text(payoff_of(subject_action))
+    if end and end.rstrip(".") not in parts[-1]:
+        parts.append(_sentence(f"By the end of the clip: {end}"))
+    objects = generator_text("; ".join(_named_here(continuity.get("recurring_objects") or "", subject_action)))
+    if objects:
+        parts.append(_sentence(objects))
+    # Which side each fleet or army holds only matters where sides are in view; in a close-up the
+    # sentence's nouns ("Austrian ships always frame left") put ships into a shot of a kettle.
+    if continuity.get("screen_geography") and framing_scale(subject_action) != "close":
+        parts.append(_sentence(f"Screen geography: {generator_text(continuity['screen_geography'])}")
+                     + " Opposing sides stay on their own side of the frame, facing each other across open space.")
+    location = str(continuity.get("location") or "")
+    if location and not location.startswith(DEFAULT_LOCATION):
+        parts.append(_sentence(f"Setting: {generator_text(location)}"))
+    if continuity.get("palette") and continuity["palette"] != DEFAULT_PALETTE:
+        parts.append(_sentence(f"Colour palette: {generator_text(continuity['palette'])}"))
     # A fixed "clear air" contradicted every hazy, smoky or ash-darkened light, and won: 28 reviews on
     # the volcano run said the sky came back pale and bright instead of ash-darkened.
-    atmosphere = ("air, sky and colour exactly as the lighting above gives them in every frame, crisp detail"
-                  if light else "clear air, crisp detail, everyday real-world colour")
-    scope = (
-        "Do not restart the story, show an earlier location, or compress multiple scenes into this clip."
-        if opening == "continue" else "Do not compress multiple scenes into this clip."
-    )
-    return (
-        f"CURRENT RENDER TASK — SHOT {shot_number:02d} OF {shot_count:02d}. Render only this shot, "
-        "not a montage and not the other screenplay events. "
-        f"CURRENT SHOT (the only event to render): {subject_action}. "
-        "END-FRAME PAYOFF (clearly visible before the clip ends; move toward it from the first second): "
-        f"{payoff_of(subject_action)} {cast}"
-        f"[{stage.upper()}] Lighting: {lighting}. Camera: {camera_action}; {framing}; 9:16 portrait composition. "
-        f"Atmosphere: {atmosphere}. Visual style: {style}. {suffix}. {QUALITY_BAN}"
-        f" Audio direction: {ambience}, environmental sound only. Dialogue: none. Narration: none. "
-        "Voices and vocals: none. The production notes below are silent context; never speak, "
-        f"display, caption, subtitle, label, or spell any of their words. {scope}\n\n"
-        f"{generation_context}"
-    )
+    parts.append(_sentence(f"Light: {light}, held steady in every frame") if light
+                 else "Natural daylight with real shadows.")
+    parts.append(camera_prose(camera_action))
+    parts.append(f"Photorealistic: {suffix}.")
+    parts.append(H3_NO_TEXT)
+    sound = f"{ambience}, environmental sound only, no voices" if ambience else ""
+    return h3_prompt(" ".join(p for p in parts if p), sound)
 
 
 def _physical_descriptions(beats: list[dict[str, Any]], concept: str) -> list[str]:
@@ -532,67 +701,9 @@ def build_visual_screenplay(
     return "\n".join(lines)
 
 
-def build_generation_context(
-    script: dict[str, Any],
-    concept: str,
-    continuity: dict[str, Any],
-    descriptions: list[str],
-    index: int,
-    opening: str = "continue",
-) -> str:
-    """Build a compact local window so a short clip renders one beat, not the whole story.
-
-    `opening` is "continue" (starts on the previous shot's last frame), "return" (starts on an
-    earlier frame of the same place and light) or "new" (a hard cut with no start image).
-    """
-    beats = script.get("beats") if isinstance(script.get("beats"), list) else []
-
-    def beat_data(position: int) -> tuple[str, str, str, str]:
-        beat = beats[position] if position < len(beats) and isinstance(beats[position], dict) else {}
-        visual = beat.get("visual") if isinstance(beat.get("visual"), dict) else {}
-        return (
-            descriptions[min(position, len(descriptions) - 1)],
-            str(visual.get("continuity_in") or "").strip(),
-            str(visual.get("continuity_out") or "").strip(),
-            str(beat.get("text") or "").strip(),
-        )
-
-    _, inherit, handoff, _ = beat_data(index)
-    start = {
-        "continue": f"Required starting state: {inherit or 'begin exactly where the previous shot ended'}",
-        "return": "RETURN TO AN EARLIER PLACE: the start image is this same place and light from an earlier "
-                  "moment; keep its geography and every character's exact clothing, then play this shot's action.",
-        "new": "NEW SCENE (hard cut): open directly on this shot's own place and light; nothing from the "
-               "previous shot's frame carries over except each named character's exact appearance.",
-    }[opening]
-    # No whole-story premise or final payoff here: the video model renders every noun it is given,
-    # not only the "current shot". The volcano run's premise ("eruptions sent lava down its flanks")
-    # and payoff ("a clear, wide daytime view ... a thin steam plume") put a bright lava stream and a
-    # pale sky into shots that asked for a bare ash cone under an ash-darkened sky. The full story
-    # stays in screenplay.txt.
-    lines = [
-        "SINGLE-SHOT CONTINUITY LOCK",
-        start,
-        f"Required ending state: {handoff or 'finish with a clear visual handoff to the next action'}",
-        f"Character identity lock: {continuity.get('characters')}",
-        "The current shot's own description wins over the identity lock for age, size, and pose.",
-        f"World lock: {continuity.get('location')}"
-        + (f"; palette: {continuity['palette']}" if continuity.get("palette") else ""),
-        f"Light and sky in this shot: {continuity.get('time_of_day')}",
-    ]
-    if continuity.get("screen_geography"):
-        lines.append(
-            f"SCREEN GEOGRAPHY (fixed for the whole film): {continuity['screen_geography']}. "
-            "Opposing sides face each other across a visible gap; they never move side by side or mix."
-        )
-    if index > 0 and opening == "continue":
-        _, _, previous_handoff, _ = beat_data(index - 1)
-        lines.append(
-            "PREVIOUS SHOT (inherit, never replay): "
-            + (previous_handoff or "continue its final pose, props, lighting, and geography")
-        )
-    lines.append("ONE-SHOT RULE: one continuous moment, one protagonist, one location, no montage, no flashback, no scene reset.")
-    return "\n".join(lines)
+def beat_handoff(script: dict[str, Any], beat_index: int) -> str:
+    """The state the shot ends on (`continuity_out`), which the next shot inherits."""
+    return str(_beat_visual(script, beat_index).get("continuity_out") or "").strip()
 
 
 def plan_shots(
@@ -619,31 +730,17 @@ def plan_shots(
     prompt_backend = "minimax" if preferred_backend in ("auto", "minimax") else "wan"
     beat_of = [min(len(descriptions) - 1, math.floor(index * len(descriptions) / count)) for index in range(count)]
     labels = [beat_labels(script, beat) for beat in beat_of]
-    casts = [[str(c["name"]).strip() for c in beat_cast(script, beat)] for beat in beat_of]
     names_cast = _names_cast(script)
-    scales = [framing_scale(descriptions[beat]) for beat in beat_of]
     shots: list[Shot] = []
     for index in range(count):
         beat_index = beat_of[index]
         subject = descriptions[beat_index]
-        source = continuation_source(labels, index, casts, scales)
-        opening = "continue" if source == index - 1 else "new" if source is None and index else "return"
-        if index == 0:
-            opening = "new" if labels[0][0] else "continue"
         cast_names = [str(c["name"]).strip() for c in beat_cast(script, beat_index)]
         # Each shot carries only the looks its beat needs (a cub scene never sees the adult).
         shot_continuity = _continuity(script, visual_style, concept, beat_index)
         camera, framing = _camera_plan(subject, index,
                                        chosen=_beat_visual(script, beat_index).get("camera"))
         scene_ambience = ambience or "natural location tone and specific diegetic details"
-        previous = descriptions[max(0, min(len(descriptions) - 1, math.floor((index - 1) * len(descriptions) / count)))]
-        following = descriptions[min(len(descriptions) - 1, math.floor((index + 1) * len(descriptions) / count))]
-        if index == 0:
-            story_link = f"Establish the protagonist and world clearly; the next action will be {following}"
-        elif index == count - 1:
-            story_link = f"Continue directly from {previous}; resolve the action in this final shot"
-        else:
-            story_link = f"Continue directly from {previous}; end with a visual motivation toward {following}"
         transition = str(_beat_visual(script, beat_index).get("transition") or "cut")
         if index == 0 or transition not in {"cut", "match_cut", "crossfade"}:
             transition = "cut"
@@ -658,16 +755,9 @@ def plan_shots(
                 continuity=shot_continuity,
                 framing=framing,
                 backend=prompt_backend,
-                stage=_stage(index, count),
-                story_link=story_link,
-                generation_context=build_generation_context(
-                    script, concept, shot_continuity, descriptions, beat_index, opening,
-                ),
-                shot_number=index + 1,
-                shot_count=count,
                 cast_names=cast_names if names_cast else None,
                 light=labels[index][1],
-                opening=opening,
+                handoff=beat_handoff(script, beat_index),
             ),
             negative_prompt=(
                 "static image, frozen motion, black frame, low detail, flicker, duplicate subject, "

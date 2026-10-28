@@ -109,8 +109,8 @@ class PlanningTests(unittest.TestCase):
         # Nobody named: no lead is added (the whole cast once posed in a crowd shot).
         self.assertNotIn("peaked cap", shots[2].prompt)
         self.assertNotIn("lean soldier", shots[2].prompt)
-        self.assertIn("none of the story's named characters", shots[2].prompt)
-        self.assertIn("exactly 2 named characters (Wojtek, Piotr), each appearing once", shots[0].prompt)
+        self.assertIn("None of the story's named characters", shots[2].prompt)
+        self.assertIn("Exactly 2 named characters (Wojtek, Piotr), each appearing once", shots[0].prompt)
         self.assertEqual(shots[0].cast, ["Wojtek", "Piotr"])
         self.assertEqual(shots[2].cast, [])
 
@@ -130,12 +130,8 @@ class PlanningTests(unittest.TestCase):
         shots, _ = plan_shots(script, "desert city", 60, "35mm epic, golden light that cuts to total eclipse darkness", "auto")
         labels = [(s.scene, s.light) for s in shots]
         self.assertEqual([continuation_source(labels, i) for i in range(8)], [None, 0, None, 2, None, 4, None, None])
-        self.assertIn("Required starting state", shots[1].prompt)
-        self.assertIn("NEW SCENE (hard cut)", shots[2].prompt)
-        self.assertNotIn("PREVIOUS SHOT", shots[2].prompt)
-        self.assertNotIn("show an earlier location", shots[4].prompt)
         # The light is the shot's own, and the style line about the later eclipse stays out of dawn.
-        self.assertIn("Lighting: dawn sun, held steady", shots[0].prompt)
+        self.assertIn("Light: dawn sun, held steady", shots[0].prompt)
         self.assertNotIn("eclipse", shots[0].prompt.lower())
         self.assertIn("total eclipse darkness", shots[6].prompt)
         self.assertEqual(shots[0].scene, "cliff")
@@ -164,11 +160,10 @@ class PlanningTests(unittest.TestCase):
         for beat, text, place in zip(script["beats"], cast, places):
             beat["visual"].update(description=text, scene=place, light="midday sun")
         shots, _ = plan_shots(script, "desert city", 60, "cinematic", "auto")
-        self.assertIn("NEW SCENE (hard cut)", shots[2].prompt)  # not shot 1's lone charge
         labels, casts = [(s.scene, s.light) for s in shots], [s.cast for s in shots]
         self.assertIsNone(continuation_source(labels, 2, casts))
         self.assertEqual(continuation_source(labels, 2), 0)
-        self.assertIn("SCREEN GEOGRAPHY (fixed for the whole film): Karan's army frame left", shots[2].prompt)
+        self.assertIn("Screen geography: Karan's army frame left", shots[2].prompt)
 
     def test_captions_spell_names_as_the_script_does(self):
         heard = [{"text": t, "start": i, "end": i + 1} for i, t in
@@ -187,6 +182,21 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(frames[0], round((2.5 - 0.12) * 30))  # cut lands on "Heat"
         self.assertEqual(sum(frames[:2]), round((6.0 - 0.12) * 30))  # and on "Boudica"
         self.assertIsNone(speech_frames([], beats, 9.0))
+
+    def test_a_shot_is_never_timed_longer_than_its_clip_can_fill(self):
+        beats = ["Fire spreads.", "Heat melts pottery to glass.", "Boudica watches."]
+        heard = [{"text": t, "start": s, "end": s + 0.4} for t, s in
+                 [("Fire", 0.1), ("spreads.", 0.5), ("Heat", 4.8), ("melts", 5.2), ("pottery", 5.6),
+                  ("to", 6.0), ("glass.", 6.4), ("Boudica", 8.0), ("watches.", 8.5)]]
+        # Voice alone gives the first shot 4.68 s; its 3.04 s clip fills only 3.33 s.
+        self.assertGreater(speech_frames(heard, beats, 11.0)[0], 4.6 * 30)
+        frames = speech_frames(heard, beats, 11.0, longest=[3.33, 4.1, 4.1])
+        self.assertEqual(sum(frames), 330)
+        self.assertLessEqual(frames[0], round(3.33 * 30))
+        self.assertTrue(all(f <= round(4.1 * 30) for f in frames))
+        # Clips that cannot cover the voice together: fall back to the voice, never fail.
+        self.assertEqual(speech_frames(heard, beats, 11.0, longest=[3.0, 3.0, 3.0]),
+                         speech_frames(heard, beats, 11.0))
 
     def test_a_scene_never_sees_another_scenes_world(self):
         script = sample_script()
@@ -222,25 +232,30 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("papyrus", shots[0].continuity["recurring_objects"])
         self.assertIn("corona", shots[-1].continuity["recurring_objects"])
 
-    def test_first_take_prompt_leads_with_the_payoff(self):
+    def test_first_take_prompt_states_the_end_state(self):
         script = sample_script()
         script["beats"][0]["visual"]["description"] = "The cub sniffs the crate. He lifts it onto his back."
+        script["beats"][0]["visual"]["continuity_out"] = "The crate balanced on the cub's back"
         shots, _ = plan_shots(script, "desert city", 60, "35mm nocturne", "auto")
-        self.assertIn("END-FRAME PAYOFF", shots[0].prompt)
-        self.assertIn("He lifts it onto his back.", shots[0].prompt.split("END-FRAME PAYOFF", 1)[1][:200])
+        self.assertIn("He lifts it onto his back. By the end of the clip: The crate balanced on the cub's back.",
+                      shots[0].prompt)
 
     def test_shot_plan_is_exact_and_self_contained(self):
         shots, continuity = plan_shots(sample_script(), "desert city", 60, "35mm nocturne", "auto")
         self.assertEqual(len(shots), 20)
         self.assertEqual(sum(shot.duration_frames for shot in shots), 1800)
         self.assertTrue(all(75 <= shot.duration_frames <= 120 for shot in shots))
-        self.assertIn(QUALITY_BAN, shots[0].prompt)
-        self.assertIn("Camera:", shots[0].prompt)
-        self.assertIn("Dialogue: none", shots[0].prompt)
-        self.assertIn("Narration: none", shots[0].prompt)
-        self.assertIn("CURRENT RENDER TASK — SHOT 01 OF 20", shots[0].prompt)
-        self.assertIn("SINGLE-SHOT CONTINUITY LOCK", shots[0].prompt)
-        self.assertIn("CURRENT SHOT (the only event to render)", shots[0].prompt)
+        # MiniMax H3's trained layout: a [Shot 1] description, then the sound and music sections.
+        self.assertTrue(shots[0].prompt.startswith("integrated_multimodal_description: [Shot 1] Live-action"))
+        self.assertIn("\n\noverall_soundscape: ", shots[0].prompt)
+        self.assertTrue(shots[0].prompt.endswith("\n\nnon_diegetic_music: N/A"))
+        self.assertIn("No subtitles, no on-screen text.", shots[0].prompt)
+        self.assertIn("The camera pushes in slowly with small amplitude.", shots[0].prompt)
+        # Instructions meant for a chat model are drawn by a video model, not obeyed.
+        for order in ("RENDER TASK", "montage", "flashback", "PREVIOUS SHOT", "LOCK", "Dialogue: none",
+                      "recurring protagonist"):
+            self.assertNotIn(order, shots[0].prompt)
+        self.assertLess(len(shots[0].prompt.split()), 320)
         self.assertNotIn("NEXT SHOT", shots[0].prompt)
         self.assertNotIn("WHOLE-STORY CONTRACT", shots[0].prompt)   # other beats' nouns get rendered
         self.assertNotIn("FULL VISUAL SCREENPLAY", shots[0].prompt)
@@ -563,6 +578,14 @@ class QueueTests(unittest.TestCase):
                     with FileLock(lock):
                         pass
 
+    def test_lock_with_reused_pid_is_recovered(self):
+        # After a reboot the dead owner's pid can belong to a newer, unrelated process.
+        with tempfile.TemporaryDirectory() as folder:
+            lock = Path(folder) / ".gpu-generation.lock"
+            lock.write_text(json.dumps({"pid": os.getpid(), "started": 1000.0}), encoding="utf-8")
+            with FileLock(lock):
+                self.assertGreater(json.loads(lock.read_text(encoding="utf-8"))["started"], 1000.0)
+
     def test_backend_fallback_is_recorded(self):
         with tempfile.TemporaryDirectory() as folder:
             config = make_test_config(folder, retry_limit=1, fallback_failures=1)
@@ -612,7 +635,8 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(shot.status, "accepted")
             self.assertFalse(shot.degraded)                   # the repair take passed outright
             self.assertTrue(shot.attempts[-1].get("repair"))
-            self.assertTrue(minimax.prompts[-1].startswith("SIMPLE HELD SHOT"))
+            self.assertIn("Static shot: the camera stays locked off on a tripod.", minimax.prompts[-1])
+            self.assertTrue(minimax.prompts[-1].startswith("integrated_multimodal_description: [Shot 1]"))
 
     def test_the_repair_take_can_be_switched_off(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -710,9 +734,10 @@ class QueueTests(unittest.TestCase):
             result = runner.run(project, shots={1})
             self.assertEqual(result.shots[0].status, "accepted")
             self.assertEqual(minimax.calls, 2)
-            self.assertNotIn("DIRECTOR'S RETAKE", minimax.prompts[0])
-            self.assertTrue(minimax.prompts[1].startswith("DIRECTOR'S RETAKE"))
+            self.assertNotEqual(minimax.prompts[0], minimax.prompts[1])
+            self.assertTrue(minimax.prompts[1].startswith("integrated_multimodal_description: [Shot 1]"))
             self.assertIn("Stay underwater and show only chamber one", minimax.prompts[1])
+            self.assertNotIn(minimax.prompts[0], minimax.prompts[1])   # never the old prompt plus orders
 
     def _rejecting_runner(self, config, reviews):
         minimax = FakeBackend(config, "minimax", [])
@@ -840,11 +865,124 @@ class QueueTests(unittest.TestCase):
             subject_action="Mara reaches the archway. Close on her intact mask.",
             camera_action="smooth push-in",
         )
+        # A short note amends the beat.
         prompt = _retake_prompt(shot, "Keep the regulator visible.", has_reference=True)
-        self.assertIn("Start from it", prompt)
-        self.assertIn("REQUIRED END-FRAME PAYOFF: Close on her intact mask.", prompt)
-        self.assertIn("Keep the regulator visible", prompt)
-        self.assertTrue(prompt.endswith("BASE PROMPT"))
+        self.assertIn("Mara reaches the archway. Close on her intact mask. Keep the regulator visible.", prompt)
+        self.assertNotIn("BASE PROMPT", prompt)
+        # A full revised description from the reviewer replaces it; the beat's end state stays the target.
+        revision = "Medium shot at eye level: Mara in her diving suit walks under the stone archway toward camera."
+        prompt = _retake_prompt(shot, revision, has_reference=True)
+        self.assertIn(revision, prompt)
+        self.assertNotIn("Mara reaches the archway", prompt)
+        self.assertIn("By the end of the clip: Close on her intact mask.", prompt)
+        self.assertNotIn("BASE PROMPT", prompt)
+
+    def test_minimax_marks_a_supplied_first_frame_and_wan_gets_plain_text(self):
+        from local_video.backends import MiniMaxAdapter
+        from local_video.planner import FIRST_FRAME_LINE, plain_description
+        shot = plan_shots(sample_script(), "desert city", 60, "35mm nocturne", "auto")[0][0]
+        with tempfile.TemporaryDirectory() as folder:
+            adapter = MiniMaxAdapter(make_test_config(folder))
+            text = adapter.workflow(shot)["1"]["inputs"]["text"]
+            self.assertNotIn(FIRST_FRAME_LINE, text)
+            client = type("Client", (), {"upload_image": lambda self, path: "frame.png"})()
+            adapter.client = client
+            text = adapter.workflow(shot, Path(folder) / "frame.png")["1"]["inputs"]["text"]
+        lead, rest = text.split(FIRST_FRAME_LINE)
+        self.assertTrue(lead.endswith("9:16 vertical frame. "))      # right after the opening framing
+        plain = plain_description(shot.prompt)
+        self.assertNotIn("integrated_multimodal_description", plain)
+        self.assertNotIn("overall_soundscape", plain)
+        self.assertTrue(plain.startswith("Live-action"))
+
+    def test_generator_text_drops_the_illustrative_label(self):
+        from local_video.planner import generator_text
+        self.assertEqual("Close-up: camera low on the deck.",
+                         generator_text("Close-up: illustrative reconstruction, camera low on the deck."))
+        self.assertEqual("35mm documentary look of a period reconstruction, muted grade",
+                         generator_text("35mm documentary look of an illustrative period reconstruction, muted grade"))
+        self.assertEqual("a radar dish at a ground station", generator_text("a radar dish at a ground station (illustrative)"))
+
+    def test_a_close_up_carries_no_screen_geography(self):
+        script = sample_script()
+        script["screen_geography"] = "Austrian ships always frame left; the Dutch warship frame right"
+        script["beats"][0]["visual"]["description"] = "Close-up: a black iron kettle on deck planks."
+        script["beats"][1]["visual"]["description"] = "Wide shot: three ships sail left to right."
+        shots, _ = plan_shots(script, "desert city", 60, "cinematic", "auto")
+        self.assertNotIn("ships", shots[0].prompt)
+        self.assertIn("Screen geography: Austrian ships always frame left", shots[1].prompt)
+
+    def test_a_resumed_old_project_renders_pending_shots_with_the_new_prompt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            project = self._project(folder, config)
+            project.shots[0].prompt = "CURRENT RENDER TASK — SHOT 01 OF 20. Render only this shot, not a montage."
+            project.save()
+            minimax = FakeBackend(config, "minimax", ["ok"])
+            QueueRunner(config, {"minimax": minimax, "wan": FakeBackend(config, "wan", [])},
+                        validator=fake_validator, extractor=fake_extractor,
+                        visual_reviewer=fake_visual_reviewer).run(project, shots={1})
+            self.assertTrue(minimax.prompts[0].startswith("integrated_multimodal_description: [Shot 1]"))
+            self.assertIn(project.shots[0].subject_action.rstrip("."), minimax.prompts[0])
+            self.assertNotIn("RENDER TASK", minimax.prompts[0])
+
+    def test_every_unfinished_shot_is_upgraded_before_the_next_shot_renders_early(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            project = self._project(folder, config)
+            for shot in project.shots:
+                shot.prompt = "CURRENT RENDER TASK. Render only this shot, not a montage."
+            project.shots[0].status = "accepted"
+            QueueRunner._upgrade_prompts(project)
+            self.assertFalse(project.shots[0].prompt.startswith("integrated_multimodal_description"))
+            self.assertTrue(all(s.prompt.startswith("integrated_multimodal_description: [Shot 1]")
+                                for s in project.shots[1:]))
+
+    def test_a_resumed_shot_drops_another_scenes_setting_saved_at_planning(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            project = self._project(folder, config)
+            for i, beat in enumerate(project.script["beats"]):
+                beat["visual"]["scene"] = "peninsula shore" if i < 10 else "open pacific sea"
+            project.script["location"] = ("Peninsula shore: beachfront homes facing the sea. "
+                                          "Open Pacific sea: a tropical ocean seen from a palm-lined beach.")
+            for shot in project.shots:  # what an older planner saved: the whole world, every scene
+                shot.continuity = {**shot.continuity, "location": project.script["location"]}
+                shot.prompt = shot.prompt.replace("Setting:", "Setting: palm-lined beach.")
+            QueueRunner._upgrade_prompts(project)
+            self.assertNotIn("palm-lined", project.shots[0].prompt)
+            self.assertNotIn("palm-lined", project.shots[0].continuity["location"])
+            self.assertIn("beachfront homes", project.shots[0].prompt)
+            self.assertIn("palm-lined", project.shots[12].prompt)
+
+    def test_a_shot_that_places_its_own_camera_is_not_forced_to_eye_level(self):
+        from local_video.planner import framing_for
+        self.assertNotIn("eye level", framing_for("Close, low view along the boardwalk: planks lifted."))
+        self.assertIn("close-up", framing_for("Close, low view along the boardwalk: planks lifted."))
+        self.assertNotIn("eye level", framing_for("The camera rises from the boardwalk to the walls."))
+        self.assertNotIn("eye level", framing_for("Foam surges past the homes.", "slow rising crane move"))
+        self.assertIn("eye level", framing_for("Foam surges past the homes.", "steady pan left"))
+
+    def test_a_named_object_enters_the_prompt_only_when_the_shot_names_it(self):
+        script = sample_script()
+        script["recurring_objects"] = [
+            "Austrian merchant ship: a broad-bellied sailing ship flying a yellow banner with a black eagle",
+            "Bologna banners (illustrative): plain red cloth banners",
+            "Modena banners (illustrative): plain white cloth banners",
+        ]
+        script["beats"][0]["visual"]["description"] = "Wide shot: wooden merchant sailing ships moored at a quay."
+        script["beats"][1]["visual"]["description"] = "Medium shot: the Austrian merchant ship sails right."
+        script["beats"][2]["visual"]["description"] = "Medium shot: a plain red cloth banner flutters on a wall."
+        shots, _ = plan_shots(script, "desert city", 60, "cinematic", "auto")
+        self.assertNotIn("eagle", shots[0].prompt)                    # generic ships stay generic
+        self.assertIn("black eagle", shots[1].prompt)
+        self.assertNotIn("white cloth", shots[2].prompt)              # never the rival city's banner
+        self.assertIn("eagle", shots[0].continuity["recurring_objects"])   # the reviewer's lock is unchanged
+
+    def test_birds_overhead_do_not_lift_the_camera(self):
+        from local_video.planner import framing_for
+        self.assertNotIn("aerial", framing_for("Wide shot: camera at eye level on a quay. Gulls cross overhead."))
+        self.assertIn("aerial", framing_for("Wide overhead shot looking down on the harbour."))
 
     def test_replan_archives_old_clips_and_keeps_full_screenplay(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -923,6 +1061,28 @@ class ValidationTests(unittest.TestCase):
                         manifest, config, {"minimax": MissingBackend(), "wan": MissingBackend()},
                         require_visual_qc=False,
                     )
+
+    def test_a_redo_with_rendered_narration_needs_no_voice_credits(self):
+        class MissingBackend:
+            @staticmethod
+            def available():
+                return False, "offline"
+
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            manifest = ProjectManifest(
+                id="test", concept="test", duration_seconds=60, visual_style="film",
+                preferred_backend="auto", project_dir=folder, script={"spoken_script": "x" * 800},
+            )
+            (Path(folder) / "audio").mkdir()
+            (Path(folder) / "audio" / "narration.mp3").write_bytes(b"mp3")
+            with patch("local_video.preflight._tool_ok", return_value=True), \
+                    patch("local_video.preflight.elevenlabs_keys", return_value=[("k", "key")]), \
+                    patch("local_video.preflight.credit_status", return_value={"valid": True, "remaining": 0}):
+                with self.assertRaisesRegex(RuntimeError, "No configured video backend") as raised:
+                    run_preflight(manifest, config, {"minimax": MissingBackend(), "wan": MissingBackend()},
+                                  require_visual_qc=False)
+            self.assertNotIn("ElevenLabs", str(raised.exception))
 
     def test_minimax_output_audio_is_physically_removed(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1018,6 +1178,29 @@ class AssemblyTests(unittest.TestCase):
             command = build_ambience_command(manifest, Path(folder) / "ambience.wav", config)
             self.assertIn("anullsrc=r=48000:cl=stereo", command)
             self.assertNotIn(str(Path(folder) / shot.output), command)
+
+    def test_manifest_save_waits_out_a_reader_holding_the_file(self):
+        """Windows denies a rename over a file another process has open; save must retry."""
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = ProjectManifest(
+                id="test", concept="test", duration_seconds=60, visual_style="film",
+                preferred_backend="auto", project_dir=folder,
+            )
+            real_replace = os.replace
+            calls = []
+
+            def flaky_replace(source, target):
+                calls.append(target)
+                if len(calls) < 3:
+                    raise PermissionError(5, "Access is denied")
+                real_replace(source, target)
+
+            with patch("local_video.models.os.replace", flaky_replace), \
+                    patch("local_video.models.time.sleep"):
+                path = manifest.save()
+            self.assertEqual(3, len(calls))
+            self.assertEqual("test", json.loads(path.read_text(encoding="utf-8"))["id"])
+            self.assertEqual([], list(Path(folder).glob("*.tmp")))
 
     def test_mix_does_not_create_unconnected_sidechain_without_music(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1421,6 +1604,26 @@ class VolcanoRejectionCauseTests(unittest.TestCase):
         self.assertIsNone(continuation_source(labels, 3, None, scales))
         self.assertEqual(continuation_source(labels, 3), 2)     # without scales it would continue
 
+    def test_one_side_never_opens_on_the_other_sides_frame(self):
+        from local_video.planner import beat_objects, _object_name
+        script = {"recurring_objects": [
+            "Austrian warships: two slim two-masted ships flying a yellow eagle banner",
+            "Dutch warship: a single dark-hulled ship flying a horizontal striped flag",
+        ], "beats": [{"visual": {"scene": "river", "light": "overcast", "description": d}} for d in (
+            "Medium shot: a single dark-hulled warship, its striped flag at the stern.",
+            "Wide shot: two slim warships glide downriver, eagle banners flying.",
+            "Medium shot: a single dark-hulled warship holds position, striped flag streaming.",
+            "Close-up: the dark hull of the warship as one gun port puffs smoke.",
+        )]}
+        objects = [frozenset(_object_name(item) for item in beat_objects(script, i)) for i in range(4)]
+        self.assertEqual(objects[1], {"austrian warships"})    # plural head noun, told apart by its banner
+        self.assertEqual(objects[2], {"dutch warship"})
+        labels = [("river", "overcast")] * 4
+        self.assertEqual(continuation_source(labels, 2), 1)    # without objects: the convoy's frame
+        self.assertEqual(continuation_source(labels, 2, None, None, objects), 0)  # back to its own ship
+        self.assertEqual(continuation_source(labels, 3, None, None, objects), 2)
+        self.assertIsNone(continuation_source(labels, 1, None, None, objects))
+
     def test_the_keyframe_leads_with_camera_position_and_light(self):
         from local_video.keyframes import keyframe_prompt
         prompt = keyframe_prompt(self._shots()[1])
@@ -1534,6 +1737,36 @@ class RedoFlagTests(unittest.TestCase):
                 cli.main(["run", str(project.project_dir), "--shots", "1"])
             reloaded = json.loads((Path(project.project_dir) / "project.json").read_text(encoding="utf-8"))
             self.assertEqual("accepted", reloaded["shots"][0]["status"])  # reused, as before
+
+    def test_a_run_finished_from_the_cli_writes_post_text_next_to_the_video(self):
+        """A resume after a crash finishes the render here, not in main.py, so it must write the post text."""
+        from local_video import cli
+        with tempfile.TemporaryDirectory() as folder:
+            config, project = self._project(folder)
+            final = Path(project.project_dir) / "final.mp4"
+
+            def finish(manifest, shots=None):
+                final.write_bytes(b"video")
+                manifest.state = "completed"
+                return manifest
+
+            with patch.object(cli.QueueRunner, "run", side_effect=finish), \
+                    patch.object(cli, "PipelineConfig", return_value=config), \
+                    patch("agents.post_text.write", return_value="final_post.txt") as write:
+                cli.main(["resume", str(project.project_dir)])
+            write.assert_called_once()
+            self.assertEqual(str(final), write.call_args.args[1])
+            self.assertEqual(project.script["video_title"], write.call_args.args[0]["video_title"])
+
+    def test_an_unfinished_run_writes_no_post_text(self):
+        from local_video import cli
+        with tempfile.TemporaryDirectory() as folder:
+            config, project = self._project(folder)
+            with patch.object(cli.QueueRunner, "run", side_effect=lambda m, shots=None: m), \
+                    patch.object(cli, "PipelineConfig", return_value=config), \
+                    patch("agents.post_text.write") as write:
+                cli.main(["resume", str(project.project_dir)])
+            write.assert_not_called()
 
     def test_redo_without_shots_is_refused_rather_than_wiping_the_project(self):
         import contextlib

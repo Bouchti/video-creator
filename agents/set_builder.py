@@ -1165,6 +1165,11 @@ def qa_check(set_id, work) -> dict:
         rep["fingerprint"] = fingerprint
         json.dump(rep, open(qa_path, "w", encoding="utf-8"), indent=1)
     spans = json.load(open(os.path.join(work, "timings.json"), encoding="utf-8"))["beats"]
+    return measured_issues(rep, spans)
+
+
+def measured_issues(rep, spans) -> dict:
+    """{beat_number: [issue, ...]} (0 = whole set) from a cutaway runner --qa report."""
     out = {}
 
     def add(beat, text):
@@ -1514,14 +1519,16 @@ class KitDefect(RuntimeError):
 def build_kit_set(plan: dict) -> dict:
     """Compile a planned storyboard into a set and verify it WITHOUT any coding agent: the preview render and
     the measured gates (free, deterministic) must pass; one vision look is advisory (KIT_VISION_CHECK=1,
-    default on). Registers the set. Raises KitDefect on a render error or a measured defect."""
+    default on). Registers the set: a Max story in AVAILABLE, a no-hero storyboard ("hero": false) in
+    EXPLAINER. Raises KitDefect on a render error or a measured defect."""
     from agents import storyboard as sbm
     sb = plan["storyboard"]
     set_id = plan.get("set_id") or sbm.set_id_for(sb)
     base, n = set_id, 2
+    suffix = next((s for s in ("_story", "_explainer") if base.endswith(s)), "")
     while os.path.exists(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}_spec.py")) and \
             _compiled_storyboard(set_id) != sb:
-        set_id = f"{base[:-6]}_{n}_story" if base.endswith("_story") else f"{base}_{n}"
+        set_id = f"{base[:len(base) - len(suffix)]}_{n}{suffix}"
         n += 1
     set_id = sbm.compile_set(sb, set_id)
     work = os.path.join(PROJECT_ROOT, "output", "sets", set_id)
@@ -1550,10 +1557,71 @@ def build_kit_set(plan: dict) -> dict:
         for r in review:
             log.warning(f"[kit] reviewer note (advisory) beat {r['beat']} [{r['action']}]: {r['problems'][:2]}")
     sheet = contact_sheet(work, os.path.join(work, "contact_sheet.png"))
-    register(set_id, "AVAILABLE")
+    register(set_id, "AVAILABLE" if sbm.has_hero(sb) else "EXPLAINER")
     log.info(f"[kit] '{set_id}' verified and registered" + (f" ({len(review)} advisory reviewer notes)" if review
                                                               else ""))
     return {"accepted": True, "set": set_id, "work": work, "contact_sheet": sheet, "review_notes": review}
+
+
+def prepare_kit_film(film_json, timings_path, work) -> dict:
+    """The PREPARE stage every kit video passes before its first production frame (no AI, no rendering):
+    the kit builds the whole scene for THIS film, with its real script and voice timings, and the measured
+    gates check every object it needs (present and on screen where its beat shows it, textured, not
+    floating, no collisions, labels readable, the camera moving). The set's preview was measured once with
+    a reference script; a new script times and orders the same steps differently, so it is measured again.
+    Reused while the film, its timings and the kit code are unchanged. Raises KitDefect on a fatal issue."""
+    from engine.make_film import BLENDER, _run_blender
+    film = json.load(open(film_json, encoding="utf-8"))
+    root = os.path.join(work, "prepare")
+    os.makedirs(root, exist_ok=True)
+    h = hashlib.sha256(b"kit-prepare-v1")
+    for path in [film_json, timings_path] + sorted(
+            glob.glob(os.path.join(PROJECT_ROOT, "engine", "kit", "**", "*.py"), recursive=True)) + [
+            os.path.join(PROJECT_ROOT, "engine", "sets", f"{film['set']}.py"),
+            os.path.join(PROJECT_ROOT, "engine", "sets", f"{film['set']}_spec.py"),
+            os.path.join(PROJECT_ROOT, "engine", "films", "cutaway_film.py")]:
+        with open(path, "rb") as fh:
+            h.update(fh.read())
+    fingerprint = h.hexdigest()
+    qa_path = os.path.join(root, "qa.json")
+    try:
+        rep = json.load(open(qa_path, encoding="utf-8"))
+    except (OSError, ValueError):
+        rep = {}
+    if rep.get("fingerprint") != fingerprint:
+        log.info(f"[prepare] building the kit scene for '{os.path.basename(film_json)}' and measuring every "
+                 "object before rendering")
+        if os.path.exists(qa_path):
+            os.remove(qa_path)
+        previous = os.environ.get("QA_STEP")
+        os.environ["QA_STEP"] = previous or "9"
+        runner = os.path.join(PROJECT_ROOT, "engine", "films", "cutaway_film.py")
+        try:
+            _run_blender([BLENDER, "--background", "--factory-startup", "--python", runner, "--", film_json,
+                          timings_path, root, "--qa"])
+            rep = json.load(open(qa_path, encoding="utf-8"))
+        except (RuntimeError, OSError, ValueError) as exc:
+            raise KitDefect(f"the kit could not build the scene for '{film['set']}' (a kit bug, fix engine/kit): "
+                            f"{str(exc)[-1500:]}") from exc
+        finally:
+            if previous is None:
+                os.environ.pop("QA_STEP", None)
+        rep["fingerprint"] = fingerprint
+        json.dump(rep, open(qa_path, "w", encoding="utf-8"), indent=1)
+    else:
+        log.info("[prepare] the kit scene for this film was already measured; reusing it")
+    spans = json.load(open(timings_path, encoding="utf-8"))["beats"]
+    measured = measured_issues(rep, spans)
+    fatal = {b: [x for x in items if not _advisory(x)] for b, items in measured.items()}
+    fatal = {b: items for b, items in fatal.items() if items}
+    if fatal:
+        lines = "; ".join(f"beat {b}: {x}" for b, items in sorted(fatal.items()) for x in items[:3])
+        raise KitDefect(f"the kit scene for this film fails the measured gates (a kit bug, fix engine/kit): "
+                        f"{lines[:1500]}")
+    advisory = sum(len(items) for items in measured.values())
+    log.info(f"[prepare] every object passed the measured gates" + (f" ({advisory} advisory notes)" if advisory
+                                                                     else ""))
+    return measured
 
 
 def _compiled_storyboard(set_id):
