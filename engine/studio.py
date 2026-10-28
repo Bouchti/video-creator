@@ -1062,12 +1062,13 @@ def _frame_points(things, frames):
 
 
 def frame_all(rig, f0, f1, things, angle=-90.0, rise=0.18, lens=28.0, margin=0.12, push=0.06, swing=6.0,
-              cut=False, fstop=8.0, sample=None):
+              cut=False, fstop=8.0, sample=None, center=None):
     """A MOVING shot that keeps EVERY one of `things` (objects, Characters, (x, y, z) points: the mechanism,
     its label, the result meter, Max) fully inside the 9:16 frame from f0 to f1: the camera distance is
     solved from their real bounds (engine/framing.py), then it pushes in by `push` and swings `swing`
     degrees so the shot never holds still. Use it for every shot that must SHOW something named in the
-    narration; list only what must be seen (each extra far-away thing makes the shot wider)."""
+    narration; list only what must be seen (each extra far-away thing makes the shot wider). center: a fixed
+    aim point (default: the middle of the things), e.g. to set where the ground line sits in the frame."""
     from engine import framing
     mid = (f0 + f1) // 2
     pts = _frame_points(things, sample or (f0, mid, f1))
@@ -1076,7 +1077,7 @@ def frame_all(rig, f0, f1, things, angle=-90.0, rise=0.18, lens=28.0, margin=0.1
     keys, dist = [], 0.0
     for f in list(range(f0, f1, 3)) + [f1]:
         t = smooth((f - f0) / max(1, f1 - f0))
-        cam, aim, dist = framing.solve(pts, angle - swing / 2 + swing * t, rise, lens, margin)
+        cam, aim, dist = framing.solve(pts, angle - swing / 2 + swing * t, rise, lens, margin, center=center)
         cam = V(aim) + (V(cam) - V(aim)) * (1.0 + push * (1.0 - t))      # push in to the solved framing
         keys.append((f, cam, V(aim)))
     rig.track(f0, f1, keys, lens=lens, fstop=fstop, cut=cut)

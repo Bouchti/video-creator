@@ -29,7 +29,7 @@ output/autopilot/<run>.json, so an interrupted run continues where it stopped (-
 
   AUTOPILOT_MAX_ATTEMPTS=6      render attempts (each one resumes, it never starts over)
   AUTOPILOT_MAX_HOURS=10        overall time budget
-  AUTOPILOT_ON_GIVE_UP=fail     fail safely | ship (explicit override, marked NEEDS_REVIEW)
+  AUTOPILOT_ON_GIVE_UP=ship     ship a flagged draft | fail (strict accepted-only mode)
 """
 import argparse
 import datetime
@@ -219,15 +219,34 @@ def stage_script(run, source, angle, set_id):
                     if selected_set or not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True):
                         raise GiveUp(str(exc)) from exc
                     plan = run["new_set_plan"]
+                    kit = (os.getenv("SHOWRUNNER_SET_MODE") or "kit").strip().lower() == "kit"
                     if not plan:
                         run.event("script", "all existing Max subjects are consumed; researching a new one")
-                        plan = plan_new_story_set()
+                        if kit:
+                            from agents.kit_planner import plan_kit_story
+                            from agents.showrunner import _history
+                            published = "\n".join(f"- {h.get('title')}" for h in _history()[-40:]) or "- none"
+                            plan = plan_kit_story(published)
+                        else:
+                            plan = plan_new_story_set()
                         run.set(new_set_plan=plan)
-                    from agents.set_builder import build_story_set
-                    run.event("set", "building and visually validating a new Max set",
-                              detail=f"{plan['subject']} ({plan['set_id']})")
-                    status = build_story_set(plan["build_brief"], plan["set_id"],
-                                             rounds=_int("SET_BUILD_ROUNDS", 4))
+                    if plan.get("storyboard"):
+                        # the kit films a storyboard: no code is written, nothing is repaired by an agent
+                        from agents.set_builder import KitDefect, build_kit_set
+                        run.event("set", "filming the planned storyboard with the kit",
+                                  detail=f"{plan['title']} ({plan['set_id']})")
+                        try:
+                            status = build_kit_set(plan)
+                        except KitDefect as defect:
+                            raise GiveUp(str(defect)) from defect
+                        plan["set_id"] = status["set"]
+                        run.set(new_set_plan=plan)
+                    else:
+                        from agents.set_builder import build_story_set
+                        run.event("set", "building and visually validating a new Max set",
+                                  detail=f"{plan['subject']} ({plan['set_id']})")
+                        status = build_story_set(plan["build_brief"], plan["set_id"],
+                                                 rounds=_int("SET_BUILD_ROUNDS", 4))
                     if not status.get("accepted"):
                         raise GiveUp(f"new set '{plan['set_id']}' did not pass visual validation; "
                                      f"continue it in {status.get('work')}")
@@ -320,8 +339,18 @@ def stage_render(run, film_json):
 
     film = json.load(open(film_json, encoding="utf-8"))
     set_id = film.get("set")
+    from engine import sets as _sets
+    kit = bool(set_id) and bool(getattr(_sets.spec(set_id), "KIT", None))
+    if kit:
+        # a kit set was measured when its storyboard was filmed and has no agent repair path: no paid
+        # rehearsal or film review (a defect there is a kit bug, fixed once in engine/kit)
+        os.environ["SCENE_VALIDATE"] = "0"
+        os.environ["SCENE_PREFLIGHT"] = "0"
     os.environ["SCENE_POLICY"] = "fix"                      # autopilot: a rejected scene is always repaired
     os.environ["SCENE_VALIDATE"] = os.getenv("SCENE_VALIDATE") or "1"   # validate cutaway films too
+    # Both Blender cutaway routes use this stage: Max stories and no-hero explainers must pass the
+    # exact final-timing rehearsal before their first production frame is allowed to render.
+    os.environ["SCENE_PREFLIGHT"] = os.getenv("SCENE_PREFLIGHT") or "1"
     os.environ["SCENE_FIX_ATTEMPTS"] = os.getenv("SCENE_FIX_ATTEMPTS") or "3"
     max_attempts = _int("AUTOPILOT_MAX_ATTEMPTS", 6)
     deadline = time.time() + float(os.getenv("AUTOPILOT_MAX_HOURS") or 10) * 3600
@@ -332,8 +361,11 @@ def stage_render(run, film_json):
         work = os.path.join(get_output_dir(), f"{os.path.splitext(os.path.basename(film_json))[0]}_work")
         has_voice = os.path.exists(os.path.join(work, "voice.mp3"))
         has_frames = os.path.isdir(os.path.join(work, "frames")) and os.listdir(os.path.join(work, "frames"))
+        # Any frames in the work directory are completed work, including on the first attempt of a
+        # manually resumed process (run() renews the attempt counter). Basing this on attempt > 1
+        # made `--resume` erase an interrupted render before starting it again.
         args = argparse.Namespace(film=film_json, reuse_voice=has_voice, preview=False, frames="", remix=False,
-                                  resume=bool(has_frames and attempt > 1), redo="", list=False)
+                                  resume=bool(has_frames), redo="", list=False)
         try:
             if set_id:
                 _backup(set_id, run)
@@ -348,6 +380,9 @@ def stage_render(run, film_json):
                 continue
             return _give_up(run, film_json, set_id, exc)
         except BlenderFailed as exc:
+            if kit and exc.is_code_error:
+                raise GiveUp(f"the kit crashed rendering '{set_id}' (a kit bug: fix engine/kit, never this video): "
+                             f"{exc.log[exc.log.rfind('Traceback'):][:600]}") from exc
             if exc.is_code_error and set_id:
                 run.event("render", "Blender crashed in the set's code; Claude is fixing it",
                           detail=exc.log[exc.log.rfind("Traceback"):][:300])
@@ -366,14 +401,18 @@ def stage_render(run, film_json):
                 run.event("render", "Blender stopped without a code error (GPU / memory); resuming",
                           detail=exc.log[-200:])
                 time.sleep(30)
-        except GiveUp:
+        except GiveUp as exc:
+            # Do not strand a nearly complete film when an AI backend or token budget is
+            # exhausted. Existing frames can be finished without further model calls.
+            if has_frames:
+                return _give_up(run, film_json, set_id, exc)
             raise
         except RepairNotApplied as exc:
             raise GiveUp(f"automatic scene repair could not edit the set; stopped before wasting another render: "
                          f"{exc}") from exc
         except Exception as exc:                          # noqa: BLE001
             if _is_budget(exc):
-                raise GiveUp(str(exc)) from exc
+                return _give_up(run, film_json, set_id, exc)
             if _is_usage_limit(exc):
                 _wait_for_claude(exc, run, "render")
             elif _voice_error(exc):
@@ -387,13 +426,16 @@ def stage_render(run, film_json):
 
 
 def _give_up(run, film_json, set_id, exc):
-    """Stop after exhausted repairs unless shipping a flagged draft was explicitly requested."""
+    """Finish a flagged draft after exhausted repairs; strict failure is an explicit opt-in."""
     from engine.make_film import produce
-    if (os.getenv("AUTOPILOT_ON_GIVE_UP") or "fail").lower() == "fail":
+    if (os.getenv("AUTOPILOT_ON_GIVE_UP") or "ship").lower() == "fail":
         if set_id:
             _restore_first_backup(set_id, run)
         raise GiveUp(f"render could not be repaired: {exc}")
     run.event("render", "finishing the video anyway (scenes flagged); it will be marked NEEDS_REVIEW")
+    # These frames were already reviewed. Re-running the watcher while assembling a fallback
+    # burns another model batch and can fail again when the subscription quota is exhausted.
+    os.environ["SCENE_VALIDATE"] = "0"
     os.environ["SCENE_POLICY"] = "warn"
     args = argparse.Namespace(film=film_json, reuse_voice=True, preview=False, frames="", remix=False,
                               resume=True, redo="", list=False)

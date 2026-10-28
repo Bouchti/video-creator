@@ -374,9 +374,10 @@ if __name__ == "__main__":
         parser.error("--publish-live requires at least one --publish PLATFORM")
 
     if args.source in ("evolution", "cutaway", "explainer"):
-        # The 3D pipelines run under the autopilot: script → voice → Blender render (every ~3 s window
-        # validated as it renders) → sound + captions → final check, and every failure is repaired and
-        # redone automatically (agents/autopilot.py). A positional topic is the angle to develop.
+        # The 3D pipelines run under the autopilot: script → voice → exact-timing low-res rehearsal
+        # (every ~3 s window must pass) → Blender production render with free technical rechecks →
+        # sound + captions → final check. This gate is shared by Max cutaways, no-hero explainers and
+        # evolution films. A positional topic is the angle to develop.
         from agents.autopilot import GiveUp, run as autopilot
         try:
             film_path = autopilot(args.source, angle=args.topic, set_id=args.set)

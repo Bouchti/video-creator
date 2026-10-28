@@ -43,6 +43,17 @@ class _Env(unittest.TestCase):
 
 
 class RenderRepairTests(_Env):
+    def test_first_attempt_of_a_manual_resume_keeps_existing_frames(self):
+        work = os.path.join(self.tmp, "f_work")
+        os.makedirs(os.path.join(work, "frames"))
+        open(os.path.join(work, "frames", "f_0001.png"), "wb").write(b"frame")
+        open(os.path.join(work, "voice.mp3"), "wb").write(b"voice")
+        produce, calls = self._produce([self.video])
+        with patch.object(ap, "get_output_dir", return_value=self.tmp), patch.object(mf, "produce", produce):
+            ap.stage_render(self.run, self.film)
+        self.assertTrue(calls[0].resume)
+        self.assertTrue(calls[0].reuse_voice)
+
     def test_code_crash_is_fixed_by_claude_then_resumed(self):
         produce, calls = self._produce([mf.BlenderFailed("Traceback (most recent call last):\n  boom"), self.video])
         fixed = []
@@ -60,15 +71,27 @@ class RenderRepairTests(_Env):
             out, _ = ap.stage_render(self.run, self.film)
         self.assertEqual(out, self.video)
 
-    def test_persistent_rejection_fails_closed(self):
+    def test_persistent_rejection_fails_closed_when_explicitly_requested(self):
         rej = sv.SceneRejected([{"window": 1, "t0": 0, "t1": 3, "action": "plank", "fatal_problems": ["x"]}], "r.json")
         outcomes = [rej] * 2
         produce, calls = self._produce(outcomes)
         with patch.object(mf, "produce", produce), \
-                patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "2"}), \
+                patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "2", "AUTOPILOT_ON_GIVE_UP": "fail"}), \
                 patch.object(ap, "_restore_first_backup", lambda s, r: None):
             with self.assertRaises(ap.GiveUp):
                 ap.stage_render(self.run, self.film)
+        self.assertEqual(len(calls), 2)
+
+    def test_persistent_rejection_ships_flagged_draft_by_default(self):
+        rej = sv.SceneRejected([{"window": 1, "t0": 0, "t1": 3, "action": "plank",
+                                 "fatal_problems": ["x"]}], "r.json")
+        produce, calls = self._produce([rej, self.video])
+        with patch.object(mf, "produce", produce), \
+                patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "1", "AUTOPILOT_ON_GIVE_UP": ""}), \
+                patch.object(ap, "_restore_first_backup", lambda s, r: None):
+            out, flagged = ap.stage_render(self.run, self.film)
+            self.assertEqual(os.environ["SCENE_VALIDATE"], "0")
+        self.assertEqual((out, flagged), (self.video, True))
         self.assertEqual(len(calls), 2)
 
     def test_give_up_fail_mode_raises(self):
@@ -153,7 +176,7 @@ class ScriptAndCheckTests(_Env):
         def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
             raise NoUnusedStorySets("all consumed")
 
-        with patch("agents.showrunner.run", write), \
+        with patch("agents.showrunner.run", write), patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "agent"}), \
                 patch("agents.showrunner.plan_new_story_set", return_value=plan), \
                 patch("agents.set_builder.build_story_set",
                       side_effect=RepairNotApplied("AI repair made no source changes")) as build, \
@@ -176,7 +199,7 @@ class ScriptAndCheckTests(_Env):
 
         accepted = {"accepted": True, "set": "heat_pump_story", "work": self.tmp}
         with patch("agents.showrunner.run", write), \
-                patch.dict(os.environ, {"SET_BUILD_ROUNDS": "4"}), \
+                patch.dict(os.environ, {"SET_BUILD_ROUNDS": "4", "SHOWRUNNER_SET_MODE": "agent"}), \
                 patch("agents.showrunner.plan_new_story_set", return_value=plan), \
                 patch("agents.set_builder.build_story_set", return_value=accepted) as build:
             path = ap.stage_script(self.run, "cutaway", None, None)
@@ -184,6 +207,49 @@ class ScriptAndCheckTests(_Env):
         self.assertEqual(calls, [None, "heat_pump_story"])
         build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4)
         self.assertEqual(self.run["generated_set"], "heat_pump_story")
+
+    def test_an_exhausted_library_is_filmed_by_the_kit_without_any_agent(self):
+        from agents.showrunner import NoUnusedStorySets
+        from agents import storyboard as sbm
+        calls = []
+        plan = {"title": "Max's Backyard Levee", "set_id": "kit_demo_story", "storyboard": sbm.LEVEE,
+                "subject": "levee"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            calls.append(set_id)
+            if set_id is None:
+                raise NoUnusedStorySets("all consumed")
+            return self.film
+
+        accepted = {"accepted": True, "set": "kit_demo_story", "work": self.tmp}
+        with patch("agents.showrunner.run", write), \
+                patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "kit"}), \
+                patch("agents.kit_planner.plan_kit_story", return_value=plan) as planner, \
+                patch("agents.set_builder.build_kit_set", return_value=accepted) as build, \
+                patch("agents.set_builder.build_story_set", side_effect=AssertionError("no coding agent")):
+            path = ap.stage_script(self.run, "cutaway", None, None)
+        self.assertEqual(path, self.film)
+        planner.assert_called_once()
+        build.assert_called_once()
+        self.assertEqual(calls, [None, "kit_demo_story"])
+        self.assertEqual(self.run["generated_set"], "kit_demo_story")
+
+    def test_a_kit_defect_stops_the_run_instead_of_retrying(self):
+        from agents.showrunner import NoUnusedStorySets
+        from agents.set_builder import KitDefect
+        from agents import storyboard as sbm
+        plan = {"title": "T", "set_id": "kit_demo_story", "storyboard": sbm.LEVEE, "subject": "levee"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            raise NoUnusedStorySets("all consumed")
+
+        with patch("agents.showrunner.run", write), patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "kit"}), \
+                patch("agents.kit_planner.plan_kit_story", return_value=plan), \
+                patch("agents.set_builder.build_kit_set", side_effect=KitDefect("measured: Max floats")) as build, \
+                patch.object(ap.time, "sleep", side_effect=AssertionError("must not retry")):
+            with self.assertRaisesRegex(ap.GiveUp, "Max floats"):
+                ap.stage_script(self.run, "cutaway", None, None)
+        build.assert_called_once()
 
     def test_cutaway_retry_reuses_the_selected_topic(self):
         chosen = {"set": "record_chasing_giant_pumpkin_story", "title": "Pumpkin",

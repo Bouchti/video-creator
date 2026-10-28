@@ -14,8 +14,9 @@ class _Resp:
 class RotationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.env = patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k1", "ELEVENLABS_API_KEY_2": "k2",
-                                           "ELEVENLABS_API_KEY_3": "k3", "ELEVENLABS_API_KEY_4": ""})
+        keys = {f"ELEVENLABS_API_KEY_{k}": "" for k in range(4, 21)}       # the real .env may define more keys
+        keys.update({"ELEVENLABS_API_KEY": "k1", "ELEVENLABS_API_KEY_2": "k2", "ELEVENLABS_API_KEY_3": "k3"})
+        self.env = patch.dict(os.environ, keys)
         self.env.start()
         self.state = patch.object(h, "_ROTATION_FILE", os.path.join(self.tmp, "rot.json"))
         self.state.start()
@@ -79,3 +80,35 @@ class RotationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EdgeFallbackTests(unittest.TestCase):
+    def test_out_of_credits_everywhere_falls_back_to_edge(self):
+        from agents import voice
+        with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k", "VOICE_FALLBACK": "edge"}), \
+                patch.object(voice, "_elevenlabs_voiceover",
+                             side_effect=RuntimeError("All ElevenLabs keys are out of credits or unusable: x")), \
+                patch.object(voice, "_edge_voiceover", return_value="edge.mp3") as edge, \
+                patch.object(voice, "get_duration", return_value=8.0):
+            self.assertEqual(voice.generate_voiceover("Hello there.", "energetic"), ("edge.mp3", 8.0))
+        edge.assert_called_once_with("Hello there.", "energetic")
+
+    def test_other_elevenlabs_errors_and_a_disabled_fallback_still_fail_loudly(self):
+        from agents import voice
+        with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k", "VOICE_FALLBACK": "edge"}), \
+                patch.object(voice, "_elevenlabs_voiceover", side_effect=RuntimeError("ElevenLabs failed (x): 500")), \
+                patch.object(voice, "_edge_voiceover") as edge:
+            with self.assertRaises(RuntimeError):
+                voice.generate_voiceover("Hello.")
+        edge.assert_not_called()
+        with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k", "VOICE_FALLBACK": "none"}), \
+                patch.object(voice, "_elevenlabs_voiceover",
+                             side_effect=RuntimeError("All ElevenLabs keys are out of credits or unusable: x")), \
+                patch.object(voice, "_edge_voiceover") as edge:
+            with self.assertRaises(RuntimeError):
+                voice.generate_voiceover("Hello.")
+        edge.assert_not_called()
+
+    def test_break_tags_become_pauses_between_spoken_parts(self):
+        from agents import voice
+        self.assertEqual(voice._BREAK.split('One. <break time="0.35s" /> Two.'), ["One. ", "0.35", " Two."])

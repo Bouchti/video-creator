@@ -167,3 +167,14 @@ class PromptSizeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MinimumTurnTests(unittest.TestCase):
+    def test_a_turn_that_cannot_finish_is_not_started(self):
+        with patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1830000", "SET_BUILDER_CALL_TOKENS": "900000"}), \
+                patch.object(showrunner, "tokens_used", return_value=1_440_000), \
+                patch("shutil.which", return_value="claude"), \
+                patch.object(sb, "_run_claude_streaming", side_effect=AssertionError("must not start")):
+            with self.assertRaises(showrunner.BudgetExceeded):
+                sb.claude_agent("fix", ["engine/sets/demo_story.py"])

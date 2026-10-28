@@ -346,6 +346,8 @@ def _longest_still(track, fps):
 
 MUST_MIN = 0.05          # a must-see thing has to span at least this share of the frame (width or height)
 MUST_IN = 0.6            # ...with at least this share of its on-screen box inside the frame
+MUST_FITS = 0.9          # a thing whose projection is larger than this (width or height) cannot fit: scenery
+MUST_PART = 0.25         # ...such scenery must then fill at least this share of the frame width or height
 
 
 def _named(scene, characters, name):
@@ -392,7 +394,14 @@ def must_see(scene, characters, beats, frame_map):
                 w, h = box[2] - box[0], box[3] - box[1]
                 cw = min(1.0, box[2]) - max(0.0, box[0])
                 ch = min(1.0, box[3]) - max(0.0, box[1])
-                if w * h > 0 and (cw * ch) / (w * h) < MUST_IN:
+                fits = w <= MUST_FITS and h <= MUST_FITS
+                if not fits:
+                    # scenery bigger than the frame (a river, a 24 m levee): a close shot shows PART of it,
+                    # which is right; it only has to fill a real part of the view
+                    if max(cw, ch) < MUST_PART:
+                        hits.append((f, f"must_see: '{name}' only grazes the frame at the {part} of the beat "
+                                        f"({max(cw, ch):.0%} of it in view); turn the camera toward it"))
+                elif w * h > 0 and (cw * ch) / (w * h) < MUST_IN:
                     hits.append((f, f"must_see: '{name}' is cut by the frame edge at the {part} of the beat "
                                     f"(only {cw * ch / (w * h):.0%} inside); frame it with studio.frame_all"))
                 elif max(cw, ch) < MUST_MIN:
@@ -471,7 +480,8 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                 if area > FLAT_AREA:
                     flat_seen[o.name] = max(flat_seen.get(o.name, 0.0), area)
             for o in scene.objects:
-                if o.type != "FONT" or not _visible(o) or max(o.matrix_world.to_scale()) < 0.3 or _painted(o):
+                # labels pop in and out (cutaway._pop: ~8 frames): judge them at full size, not mid-pop
+                if o.type != "FONT" or not _visible(o) or max(o.matrix_world.to_scale()) < 0.85 or _painted(o):
                     continue
                 box = _screen_box(scene, cam, [o])
                 if not _on_screen(box):

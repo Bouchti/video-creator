@@ -1,6 +1,7 @@
 faster-whisper
 python-dotenv
 requests
+edge-tts
 tavily-python
 websocket-client
 Pillow

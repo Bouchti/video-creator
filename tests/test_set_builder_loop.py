@@ -73,8 +73,8 @@ class LoopTests(FreezeTests):
                   [_report(1, "one", True), _report(2, "two", True)]]
         seen = []
 
-        def repair(set_id, rejected, allowed=None, keep=None, max_windows=None):
-            seen.append((keep, max_windows))
+        def repair(set_id, rejected, allowed=None, keep=None, max_windows=None, allow_edit=True, measure=True):
+            seen.append((keep, max_windows, allow_edit, measure))
             src = open(self.path, encoding="utf-8").read()
             open(self.path, "w", encoding="utf-8").write(src.replace('"one v1"', '"one broken"')
                                                           .replace('"two v1"', '"two fixed"'))
@@ -89,7 +89,7 @@ class LoopTests(FreezeTests):
             status = sb.build_set("demo", "demo_story", rounds=3, story=True)
         self.assertTrue(status["accepted"])
         register.assert_called_once()
-        self.assertEqual(seen, [(["one"], 3)])
+        self.assertEqual(seen, [(["one"], 3, False, False)])      # small turn, one full rewrite (no Edit tool)
         src = open(self.path, encoding="utf-8").read()
         self.assertIn('"one v1"', src)
         self.assertIn('"two fixed"', src)
@@ -100,7 +100,7 @@ class LoopTests(FreezeTests):
         rounds = [[_report(1, "one", True), _report(2, "two", False)],
                   [_report(1, "one", True), _report(2, "two", True)]]
 
-        def repair(set_id, rejected, allowed=None, keep=None, max_windows=None):
+        def repair(set_id, rejected, allowed=None, keep=None, max_windows=None, allow_edit=True, measure=True):
             src = open(self.path, encoding="utf-8").read()
             open(self.path, "w", encoding="utf-8").write(src.replace('"one v1"', '"one v2"'))
 
@@ -143,7 +143,7 @@ class FilmRenderRepairTests(FreezeTests):
                                                   "planned": 3})
         seen = {}
 
-        def repair(set_id, rejected, allowed=None, keep=None, max_windows=None):
+        def repair(set_id, rejected, allowed=None, keep=None, max_windows=None, allow_edit=True, measure=True):
             seen.update(keep=keep, max_windows=max_windows)
             src = open(self.path, encoding="utf-8").read()
             open(self.path, "w", encoding="utf-8").write(src.replace('"one v1"', '"one v2"').replace('"two v1"', '"two v2"'))
@@ -151,14 +151,38 @@ class FilmRenderRepairTests(FreezeTests):
         args = SimpleNamespace(film="demo", resume=False, reuse_voice=False, redo="")
         with patch.object(sb, "fix_scenes", side_effect=repair), \
                 patch.object(mf, "produce", return_value="film.mp4"), \
-                patch.dict(os.environ, {"SCENE_FIX_ATTEMPTS": "2", "SET_FIX_MAX_WINDOWS": ""}):
+                patch.dict(os.environ, {"SCENE_FIX_ATTEMPTS": "2", "SCENE_FIX_MAX_WINDOWS": "",
+                                        "SET_FIX_MAX_WINDOWS": ""}):
             out = mf._scene_verdict(args, {"set": "demo_story"}, watcher, [{"start": 0}, {"start": 90}],
                                     tempfile.mkdtemp())
         self.assertEqual(out, "film.mp4")
         self.assertEqual(seen, {"keep": ["one"], "max_windows": 3})       # beat 2 has a rejected window
+        self.assertEqual(args.redo, "2")
         src = open(self.path, encoding="utf-8").read()
         self.assertIn('"one v1"', src)
         self.assertIn('"two v2"', src)
+
+    def test_film_repair_uses_scene_specific_window_cap(self):
+        from types import SimpleNamespace
+        from engine import make_film as mf
+        rejected = [dict(_report(2, "two", False), f0=181, f1=270)]
+        watcher = SimpleNamespace(policy="fix", report_path="r.json",
+                                  finish=lambda: {"windows": rejected, "rejected": rejected,
+                                                  "accepted": 0, "planned": 1})
+        seen = {}
+
+        def repair(set_id, windows, allowed=None, keep=None, max_windows=None,
+                   allow_edit=True, measure=True):
+            seen["max_windows"] = max_windows
+
+        args = SimpleNamespace(film="demo", resume=False, reuse_voice=False, redo="")
+        with patch.object(sb, "fix_scenes", side_effect=repair), \
+                patch.object(mf, "produce", return_value="film.mp4"), \
+                patch.dict(os.environ, {"SCENE_FIX_ATTEMPTS": "2", "SCENE_FIX_MAX_WINDOWS": "6",
+                                        "SET_FIX_MAX_WINDOWS": "3"}):
+            mf._scene_verdict(args, {"set": "demo_story"}, watcher, [{"start": 0}, {"start": 90}],
+                              tempfile.mkdtemp())
+        self.assertEqual(seen["max_windows"], 6)
 
 
 SPEC = '''SET_ID = "demo_story"
@@ -197,3 +221,17 @@ class MustSeeBackfillTests(FreezeTests):
             self.assertTrue(sb.backfill_must_see("demo_story"))
         self.assertEqual(call.call_args.kwargs["effort"], "low")
         self.assertIn('"must_see": ["levee"]', open(spec_path, encoding="utf-8").read())
+
+
+class ExtrasBackfillTests(FreezeTests):
+    def test_extras_come_from_one_structured_call(self):
+        spec_path = os.path.join(self.root, "engine", "sets", "demo_story_spec.py")
+        open(spec_path, "w", encoding="utf-8").write(SPEC)
+        answer = {"actions": [{"action": "one", "extras": "the duck surfs the leak"}, {"action": "hook", "extras": ""}]}
+        with patch("agents.showrunner._call", return_value=answer), \
+                patch.object(sb, "claude_agent", side_effect=AssertionError("no agent turn")):
+            self.assertTrue(sb.backfill_extras("demo_story"))
+        ns = {}
+        exec(compile(open(spec_path, encoding="utf-8").read(), "spec", "exec"), ns)
+        self.assertEqual(ns["ACTIONS"]["one"]["extras"], "the duck surfs the leak")
+        self.assertNotIn("extras", ns["ACTIONS"]["hook"])

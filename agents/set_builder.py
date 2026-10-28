@@ -140,7 +140,8 @@ def _run_claude_streaming(cmd, stdin_text, workspace, env, timeout, cap_tokens=0
     return (None if stopped else result), "".join(tail), spent, stopped
 
 
-def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400, allow_edit: bool = True) -> str:
+def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int = 5400, allow_edit: bool = True,
+                 measure: bool = True) -> str:
     """Run the selected coding subscription in an isolated source mirror.
 
     Only allowed files are copied back. This avoids the old snapshot/fence race that could undo
@@ -155,8 +156,10 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
     check_budget("set builder")          # the costliest call in the pipeline: never start one over budget
     backend = active_backend()
     story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
+    # measure=False: a repair turn inside the build loop, which measures every round for free; measuring
+    # inside the turn re-sent the agent's ~90k context for every step after it
     measure_cmd = (f"python -m agents.set_builder --measure {story_id}"
-                   if (story_id or "").endswith(("_story", "_explainer")) else None)
+                   if measure and (story_id or "").endswith(("_story", "_explainer")) else None)
     measures = ("(about 3 minutes; it prints collisions, floating characters, Max's on-screen size, static camera, "
                 "flat surfaces, small labels and flicker sources per beat) ONCE, fix everything it prints in one pass (one "
                 "Write or a few large Edits), then finish: the pipeline measures again after you and sends back "
@@ -173,9 +176,15 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             from engine.make_film import BLENDER
             text += ("When inspecting files, issue one simple read/search command at a time; never chain PowerShell "
                      "commands with semicolons, pipes, or command substitution because the execution policy blocks "
-                     f"them. Python is {sys.executable} and Blender is {BLENDER} (they are not on PATH): before you "
-                     "finish, byte-compile your files and build the set once in Blender background mode, and fix "
-                     "every error you see.")
+                     "them. ")
+            if measure:
+                text += (f"Python is {sys.executable} and Blender is {BLENDER} (they are not on PATH): before you "
+                         "finish, byte-compile your files and build the set once in Blender background mode, and fix "
+                         "every error you see.")
+            else:
+                text += ("This is a bounded repair turn: inspect only the named action methods and their direct "
+                         "helpers, make one focused edit, and finish. Do not run Blender, tests, measurements, or "
+                         "broad repository searches; the pipeline performs validation after you return.")
             if measure_cmd:
                 text += f" Then measure it: `{sys.executable}{measure_cmd[6:]}` {measures}"
         elif measure_cmd:
@@ -256,6 +265,13 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             log.info(f"[set_builder] Claude ({BUILD_MODEL}) is working on the set (usually 15-40 minutes); "
                      "its steps follow")
             cap = _call_token_cap()
+            least = int(os.getenv("SET_BUILDER_MIN_TURN") or 500_000)
+            if cap < least:
+                # a turn cut off this early writes nothing (one stopped at 390k "changed nothing"): stop
+                # cleanly with the budget unspent instead
+                from agents.showrunner import BudgetExceeded
+                raise BudgetExceeded(f"only {cap:,} tokens are left of CLAUDE_TOKEN_BUDGET / SET_BUILDER_CALL_TOKENS, "
+                                     f"less than a useful set-builder turn ({least:,}); raise the budget and resume")
             data, tail, spent, stopped = _run_claude_streaming(cmd, prompt + rules, workspace, env, timeout, cap)
             if stopped:
                 from agents.showrunner import BudgetExceeded
@@ -275,7 +291,8 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
                 limit = UsageLimit(result_text[:300])
                 if activate_fallback(str(limit), failed_backend=backend):
-                    return claude_agent(prompt, allowed, effort=effort, timeout=timeout, allow_edit=allow_edit)
+                    return claude_agent(prompt, allowed, effort=effort, timeout=timeout, allow_edit=allow_edit,
+                                        measure=measure)
                 raise limit
             if data.get("is_error"):
                 raise RuntimeError(f"claude -p error: {result_text[:300]}")
@@ -394,7 +411,10 @@ named there (and in the beat's narration) on screen at the beat's middle and 7/8
 a reaction or a secondary prop there. Each action also lists "must_see": the 2-4 scene objects behind
 those elements, as object-name prefixes the Blender module really uses (e.g. ["levee_core", "duck",
 "Max"]; a character by its name). The pipeline MEASURES them at the beat's middle and 7/8 (on screen,
->= 5% of the frame, not cut by an edge) before any reviewer looks. It needs two hook actions, then rewind,
+>= 5% of the frame, not cut by an edge) before any reviewer looks. Each action may also have "extras":
+one sentence on what ELSE is visible (the running gag, the kids, Max's reaction). The script writer
+reads it to write jokes about what is really on screen; the reviewer does not require it. When you cut
+a gag from "shows", move it to "extras" if it is still on screen. It needs two hook actions, then rewind,
 then a 7-10 action trial-and-error ladder that alternates visible failures with real engineering
 fixes and ends in a happy finale with Max's two children. Each action needs kind, shows and seconds.
 The validator must require one hook first, rewind second, and every STORY_ORDER action exactly once.
@@ -461,6 +481,10 @@ VISUAL AND SAFETY RULES:
      rejected for "the mechanism is not visible at the end". The thing the narration names stays on
      screen through the end of the beat.
   4. optionally the running gag (the kids) for <= 1.5 s, never in the beat's last quarter.
+  A CHANGE the narration describes (a wall slumps, a basin fills, a hole widens) is still HAPPENING at the
+  beat's middle (1/2) and finished by 7/8, the two moments the reviewer judges: start it just before the
+  middle, never complete it early (a levee already flat at 1/2 was rejected four times as "not shown
+  slumping"). Keep what flows THROUGH a thing (seepage arrows through a wall) drawn inside its body.
   Show things where they are: if the narration says the water goes up the tunnel or the top runs dry,
   the camera follows that water / frames that basin big. Never explain with a far wide shot where the
   key object is a speck; never keep a big sticker over the place the shot is about.
@@ -540,6 +564,11 @@ _MUST_SEE_SCHEMA = {"type": "object", "additionalProperties": False, "required":
 def insert_must_see(spec_src, values) -> str:
     """Add "must_see": [...] to each action's dict in the spec's ACTIONS literal (source edit, so comments
     and layout survive). Raises ValueError when ACTIONS is not a plain dict literal."""
+    return insert_action_key(spec_src, "must_see", values)
+
+
+def insert_action_key(spec_src, field, values) -> str:
+    """Add `field`: value to each action's dict in the spec's ACTIONS literal, leaving existing ones."""
     import ast
     tree = ast.parse(spec_src)
     node = next((n.value for n in tree.body if isinstance(n, ast.Assign)
@@ -551,16 +580,61 @@ def insert_must_see(spec_src, values) -> str:
     for key, val in zip(node.keys, node.values):
         if not (isinstance(key, ast.Constant) and isinstance(val, ast.Dict)) or key.value not in values:
             continue
-        if any(isinstance(k, ast.Constant) and k.value == "must_see" for k in val.keys):
+        if any(isinstance(k, ast.Constant) and k.value == field for k in val.keys):
             continue
         line = lines[val.lineno - 1]
         col = len(line.encode("utf-8")[:val.col_offset].decode("utf-8"))      # ast offsets are UTF-8 bytes
-        edits.append((val.lineno - 1, col + 1, f'"must_see": {json.dumps(values[key.value])}, '))
+        edits.append((val.lineno - 1, col + 1, f'{json.dumps(field)}: {json.dumps(values[key.value], ensure_ascii=False)}, '))
     for row, col, text in sorted(edits, reverse=True):
         lines[row] = lines[row][:col] + text + lines[row][col:]
     out = "".join(lines)
     ast.parse(out)
     return out
+
+
+_EXTRAS_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["actions"], "properties": {
+    "actions": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["action", "extras"],
+        "properties": {"action": {"type": "string"}, "extras": {"type": "string"}}}}}}
+
+
+def backfill_extras(set_id) -> bool:
+    """Fill each action's "extras" (what ELSE is visibly animated in it: the running gag, reactions) from
+    the builder's own code, in one structured call. The writer only knows what the spec says is on screen:
+    with the duck gag cut from "shows" (the reviewer requires everything there), every duck joke was graded
+    an unsupported inside joke and the script's fun score could not recover. Returns True when written."""
+    from agents.showrunner import BudgetExceeded, UsageLimit, _call
+    spec_path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}_spec.py")
+    spec_src = open(spec_path, encoding="utf-8").read()
+    builder = open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
+    prompt = f"""For every action of this 3D story set, read its a_<action> method (and the helpers it calls) and
+say in ONE short sentence what ELSE is visibly animated in it besides the main mechanism described in
+"shows": the running gag (e.g. where the rubber duck is and what happens to it), the kids, Max's
+reaction, a sign or meter. Only what the code really animates in that action; "" when nothing extra.
+Skip the rewind action.
+
+SPEC (engine/sets/{set_id}_spec.py):
+```python
+{spec_src}
+```
+
+BUILDER (engine/sets/{set_id}.py):
+```python
+{builder}
+```"""
+    try:
+        values = _call("You describe what a 3D set's code shows on screen in each story action.", prompt,
+                       _EXTRAS_SCHEMA, effort="low")
+        found = {v["action"]: v["extras"].strip() for v in values.get("actions", []) if v.get("extras", "").strip()}
+        new = insert_action_key(spec_src, "extras", found)
+    except (BudgetExceeded, UsageLimit):
+        raise
+    except Exception as exc:                          # noqa: BLE001  the script can still be written without
+        log.warning(f"[set_builder] extras backfill failed ({str(exc)[:200]})")
+        return False
+    open(spec_path, "w", encoding="utf-8").write(new)
+    log.info(f"[set_builder] extras (gags, reactions) described for {len(found)} actions from the set's code")
+    return True
 
 
 def backfill_must_see(set_id) -> bool:
@@ -849,7 +923,8 @@ def fix_code(set_id: str, error: str, allowed=None):
     return out
 
 
-def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None, max_windows=None):
+def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None, max_windows=None, allow_edit=True,
+               measure=True):
     """Called by make_film (SCENE_POLICY=fix) and by the builder: the reviewer's rejected windows →
     Claude edits the set's builder.
 
@@ -882,9 +957,13 @@ def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None, max_windows
         lines.append("\nThe reviewer ACCEPTED these actions; their shots must still look the same afterwards. "
                      "Do not change their a_<action> methods, and keep any shared change (ground, camera "
                      "helpers, characters, materials) from altering them: " + ", ".join(keep))
+    try:
+        timeout = max(60, int(os.getenv("SCENE_FIX_AGENT_TIMEOUT") or 600))
+    except ValueError:
+        timeout = 600
     out = claude_agent(fix_prompt(set_id, "\n".join(lines),
                                   "The scene reviewer REJECTED these rendered windows of a 3D film."),
-                       allowed)
+                       allowed, timeout=timeout, allow_edit=allow_edit, measure=measure)
     _require_changed(allowed, before, out)
     log.info(f"[set_builder] fix applied:\n{out[-1500:]}")
     return out
@@ -1374,7 +1453,10 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
             keep = [r["action"] for r in reports if r.get("valid")]
             frozen = freeze_methods(set_id, [a for k in keep for a in k.split("+")])
             try:
-                fix_scenes(set_id, rejected, allowed=files, keep=keep, max_windows=fix_windows)
+                # one full rewrite instead of a dozen one-line edits, each of which re-sent the agent's whole
+                # context (~60k): repair turns hit their cap mid-way; accepted beats stay frozen regardless
+                fix_scenes(set_id, rejected, allowed=files, keep=keep, max_windows=fix_windows,
+                           allow_edit=os.getenv("SET_FIX_EDIT_TOOL", "0") == "1", measure=False)
                 idle = 0
             except RepairNotApplied as exc:
                 idle += 1
@@ -1422,6 +1504,70 @@ def _hook_check(set_id, hook_action) -> list:
 def build_explainer_set(subject: str, set_id: str = None, rounds: int = 4, hook_action: str = None) -> dict:
     """Build, visually validate and register a new no-hero cutaway explainer set."""
     return build_set(subject, set_id=set_id, rounds=rounds, explainer=True, hook_action=hook_action)
+
+
+class KitDefect(RuntimeError):
+    """The kit rendered a storyboard with a measured defect: a kit bug to fix once in engine/kit, never a
+    reason to patch this video."""
+
+
+def build_kit_set(plan: dict) -> dict:
+    """Compile a planned storyboard into a set and verify it WITHOUT any coding agent: the preview render and
+    the measured gates (free, deterministic) must pass; one vision look is advisory (KIT_VISION_CHECK=1,
+    default on). Registers the set. Raises KitDefect on a render error or a measured defect."""
+    from agents import storyboard as sbm
+    sb = plan["storyboard"]
+    set_id = plan.get("set_id") or sbm.set_id_for(sb)
+    base, n = set_id, 2
+    while os.path.exists(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}_spec.py")) and \
+            _compiled_storyboard(set_id) != sb:
+        set_id = f"{base[:-6]}_{n}_story" if base.endswith("_story") else f"{base}_{n}"
+        n += 1
+    set_id = sbm.compile_set(sb, set_id)
+    work = os.path.join(PROJECT_ROOT, "output", "sets", set_id)
+    os.makedirs(work, exist_ok=True)
+    log.info(f"[kit] '{set_id}': rendering the preview (no AI involved)")
+    err = preview_render(set_id, work)
+    if err:
+        raise KitDefect(f"the kit failed to render '{set_id}' (a kit bug, fix engine/kit):\n{err[-1500:]}")
+    measured = qa_check(set_id, work)
+    fatal = {b: [x for x in items if not _advisory(x)] for b, items in measured.items()}
+    fatal = {b: items for b, items in fatal.items() if items}
+    if fatal:
+        lines = "; ".join(f"beat {b}: {x}" for b, items in sorted(fatal.items()) for x in items[:3])
+        raise KitDefect(f"the kit's render of '{set_id}' fails the measured gates (a kit bug, fix engine/kit): "
+                        f"{lines[:1500]}")
+    review = []
+    if os.getenv("KIT_VISION_CHECK", "1") == "1":
+        try:
+            review = [{"beat": r["beat"], "action": r["action"], "problems": r.get("fatal_problems") or []}
+                      for r in review_preview(set_id, work) if not r.get("valid")]
+        except Exception as exc:                          # noqa: BLE001  advisory: never blocks the video
+            from agents.showrunner import BudgetExceeded, UsageLimit
+            if isinstance(exc, (BudgetExceeded, UsageLimit)):
+                raise
+            log.warning(f"[kit] advisory vision check unavailable: {exc}")
+        for r in review:
+            log.warning(f"[kit] reviewer note (advisory) beat {r['beat']} [{r['action']}]: {r['problems'][:2]}")
+    sheet = contact_sheet(work, os.path.join(work, "contact_sheet.png"))
+    register(set_id, "AVAILABLE")
+    log.info(f"[kit] '{set_id}' verified and registered" + (f" ({len(review)} advisory reviewer notes)" if review
+                                                              else ""))
+    return {"accepted": True, "set": set_id, "work": work, "contact_sheet": sheet, "review_notes": review}
+
+
+def _compiled_storyboard(set_id):
+    """The storyboard a compiled kit set was generated from, read from its source (importing the builder
+    would import Blender), or None when the set is not a kit set."""
+    import ast
+    try:
+        src = open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "STORYBOARD" for t in node.targets):
+                return json.loads(node.value.args[0].value)
+    except (OSError, SyntaxError, AttributeError, IndexError, ValueError):
+        pass
+    return None
 
 
 def build_story_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:

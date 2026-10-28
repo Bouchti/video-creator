@@ -7,6 +7,8 @@ per beat (see engine/sets/<set>_spec.py). Runs inside Blender:
 
 Beat 1 (hook) is staged in the EPILOGUE (after the film's end, with the build finished) and
 saved as the first video frames; beat 2 (rewind) is a post montage built by make_film.
+A HOOKLESS film ("format": "buildup", or any film whose first beat is not a hook action) plays
+straight through from the first build step: no epilogue, no rewind.
 """
 import importlib
 import json
@@ -29,8 +31,15 @@ only_frames = [int(x) for a in args if a.startswith("--frames=") for x in a.spli
 total = timings["total_frames"]
 beats = film["beats"]
 spans = {i: (t["start"] + 1, t["end"] + 1) for i, t in enumerate(timings["beats"])}
-HOOK_B, HOOK_E = spans[0]
-BUILD_START = spans[2][0]
+_spec = importlib.import_module(f"engine.sets.{film['set']}_spec")
+HOOKLESS = film.get("format") == "buildup" or \
+    _spec.ACTIONS.get(beats[0].get("action"), {}).get("kind") != "hook"
+if HOOKLESS:                                  # starts on the first build step (build-up explainers)
+    HOOK_B, HOOK_E = 0, -1
+    BUILD_START = 1
+else:
+    HOOK_B, HOOK_E = spans[0]
+    BUILD_START = spans[2][0]
 EPI = total                                   # epilogue frame = EPI + hook frame
 
 scene = toy.reset_scene()
@@ -66,7 +75,33 @@ set_mod = importlib.import_module(f"engine.sets.{film['set']}")
 set_cls = next(v for k, v in vars(set_mod).items()
                if k.endswith("Set") and isinstance(v, type) and v.__module__ == set_mod.__name__)
 stage = set_cls(scene, sun, fill, bg, total)
-stage.run(beats, spans, EPI)
+
+
+def _run_hookless(stage, beats, spans):
+    """The set's own driver without the epilogue hook: every action plays in its beat's span (a montage
+    beat's span is shared by its actions, weighted by their typical length), then the camera is built."""
+    stage.EPI = EPI
+    acts, sub = [], []
+    for i, b in enumerate(beats):
+        names = list(b.get("actions") or [b["action"]])
+        s, e = spans[i]
+        weights = [sum(stage.ACTIONS[a].get("seconds", (1, 1))) for a in names]
+        t = s
+        for k, (a, w) in enumerate(zip(names, weights)):
+            end = e if k == len(names) - 1 else t + int((e - s + 1) * w / sum(weights)) - 1
+            acts.append(a)
+            sub.append((t, end))
+            t = end + 1
+    stage.acts, stage.spans = acts, sub
+    for i, a in enumerate(acts):
+        getattr(stage, f"a_{a}")(i, *sub[i])
+    stage.rig.build()
+
+
+if HOOKLESS:
+    _run_hookless(stage, beats, spans)
+else:
+    stage.run(beats, spans, EPI)
 print(f"interpolation: {toy.normalize_interpolation()} inherited keys reset to Bezier")
 
 # ---------------- sound events: epilogue → hook; nothing from the build under hook/rewind ----------------
@@ -157,7 +192,7 @@ else:
     # --ranges=A:B,C:D re-renders only those frames (make_film --redo); the scene is staged once.
     rng = next((a.split("=", 1)[1] for a in args if a.startswith("--range=")), None)
     many = next((a.split("=", 1)[1] for a in args if a.startswith("--ranges=")), None)
-    do_hook = "--hook" in args or (rng is None and many is None)
+    do_hook = not HOOKLESS and ("--hook" in args or (rng is None and many is None))
     a_, b_ = (int(x) for x in rng.split(":")) if rng else (BUILD_START, total)
     if many is not None:
         a_, b_ = 1, 0                                    # handled below

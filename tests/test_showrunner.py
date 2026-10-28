@@ -7,6 +7,9 @@ from unittest.mock import patch
 from engine.sets import spec
 from agents import showrunner
 
+# These tests exercise the classic hook + rewind rules with the pool set. Explainer sets now default
+# to the build-up format (tests/test_buildup.py); EXPLAINER_FORMAT=hook keeps the classic path.
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -22,6 +25,7 @@ GOOD = ["float_hook", "rewind", "dig", "layers", "gravel", "valve", "pipes", "re
         "finish", "fill", "weight", "flow", "cycle", "storm"]
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class PoolSpecTests(unittest.TestCase):
     def test_reference_film_is_valid(self):
         film = json.load(open(os.path.join(ROOT, "engine", "films", "pool_cut.json"), encoding="utf-8"))
@@ -54,6 +58,7 @@ class PoolSpecTests(unittest.TestCase):
         self.assertTrue(any("unknown" in e for e in spec("pool").validate(_beats(GOOD + ["explode"]))))
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class HardCheckTests(unittest.TestCase):
     def test_passes_in_budget(self):
         script = {"beats": _beats(GOOD, words=11)}            # 176 words
@@ -88,6 +93,7 @@ class HardCheckTests(unittest.TestCase):
             self.assertIsNone(showrunner.GAG_RE.search(line), line)
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class TopicSelectionTests(unittest.TestCase):
     def test_story_subject_is_consumed_after_first_script(self):
         history = [{"set": "nuclear_story", "title": "old", "angle": "old"}]
@@ -124,9 +130,10 @@ class TopicSelectionTests(unittest.TestCase):
             self.assertEqual(showrunner.research(topic), facts)
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class RevisionTests(unittest.TestCase):
     def test_revision_is_regraded_and_can_pass_with_fresh_scores(self):
-        low = {"scores": {name: 7 for name in
+        low = {"scores": {name: 6 for name in
                            ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy",
                             "pacing", "visual_sync", "learn")},
                "problems": ["needs work"], "line_edits": [], "verdict": "revise"}
@@ -149,6 +156,7 @@ class RevisionTests(unittest.TestCase):
         grade.assert_called_once_with(fixed, topic, "facts", [])
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class RuleRepairTests(unittest.TestCase):
     def test_one_word_over_budget_is_trimmed_not_redrafted(self):
         over = {"title": "t", "beats": _beats(GOOD, words=12)}            # 192 words
@@ -175,6 +183,7 @@ class RuleRepairTests(unittest.TestCase):
         self.assertEqual(left, problems)
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class ToFilmTests(unittest.TestCase):
     def test_roles_and_overlays(self):
         script = {"title": "T", "caption": "c", "hashtags": ["#a"], "beats": _beats(GOOD, words=11)}
@@ -199,6 +208,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class MontageTests(unittest.TestCase):
     def test_grouped_build_steps_are_valid(self):
         beats = _beats(["float_hook", "rewind", "dig"]) + [
@@ -245,3 +255,88 @@ class BoatSetTests(unittest.TestCase):
         film = json.load(open(os.path.join(ROOT, "engine", "films", "max_boat.json"), encoding="utf-8"))
         self.assertEqual(spec("boat_story").validate(film["beats"]), [])
         self.assertEqual(showrunner.hard_checks({"beats": film["beats"]}, "boat_story"), [])
+
+
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
+class RetryContinuesTests(unittest.TestCase):
+    def test_a_retry_revises_the_kept_best_script_instead_of_drafting_again(self):
+        low = {"scores": {name: 6 for name in ("hook", "clarity", "story_flow", "problem_solution", "fun",
+                                               "accuracy", "pacing", "visual_sync", "learn")},
+               "problems": ["duck gag never set up"], "line_edits": [], "verdict": "revise"}
+        high = {"scores": {k: 8 for k in low["scores"]}, "problems": [], "line_edits": [], "verdict": "ship"}
+        topic = {"set": "pool", "title": "Same topic", "angle": "a", "hook_line": "h", "hook_action": "float_hook",
+                 "payoff": "p"}
+        kept = {"title": "kept", "beats": []}
+        better = {"title": "better", "beats": []}
+        films = tempfile.mkdtemp()
+        with patch.object(showrunner, "FILMS_DIR", films), patch.object(showrunner, "hard_checks", return_value=[]):
+            showrunner._keep_rejected(topic, kept, low, [])
+            calls = []
+
+            def write(t, facts, previous=None, critique=None, direction=None, effort="high"):
+                calls.append(previous)
+                return better
+
+            with patch.object(showrunner, "write_script", side_effect=write), \
+                    patch.object(showrunner, "critique_script", return_value=high):
+                script, review = showrunner.develop(topic, "facts")
+        self.assertIs(script, better)
+        self.assertEqual(calls, [kept])                 # one revision of the kept script, no fresh draft
+
+
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
+class WordBudgetTests(unittest.TestCase):
+    def test_long_story_ladders_get_more_words_and_others_keep_the_default(self):
+        self.assertEqual(showrunner.word_budget("pool"), showrunner.TARGET_WORDS)
+        lo, hi = showrunner.word_budget("boat_story")
+        n = len(spec("boat_story").STORY_ORDER) + 2
+        self.assertEqual(hi, min(showrunner.WORDS_CAP, max(showrunner.TARGET_WORDS[1], showrunner.WORDS_PER_BEAT * n)))
+        self.assertGreater(hi, showrunner.TARGET_WORDS[1])
+        self.assertLessEqual(hi, showrunner.WORDS_CAP)
+
+
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
+class ExtrasAndLastRevisionTests(unittest.TestCase):
+    def test_the_writer_brief_tells_what_else_is_on_screen(self):
+        sp = spec("boat_story")
+        action = next(iter(sp.ACTIONS))
+        with patch.dict(sp.ACTIONS[action], {"extras": "the rubber duck rides the wave"}):
+            self.assertIn("Also on screen (use it for jokes): the rubber duck rides the wave",
+                          showrunner._set_brief("boat_story"))
+
+    def test_a_retry_continues_from_the_newest_revision_and_its_notes(self):
+        scores = ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy", "pacing", "visual_sync",
+                  "learn")
+        old = {"scores": {k: 6 for k in scores}, "problems": ["old notes"]}
+        new = {"scores": {k: 7 for k in scores}, "problems": ["new notes"]}
+        topic = {"set": "pool", "title": "T"}
+        with patch.object(showrunner, "FILMS_DIR", tempfile.mkdtemp()), \
+                patch.object(showrunner, "hard_checks", return_value=[]):
+            showrunner._keep_rejected(topic, {"title": "best"}, old, [], last=({"title": "newest"}, [], new))
+            script, _problems, review = showrunner._last_rejected(topic)
+        self.assertEqual(script["title"], "newest")
+        self.assertEqual(review["problems"], ["new notes"])
+
+
+@patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
+class ShipGateTests(unittest.TestCase):
+    def _review(self, **low):
+        sc = {k: 8 for k in ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy", "pacing",
+                             "visual_sync", "learn")}
+        sc.update(low)
+        return {"scores": sc}
+
+    def test_every_score_at_7_ships_and_any_6_or_rule_break_does_not(self):
+        self.assertTrue(showrunner._ships(self._review(fun=7, clarity=7), []))
+        self.assertFalse(showrunner._ships(self._review(fun=6), []))
+        self.assertFalse(showrunner._ships(self._review(accuracy=6), []))
+        self.assertFalse(showrunner._ships(self._review(), ["total narration is 230 words"]))
+
+    def test_a_kept_script_that_already_ships_is_reused_as_is(self):
+        topic = {"set": "pool", "title": "T"}
+        passing = self._review(fun=7)
+        failing = self._review(fun=5)
+        with patch.object(showrunner, "FILMS_DIR", tempfile.mkdtemp()),                 patch.object(showrunner, "hard_checks", return_value=[]):
+            showrunner._keep_rejected(topic, {"title": "best"}, passing, [], last=({"title": "newest"}, [], failing))
+            script, _p, review = showrunner._last_rejected(topic)
+        self.assertEqual(script["title"], "best")

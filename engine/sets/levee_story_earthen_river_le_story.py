@@ -9,23 +9,34 @@ ASSET PLAN (real object -> real shape / recognizable detail -> pieces that build
   st.world_floor laid around the block so no void shows.
 - River: a channel cut into the sand, blue translucent water whose level rises and falls -> st.Reservoir.
 - Rubber duck: the classic bath duck (fat body, round head, orange flat beak, black eyes) -> toy.sphere parts.
-- Levee: an extruded trapezoid seen in section. v1 = a steep pure-sand wall (3.4 m base, 3 m tall);
-  v2 = wide gentle levee (12.4 m base, 2.2 m tall, sand shell) with a dark-brown clay core; v3 = same footprint
-  raised to 3.1 m with a clay core, a thick green grass shell (+ tufts) and grey riprap boulders on the river
-  slope -> st.prism, band() shells, one baked mesh of icospheres, st.scatter_on tufts.
+- Levee: an extruded trapezoid seen in section. v1 = a steep, narrow pure-sand wall (2.6 m base, 2.8 m tall) that
+  Max shovels up (it grows from the ground); it stands tall while blue seepage arrows run through its body and
+  its land side darkens wet, then it SLUMPS (a shape key: it sags to a low 0.95 m mound spreading toward the
+  yard); v2 = wide gentle levee (12.4 m base, 2.2 m tall, sand shell) with a dark-brown
+  clay core; v3 = same footprint raised to 3.1 m with a clay core, a thick green grass shell (+ tufts) and grey
+  riprap boulders on the river slope -> st.prism, band() shells, one baked mesh of icospheres (a short front
+  patch of riprap for the freeboard close-up), st.scatter_on tufts.
 - Seepage berm: a wide, low wedge of soil on the land side -> st.prism. Relief wells: thin steel pipes in a row
   at its toe venting into a drainage ditch (a notch in the topsoil with water) -> toy.cylinder, prism slot.
 - Sand boil: a small sand volcano with a muddy fountain and a ring of burlap sandbags -> cone, Spray, capsules.
-- Overtopping: a thin waterfall sheet over the crest and land slope, a dark scour gouge growing in the
-  slope -> band() prism, scaled gouge prism.
+- Overtopping: a thin waterfall sheet over the crest and down the land slope until it hits the berm, a dark
+  scour gouge growing in the slope -> band() prism, scaled gouge prism.
 - Ground squirrel + burrow: a brown squirrel (bushy tail, ears) digging a tunnel that is CARVED once into
-  copies of the levee (half-tube groove in the section face), a wider "piped" copy with water in it, and a jet
-  out of the land side -> st.carve + st.tube_cutter, curve tube, Spray. Squirrel box on a post in the yard.
+  copies of the levee (half-tube groove in the section face), a wider "piped" copy with water in it, and a
+  thick brown arcing jet ("jet_stream", a curve tube that shoots out of the mouth) plus mud Spray drops out of
+  the land side -> st.carve + st.tube_cutter, curve tubes, Spray. Squirrel box on a post in the yard.
+- Hook blow-out: a black burrow mouth on the land slope and a FAT, glossy muddy jet that widens as it shoots out,
+  its surface churning (a displace texture that flows along it), breaking up into falling mud drops and a splash
+  on the berm instead of reaching the ground as a solid tube; the duck rides its crest.
+- Packed burrow: fresh tan soil filling the tunnel from the mouth inward ("plug_burrow", a flattened curve tube
+  that grows along the tunnel) -> tube() with a keyed bevel end.
 - Backyard: flat lawn slab, a house with porch (st.House + deck/posts/roof), a trampoline (torus rim + disc on
   legs), Max's yard lamp meter (post with a RED and a GREEN lamp: the recurring result meter).
 - Freeboard marker: red 100-year-flood bar, green crest bar, yellow dimension arrows + label.
-- Rain: a real Blender particle system of thin streaks. Map line: a long orange tube along the levee.
+- Rain: a real Blender particle system of thin streaks (plus a close one over the burrow). Storm deck:
+  dark cloud blobs (only in the darkest storms). Map line: a long orange tube along the levee.
 - Max (hard hat, yellow rain boots) and two kids -> engine.character.Character. Shovel -> wood + metal.
+- Promise: Max, the kids and a sand pile on the riverbank lawn, right beside the low river seen in section.
 """
 import math
 import random
@@ -48,8 +59,10 @@ D = 120.0                                            # depth of the riverbank bl
 LZ = 0.06                                            # lawn top
 LOW, HIGH, OVER, FLOOD100 = -1.0, 2.0, 2.45, 2.2     # river levels
 CREST2, CREST3 = 2.2, 3.1
-V1 = [(-1.7, 0.02), (1.7, 0.02), (0.6, 3.0), (-0.6, 3.0)]
-V1_WET = [(-1.65, 0.03), (1.67, 0.03), (1.385, 0.83), (-0.95, 1.96)]     # soaked wedge under the seepage line
+V1 = [(-1.3, 0.02), (1.3, 0.02), (0.35, 2.82), (-0.35, 2.82)]
+V1_WET = [(-1.25, 0.03), (1.27, 0.03), (1.0, 0.8), (-0.66, 1.8)]         # soaked wedge under the seepage line
+V1_GHOST = [(-1.3, 0.09), (-0.35, 2.82), (0.35, 2.82), (1.3, 0.09)]       # the wall's outline before it slumped
+SAND_RIVER = 0.82                                     # the river after the slump (just under the slumped crest)
 V2 = [(-6.2, 0.02), (6.2, 0.02), (0.7, CREST2), (-0.7, CREST2)]
 CORE2 = [(-0.9, 0.02), (0.9, 0.02), (0.3, 2.05), (-0.3, 2.05)]
 V3 = [(-6.2, 0.02), (6.2, 0.02), (0.5, CREST3), (-0.5, CREST3)]
@@ -58,8 +71,9 @@ BERM = [(3.0, 0.02), (9.6, 0.02), (9.6, 0.12), (3.0, 1.05)]
 GRASS3 = [(-0.5, CREST3), (0.5, CREST3), (4.75, 0.803), (9.6, 0.12)]
 BURROW = [(4.55, 0.0, 1.15), (2.6, 0.0, 1.3), (0.0, 0.0, 1.48), (-2.7, 0.0, 1.6)]
 PIPED = [(4.55, 0.0, 1.15), (2.6, 0.0, 1.3), (0.0, 0.0, 1.48), (-2.9, 0.0, 1.6), (-4.0, 0.0, 1.65)]
-# overtopping sheet on v2: over the crest, down the land slope, spreading onto the lawn
-FALLS2 = [(-0.7, CREST2), (0.7, CREST2), (3.45, 1.11), (6.2, 0.02), (7.4, LZ)]
+# overtopping sheet on v2: over the crest and down the land slope until it meets the berm (x = 3.95), where it
+# splashes and scours (it never runs on under the berm, where Max stands)
+FALLS2 = [(-0.7, CREST2), (0.7, CREST2), (3.95, 0.912)]
 
 
 def berm_z(x):
@@ -82,12 +96,25 @@ def scour(d):
             (2.3, slope2(2.3) - d), (1.8, slope2(1.8) - 0.6 * d), (1.4, slope2(1.4))]
 
 
+def slump_xz(x, z):
+    """Where a point of the steep sand wall ends up once it has slumped: a low mound (crest ~0.95 m, a third of
+    the wall) whose land side spreads out toward the yard (toe at x = 1.6), the river face sagging back."""
+    t = min(1.0, max(0.0, (z - 0.02) / 2.8))
+    xl, xr = -1.3 + 0.95 * t, 1.3 - 0.95 * t
+    u = (x - xl) / max(1e-6, xr - xl)
+    lx, lz = -1.45 + 0.75 * t, 0.02 + 0.93 * t
+    rx, rz = 1.6 - 1.15 * t, 0.02 + 0.83 * t
+    return lx + (rx - lx) * u, lz + (rz - lz) * u
+
+
 BOIL = V((8.0, 1.4, LZ))
 YARD = V((11.55, 1.3, LZ))
 METER = V((12.55, 0.75, LZ))
 DUCK_YARD = V((13.05, 1.05, LZ + 0.012))
-PROMISE_MAX = V((3.7, 1.3, LZ))
-PROMISE_KIDS = [V((5.1, 1.1, LZ)), V((5.75, 1.5, LZ))]
+# the promise happens on the riverbank lawn, right beside the low river (its channel shows in the section)
+PROMISE_MAX = V((-3.9, 1.3, LZ))
+PROMISE_KIDS = [V((-2.5, 1.1, LZ)), V((-1.85, 1.5, LZ))]
+PROMISE_PILE = V((-4.7, 3.4, LZ))
 WALL_MAX = V((4.7, 1.3, LZ))
 CREST2_MAX = V((0.0, 2.6, CREST2 + 0.012))
 CREST3_MAX = V((-0.2, 2.4, CREST3 + 0.012))
@@ -105,8 +132,10 @@ DUCK_LAND = V((9.0, 0.9, berm_z(9.0) + 0.01))
 JET_SRC = V((4.6, 0.12, 1.12))
 HOUSE = V((22.5, 6.5, LZ - 0.02))
 # per-beat spots: Max, and the portable result lamp just behind him, inside the same cutaway frame
-PROMISE_LOOK = [V((2.95, 0.7, LZ)), V((2.35, 0.55, LZ))]
-SAND_MAX, SAND_LAMP = V((3.05, 0.8, LZ + 0.012)), V((3.45, 2.4, LZ))
+PROMISE_LOOK = [V((-5.0, 0.7, LZ)), V((-4.4, 0.45, LZ))]
+# Max on the dry lawn right at the wall's land toe (the slumped toe stops at x = 1.6), the lamp just behind his
+# shoulder: wall, arrows, Max and lamp fit in ~4 m, so the solved cutaway stays close and Max stays big
+SAND_MAX, SAND_LAMP = V((2.05, 0.8, LZ + 0.012)), V((2.5, 1.5, LZ))
 CORE_MAX, CORE_LAMP = V((0.0, 1.1, CREST2 + 0.012)), V((-0.42, 2.3, CREST2 + 0.005))
 BOIL_MAX, BOIL_LAMP = V((9.6, 0.9, LZ)), V((9.25, 2.6, LZ))
 BERM_MAX, BERM_LAMP = V((5.75, 0.9, berm_z(5.75) + 0.035)), V((6.15, 2.4, berm_z(6.15) + 0.005))
@@ -114,6 +143,9 @@ OVER_MAX, OVER_LAMP = V((4.4, 1.0, berm_z(4.4) + 0.03)), V((5.0, 2.4, berm_z(5.0
 BUR_MAX2, BUR_LAMP = V((7.0, 1.2, grass_z(7.0))), V((5.3, 2.9, berm_z(5.3) + 0.12))
 MAINT_MAX, MAINT_LAMP = V((5.45, 1.0, grass_z(5.45) + 0.01)), V((4.9, 2.6, berm_z(4.9) + 0.12))
 JET_ARC = [(4.4, 0.14, 1.14), (5.05, 0.2, 1.62), (5.5, 0.25, 1.76), (5.95, 0.32, 1.5), (6.3, 0.38, 0.92)]
+# the thick brown jet itself: out of the burrow mouth, arcing over, landing on the berm
+JET_TUBE = [(4.4, 0.14, 1.14), (5.05, 0.2, 1.62), (5.5, 0.25, 1.76), (5.95, 0.32, 1.5), (6.3, 0.38, 1.0),
+            (6.55, 0.45, 0.74)]
 JET_HIT2 = V((6.3, 0.4, berm_z(6.3) + 0.16))
 DUCK_JET = V((5.5, 0.25, 1.72))                    # riding on top of the muddy jet
 SQ_SIDE = V((5.15, 1.0, berm_z(5.15) + 0.17))      # beside the burrow, behind the jet
@@ -123,6 +155,17 @@ HOOK_MAX, HOOK_LAMP = V((6.3, 1.4, berm_z(6.3) + 0.006)), V((6.75, 3.0, berm_z(6
 FIN_LAMP = V((12.6, 2.6, LZ))
 SQ_PEEK = V((5.35, 0.45, berm_z(5.35) + 0.13))
 JET_HIT = V((6.6, 0.5, berm_z(6.6) + 0.05))
+# the hook's blow-out: a fat jet of mud that shoots out of the burrow mouth, arcs over and breaks up in mid-air
+# above the berm (drops and a splash below its end, never a solid tube touching down)
+HOOK_JET = [(4.45, 0.15, 1.12), (4.9, 0.18, 1.62), (5.4, 0.22, 1.92), (5.9, 0.27, 1.82), (6.25, 0.32, 1.48),
+            (6.45, 0.36, 1.12)]
+HOOK_RADII = [0.9, 1.3, 1.6, 1.65, 1.35, 0.6]        # x 0.2 m: the jet swells from 0.18 m to 0.33 m, then frays
+HOOK_DUCK = V((5.42, 0.24, 2.15))                     # on the jet's crest
+HOOK_SQ = V((5.6, 0.75, grass_z(5.6) + 0.03))         # beside the jet, on the grass
+HOOK_MAX3 = V((7.2, 1.1, grass_z(7.2)))
+HOOK_MOUTH = V((4.42, 0.3, 1.15))
+HOOK_SPLASH = V((6.45, 0.2, 0.85))
+HOOK_LAND = V((6.6, 0.4, berm_z(6.6) + 0.17))
 
 LIGHTS = {"day": (4.0, (1.0, 0.95, 0.86), 0.2, 900.0, 40.0),
           "storm": (0.9, (0.66, 0.74, 0.9), 0.03, 650.0, 12.0),
@@ -177,11 +220,38 @@ def tube(name, pts, radius, mat):
     return ob
 
 
+def polyline(name, pts_xz, y, radius, mat):
+    """A thin straight-segment line through x-z points at depth y (an outline drawn in front of the section)."""
+    cu = bpy.data.curves.new(name, "CURVE")
+    cu.dimensions = "3D"
+    sp = cu.splines.new("POLY")
+    sp.points.add(len(pts_xz) - 1)
+    for k, (x, z) in enumerate(pts_xz):
+        sp.points[k].co = (x, y, z, 1.0)
+    cu.bevel_depth = radius
+    cu.bevel_resolution = 2
+    cu.use_fill_caps = True
+    cu.materials.append(mat)
+    ob = bpy.data.objects.new(name, cu)
+    bpy.context.scene.collection.objects.link(ob)
+    st.no_shadow(ob)
+    return ob
+
+
+def grow(ob, f0, f1):
+    """A curve tube that extends along its path from its first point (0 at f0 -> full at f1)."""
+    cu = ob.data
+    cu.bevel_factor_end = 0.0
+    cu.keyframe_insert("bevel_factor_end", frame=f0)
+    cu.bevel_factor_end = 1.0
+    cu.keyframe_insert("bevel_factor_end", frame=f1)
+
+
 class LeveeStoryEarthenRiverLeStorySet:
     ACTIONS = ACTIONS
     QA_ALLOW = (r"lawn|topsoil|sandlayer|bedrock|river|water|levee|core|grass|tuft|riprap|berm|well|ditch|duck"
                 r"|boil|bag|crack|gouge|falls|pipewater|squirrel|sbox|tramp|meter|house|porch|pile|shovel|map"
-                r"|arrow|label|puff|spray|jet|splash|rain|ground_|wet|puddle|dim|bar_")
+                r"|arrow|label|puff|spray|jet|splash|rain|ground_|wet|puddle|dim|bar_|plug")
 
     def __init__(self, scene, sun, fill, bg, total):
         self.scene, self.sun, self.fill, self.bg, self.total = scene, sun, fill, bg, total
@@ -214,14 +284,18 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.m_berm = noise("lv_berm", "#93714A", "#7A5C3A", scale=12)
         self.m_mud = noise("lv_mud", "#4A3220", "#33210F", scale=16, rough=0.3)
         self.m_burrow = noise("lv_burrow", "#3B2717", "#2A1A0E", scale=20)
+        self.m_hole = noise("lv_hole", "#140A04", "#0A0502", scale=20, rough=0.9)
         self.m_bags = noise("lv_burlap", "#B99C68", "#9A7E50", scale=60)
         self.m_rock = noise("lv_riprap", "#8E8C86", "#5C5A55", scale=6, bump=0.3)
         self.m_bed = st.section_rock("lv_bedrock", "#8C8B88", "#6F6E6B")
         self.m_lawn = st.rock_grass("lv_lawn", grass_above=-1.0)
         self.m_grass = st.rock_grass("lv_grass", grass="#4E9A34", grass_dark="#3A7A26", grass_above=-1.0)
-        self.m_falls = tx.paint("lv_falls", "#5FB8E8", rough=0.06, coat=1.0)
+        self.m_falls = tx.paint("lv_falls", "#2F96DC", rough=0.05, coat=1.0)
         self.m_steel = tx.metal("lv_steel", "#9AA3AA")
         self.m_wood = tx.wood("lv_wood", "#8A5F38", "#A87A4C")
+        self.m_jet = noise("lv_jet_mud", "#6B4A2C", "#4A3220", scale=10, rough=0.2)
+        self.m_jet_hook = noise("lv_jet_hook", "#7A4A24", "#4A2C14", scale=9, rough=0.06)
+        self.m_plug = noise("lv_plug", "#D8B577", "#BE9758", scale=16, rough=0.9)
 
     def _ground(self):
         st.prism("bedrock", [(-24, -40), (30, -40), (30, -3.005), (-24, -3.005)], 0.0, D, self.m_bed)
@@ -240,15 +314,32 @@ class LeveeStoryEarthenRiverLeStorySet:
     def _grp(self, name, *objs):
         self.groups.setdefault(name, []).extend(objs)
 
+    def _slump_key(self, ob):
+        """A 'slump' shape key: every point of the steep wall moves to its place in the slumped mound."""
+        if ob.data.shape_keys is None:
+            ob.shape_key_add(name="Basis")
+        sk = ob.shape_key_add(name="slump", from_mix=False)
+        for k, v in enumerate(ob.data.vertices):
+            x, y, z = v.co
+            nx, nz = slump_xz(x, z)
+            sk.data[k].co = (nx, y, nz)
+        sk.value = 0.0
+        return sk
+
     def _levees(self):
-        # v1: the steep pure-sand wall (it slumps: no bump on its material)
+        # v1: the steep pure-sand wall (it slumps through a shape key: no bump on its material)
         self.v1 = st.prism("levee1", V1, 0.0, D, self.m_sand_flat)
         wet = st.prism("levee1_wet", V1_WET, -0.006, 0.4, self.m_wet)
         wet.parent = self.v1
         self.wet_wall = wet
-        self.wet_lawn = toy.box("wet_lawn", (2.2, 6.0, 0.006), (2.8, 3.02, LZ + 0.004), mat=self.m_wet, bevel=0)
+        self.slump_keys = [self._slump_key(self.v1), self._slump_key(wet)]
+        # the soaked strip of lawn at the wall's land toe (it ends before the dry spot where Max stands)
+        self.wet_lawn = toy.box("wet_lawn", (0.55, 6.0, 0.006), (1.475, 3.02, LZ + 0.004), mat=self.m_wet, bevel=0)
         self._grp("v1", self.v1)
         self._grp("wet", wet, self.wet_lawn)
+        # the wall's old outline (white line; kept hidden: the slump reads from the standing wall to the mound)
+        self.ghost = polyline("levee1_ghost", V1_GHOST, -0.05, 0.035, st.glow_mat("lv_ghost", "#FFFFFF", 1.2))
+        self._grp("ghost", self.ghost)
         # v2: wide, gentle, sand shell + clay core
         self.v2 = [st.prism("levee2", V2, 0.0, D, self.m_sand_flat),
                    st.prism("core2", CORE2, -0.012, D, self.m_clay)]
@@ -269,6 +360,8 @@ class LeveeStoryEarthenRiverLeStorySet:
         bpy.data.objects.remove(tmp, do_unlink=True)
         self._grp("tufts", self.tufts)
         self._riprap()
+        # a short patch of riprap right at the cut (the freeboard close-up frames all of it)
+        self.riprap_front = self._riprap("riprap_front", "riprapA", z0=1.5, y1=4.0, seed=19)
         # seepage berm, relief wells, ditch water
         self.berm = st.prism("berm", BERM, -0.008, D, self.m_berm)
         self._grp("berm", self.berm)
@@ -292,14 +385,68 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.gouge = st.prism("gouge", [(x - cx, z - cz) for x, z in pts], -0.013, 0.6, self.m_mud)
         self.gouge.location = (cx, 0, cz)
         self._grp("gouge", self.gouge)
-        # freeboard marker
+        # freeboard marker (the flood line runs from over the river to the land side of the crest)
         glow_r, glow_g = st.glow_mat("lv_bar_red", RED, 1.2), st.glow_mat("lv_bar_green", GREEN, 1.2)
-        self._grp("marker", toy.box("bar_flood", (7.4, 0.04, 0.07), (-2.6, -0.045, FLOOD100), mat=glow_r, bevel=0),
+        self._grp("marker", toy.box("bar_flood", (4.1, 0.04, 0.07), (-0.95, -0.045, FLOOD100), mat=glow_r, bevel=0),
                   toy.box("bar_crest", (1.8, 0.04, 0.07), (0.4, -0.045, CREST3 + 0.04), mat=glow_g, bevel=0))
         # the piped burrow's water and the land-side jet
         self.pipewater = tube("pipewater", [(x, 0.1, z - 0.04) for x, _, z in PIPED], 0.22,
                               tx.paint("lv_pipewater", "#4AA8E0", rough=0.05, coat=1.0))
         self._grp("pipewater", self.pipewater)
+        self.jet_stream = tube("jet_stream", JET_TUBE, 0.13, self.m_jet)
+        self._grp("jet", self.jet_stream)
+        # the hook's blow-out: a black burrow mouth on the land slope and a fat glossy jet whose surface churns
+        # (a cloud texture displacing it, carried along by a moving empty) and that frays into drops at its end
+        self.jet_hook = tube("jet_stream_hook", HOOK_JET, 0.2, self.m_jet_hook)
+        self.jet_hook.data.resolution_u = 24
+        for k, r in enumerate(HOOK_RADII):
+            self.jet_hook.data.splines[0].points[k].radius = r
+        self.jet_flow = toy.empty("jet_hook_flow", (0, 0, 0))
+        lumps = bpy.data.textures.new("lv_jet_lumps", type="CLOUDS")
+        lumps.noise_scale = 0.16
+        # Blender 5.2 curve objects refuse a DISPLACE modifier (new() returns None): only add it where supported
+        disp = self.jet_hook.modifiers.new("churn", "DISPLACE")
+        if disp is not None:
+            disp.texture = lumps
+            disp.texture_coords = "OBJECT"
+            disp.texture_coords_object = self.jet_flow
+            disp.strength = 0.08
+            disp.mid_level = 0.5
+        mouth = toy.cylinder("jet_mouth", 0.34, 0.04, tuple(HOOK_MOUTH), rotation=(0, R(28.4), 0), mat=self.m_hole,
+                             vertices=24)
+        self._grp("jethook", self.jet_hook, mouth)
+        # Separate glossy mud slugs travel along the jet.  The underlying tube supplies volume, while these
+        # changing silhouettes make the flow unmistakable in widely spaced review stills (a scrolling texture on
+        # one smooth curve still reads as a rigid brown pipe in a still image).
+        self.jet_slugs = []
+        for k in range(16):
+            slug = toy.sphere(f"jet_slug{k:02d}", 0.15, tuple(HOOK_MOUTH),
+                              scale=(1.45, 0.82, 1.0), mat=self.m_jet_hook, subdiv=2)
+            self.jet_slugs.append(slug)
+            self._grp("jethook", slug)
+        self.hook_drops = Spray("jet_hook_drops", self.m_jet_hook, count=40, radius=0.075, seed=12)
+        self.hook_fall = Spray("jet_hook_fall", self.m_jet_hook, count=30, radius=0.09, seed=13)
+        # the packed burrow: fresh tan soil filling the tunnel groove from the mouth inward (flattened in y so
+        # it sits in the half-tube groove of the section face)
+        self.plug = tube("plug_burrow", [(x, 0.0, z) for x, _, z in PIPED], 0.3, self.m_plug)
+        self.plug.scale = (1.0, 0.35, 1.0)
+        self._grp("plug", self.plug)
+        # Big front-face clods show the packing operation even when the long tunnel is foreshortened.  They sit
+        # 18 cm proud of the cut face, so neither the levee shell nor the dark groove can hide the fresh tan fill.
+        self.plug_clods = []
+        path = [V(p) for p in PIPED]
+        lengths = [(path[k + 1] - path[k]).length for k in range(len(path) - 1)]
+        total = sum(lengths)
+        for k in range(15):
+            d, seg = total * k / 14.0, 0
+            while seg < len(lengths) - 1 and d > lengths[seg]:
+                d -= lengths[seg]
+                seg += 1
+            q = path[seg].lerp(path[seg + 1], d / max(0.001, lengths[seg]))
+            clod = toy.sphere(f"plug_clod{k:02d}", 0.32, (q.x, -0.18, q.z),
+                              scale=(1.15, 0.34, 0.9), mat=self.m_plug, subdiv=2)
+            self.plug_clods.append(clod)
+            self._grp("plug", clod)
 
     def _make_v3(self, tag, path=None, radius=0.0):
         objs = [st.prism(f"levee3{tag}", V3, 0.0, D, self.m_fill3),
@@ -310,15 +457,15 @@ class LeveeStoryEarthenRiverLeStorySet:
                 st.carve(ob, st.tube_cutter(path, radius + 0.012 * k), mat=self.m_burrow)
         return objs
 
-    def _riprap(self):
+    def _riprap(self, name="riprap", group="riprap", z0=0.3, y1=12.0, seed=9):
         bm = bmesh.new()
-        rnd = random.Random(9)
+        rnd = random.Random(seed)
         nx, nz = -0.475, 0.88
-        z = 0.3
+        z = z0
         while z < 3.0:
             x = -6.2 + (z - 0.02) * 5.7 / 3.08
             y = 0.35
-            while y < 12.0:
+            while y < y1:
                 r = rnd.uniform(0.15, 0.23)
                 c = V((x + nx * r * 0.35, y + rnd.uniform(-0.08, 0.08), z + nz * r * 0.35))
                 m = (Matrix.Translation(c) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
@@ -326,13 +473,14 @@ class LeveeStoryEarthenRiverLeStorySet:
                 bmesh.ops.create_icosphere(bm, subdivisions=1, radius=r, matrix=m)
                 y += rnd.uniform(0.38, 0.5)
             z += 0.3
-        me = bpy.data.meshes.new("riprap")
+        me = bpy.data.meshes.new(name)
         bm.to_mesh(me)
         bm.free()
-        ob = bpy.data.objects.new("riprap", me)
+        ob = bpy.data.objects.new(name, me)
         self.scene.collection.objects.link(ob)
         me.materials.append(self.m_rock)
-        self._grp("riprap", ob)
+        self._grp(group, ob)
+        return ob
 
     def _yard(self):
         self.house = st.House("house", HOUSE, w=4.2, d=3.6, h=2.6)
@@ -381,6 +529,10 @@ class LeveeStoryEarthenRiverLeStorySet:
             g = toy.sphere(f"meter_port_{state}", 0.17, (0, 0, 0), mat=m)
             g.parent, g.location = self.plamp, (0, -0.2, 2.36)
             self.globes[state] = g
+        # a big, deep-red beacon globe for the sand wall's failure (saturated, not blown out to pink)
+        g = toy.sphere("meter_port_redbig", 0.27, (0, 0, 0), mat=st.glow_mat("lv_plamp_redbig", "#FF1A0A", 3.5))
+        g.parent, g.location = self.plamp, (0, -0.26, 2.36)
+        self.globes["redbig"] = g
         # squirrel box on a post
         toy.cylinder("sbox_post", 0.05, 1.3, (SBOX.x, SBOX.y, LZ + 0.64), mat=self.m_wood, vertices=12)
         sb = [toy.box("sbox_body", (0.42, 0.38, 0.42), (SBOX.x, SBOX.y, LZ + 1.3 + 0.21), mat=self.m_wood),
@@ -399,9 +551,9 @@ class LeveeStoryEarthenRiverLeStorySet:
                                   smooth=False)
         st.no_shadow(self.puddle)
         self._grp("puddle", self.puddle)
-        # sand pile (promise)
-        bpy.ops.mesh.primitive_cone_add(radius1=1.3, radius2=0.05, depth=1.1, vertices=40,
-                                        location=(1.6, 2.2, LZ - 0.01 + 0.55))
+        # sand pile (promise): on the riverbank lawn, just behind Max
+        bpy.ops.mesh.primitive_cone_add(radius1=1.1, radius2=0.05, depth=1.0, vertices=40,
+                                        location=(PROMISE_PILE.x, PROMISE_PILE.y, LZ - 0.01 + 0.5))
         pile = bpy.context.active_object
         pile.name = "pile"
         pile.data.materials.append(self.m_sand)
@@ -481,8 +633,8 @@ class LeveeStoryEarthenRiverLeStorySet:
         bl.parent, bl.location = self.shovel, (0, 0, -0.7)
         self._grp("shovel", self.shovel)
         # rain: a real particle system of thin streaks
-        drop = toy.cylinder("rain_drop", 0.017, 0.6, (0, 0, -300), mat=st.glow_mat("lv_drop", "#D6E8FF", 1.4),
-                            vertices=6)
+        drop_mat = st.glow_mat("lv_drop", "#D6E8FF", 1.4)
+        drop = toy.cylinder("rain_drop", 0.017, 0.6, (0, 0, -300), mat=drop_mat, vertices=6)
         bpy.ops.mesh.primitive_plane_add(size=1, location=(4.0, 2.5, 40.0))
         em = bpy.context.active_object
         em.name = "rain_emitter"
@@ -504,7 +656,32 @@ class LeveeStoryEarthenRiverLeStorySet:
         em.show_instancer_for_render = False
         em.show_instancer_for_viewport = False
         self._grp("rain", em)
-        # a dark storm deck in the sky (shown with the rain, gone when the storm clears)
+        # close rain over the burrow: short wet streaks falling right in front of the camera; sparse,
+        # with a real shaded water material (not one flat glowing colour, which covers the frame up close)
+        drop_near = tx.paint("lv_drop_near", "#CFE2F5", rough=0.12, coat=0.9)
+        drop2 = toy.cylinder("rain_drop_near", 0.01, 0.3, (0, 0, -300), mat=drop_near, vertices=6)
+        bpy.ops.mesh.primitive_plane_add(size=1, location=(5.6, 0.8, 6.0))
+        en = bpy.context.active_object
+        en.name = "rain_near"
+        en.scale = (7.0, 3.2, 1)
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        en.data.materials.append(tx.paint("lv_rain_near_cloud", "#9AA4AE", rough=0.8, coat=0.0))
+        mod = en.modifiers.new("rain_near", "PARTICLE_SYSTEM")
+        ps = mod.particle_system
+        ps.seed = 11
+        s = ps.settings
+        s.count = int(7 * (self.total + 400))
+        s.frame_start, s.frame_end, s.lifetime = 1, self.total + 400, 16
+        s.emit_from = "FACE"
+        s.normal_factor = 0.0
+        s.object_align_factor = (0.0, 0.0, -10.0)
+        s.render_type = "OBJECT"
+        s.instance_object = drop2
+        s.particle_size, s.size_random = 1.0, 0.3
+        en.show_instancer_for_render = False
+        en.show_instancer_for_viewport = False
+        self._grp("rainnear", en)
+        # a dark storm deck in the sky (shown with the rain in the darkest storms, gone when the storm clears)
         cloud = noise("lv_cloud", "#5A6068", "#3A3F46", scale=1.5, rough=1.0)
         rc = random.Random(31)
         for k in range(16):
@@ -512,7 +689,7 @@ class LeveeStoryEarthenRiverLeStorySet:
                                                                      rc.uniform(13, 21)), scale=(1.6, 1.0, 0.32),
                            mat=cloud)
             st.no_shadow(c)
-            self._grp("rain", c)
+            self._grp("clouds", c)
         # the map line along the levee, far into the distance
         pts = [(0, 0.5, CREST3 + 0.45), (0, D - 1, CREST3 + 0.45), (2, D + 6, 0.6), (10, 170, 0.6), (-12, 230, 0.6),
                (6, 300, 0.6), (-6, 380, 0.6), (4, 440, 0.6)]
@@ -588,6 +765,13 @@ class LeveeStoryEarthenRiverLeStorySet:
     def weather(self, f, storm):
         self.light(f, "storm" if storm else "day")
         self.vis(f, "rain", storm)
+        self.vis(f, "clouds", storm)
+
+    def squall(self, f):
+        """Rain under a bright squall sky, without the dark cloud deck: the cutaway stays readable."""
+        self.light(f, "squall")
+        self.vis(f, "rain", True)
+        self.vis(f, "clouds", False)
 
     def show(self, obj, f, visible=True):
         toy.hide_tree(obj, f, not visible)
@@ -719,7 +903,7 @@ class LeveeStoryEarthenRiverLeStorySet:
         toy.hide_tree(self.plamp, f, state is None)
         for s, g in self.globes.items():
             toy.hide_tree(g, f, s != state)
-        if state in ("red", "green"):
+        if state in ("red", "green", "redbig"):
             events.add(f, "switch", gain=0.3)
 
     def _lamps_at(self, f, yard):
@@ -774,15 +958,66 @@ class LeveeStoryEarthenRiverLeStorySet:
             frames, lambda f: pts[min(len(pts) - 1, int((f - f0) / span * len(pts)))] + V((0, -0.2, 0)),
             rise=0.5, life=18)
 
+    def named(self, *names):
+        return [o for o in (bpy.data.objects.get(n) for n in names) if o is not None]
+
+    def frame(self, f0, f1, things, angle=-90.0, swing=12.0, rise=0.18, lens=28.0):
+        """The WHY + RESULT shot: solved from the real bounds of the beat's must-see things (studio.frame_all);
+        a long one is split in two opposite swings so the camera never rests."""
+        if f1 - f0 > 110:
+            fm = (f0 + f1) // 2
+            st.frame_all(self.rig, f0, fm, things, angle=angle - 4, rise=rise, lens=lens, swing=swing, cut=True)
+            st.frame_all(self.rig, fm, f1, things, angle=angle + 4, rise=rise, lens=lens, swing=-swing, cut=True)
+        else:
+            st.frame_all(self.rig, f0, f1, things, angle=angle, rise=rise, lens=lens, swing=swing, cut=True)
+
+    def jet_on(self, f0, f1):
+        """The thick muddy jet shoots out of the burrow mouth at f0 (grows along its arc) and keeps blasting."""
+        self.vis(f0, "jet", True)
+        grow(self.jet_stream, f0, f0 + 6)
+        self.jet.run(f0, f1, JET_SRC, JET_HIT, spread=0.35, arc=0.9, period=14)
+
+    def hook_flow(self, f0, f1):
+        """Cycle overlapping mud slugs from mouth to splash so three review stills visibly differ."""
+        step, cycle = 6, 31
+        for k, slug in enumerate(self.jet_slugs):
+            phase = int(k * cycle / len(self.jet_slugs))
+            keyed = []
+            birth = f0 - cycle - phase
+            while birth <= f1:
+                for j, p in enumerate(HOOK_JET):
+                    f = birth + j * step
+                    if f0 - 2 <= f <= f1 + 2:
+                        slug.location = p
+                        slug.keyframe_insert("location", frame=f)
+                        pulse = 0.12 if j in (0, len(HOOK_JET) - 1) else 0.78 + 0.18 * ((k + j) % 3)
+                        slug.scale = (1.45 * pulse, 0.82 * pulse, pulse)
+                        slug.keyframe_insert("scale", frame=f)
+                        keyed.append(f)
+                birth += cycle
+            if keyed:
+                toy.set_interpolation(slug, "location", keyed, "LINEAR")
+
+    def pack_clods(self, f0, f1):
+        """Pack the visible mouth first, then fill the complete 8.2 m groove by the late review frame."""
+        span = max(1, f1 - f0)
+        for k, clod in enumerate(self.plug_clods):
+            start = f0 + int(span * k / (len(self.plug_clods) + 2))
+            finish = min(f1, start + max(5, span // 5))
+            clod.scale = (0.001, 0.001, 0.001)
+            clod.keyframe_insert("scale", frame=start - 1)
+            clod.scale = (1.15, 0.34, 0.9)
+            clod.keyframe_insert("scale", frame=finish)
+
     # ------------------- the ladder -------------------
 
     def a_promise(self, i, b, e):
-        m = fr(b, e, 0.5)
+        m = fr(b, e, 0.4)
         self.stage(b, {"pile", "kids", "shovel"})
         self.weather(b, False)
         self.river(b, LOW)
-        self.duck_river(b, -9.5)
-        self.duck_key(e, (-8.4, 0.6, LOW - 0.03))
+        self.duck_river(b, -7.6)
+        self.duck_key(e, (-7.1, 0.6, LOW - 0.03))
         self.meter(b, "off")
         self.at(b, PROMISE_MAX, 0)
         for k, kid in enumerate(self.kids):
@@ -796,55 +1031,80 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.max.brows(m + 2, 0.8)
         events.add(b + 10, "kids_cheer", gain=0.35)
         self.close(b, m, frac=0.34, offset=(0.75, 0, 0), angle=-92)
-        # he points at the river: seen from the front-right, the low river and the duck fill the background
+        # he points at the low river right beside them: Max with his shovel, both kids and the sand pile in one
+        # medium shot, the river channel (seen in the section) at the left edge
         for k, kid in enumerate(self.kids):
             kid.cut_place(m, PROMISE_LOOK[k], facing_to(PROMISE_LOOK[k], V((-8.0, 6.0, 0))))
             kid.pose(m + 2)
             kid.look_at(m + 4, (-8.0, 6.0, -0.5))
-        self.close(m, e, frac=0.3, offset=(-0.5, 0, -0.1), angle=-52, swing=12)
+        pile = bpy.data.objects["pile"]
+        st.frame_all(self.rig, m, e, [self.max, *self.kids, pile, (-6.5, 0.1, LOW)], angle=-76,
+                     rise=0.14, lens=32.0, margin=0.06, push=0.07, swing=7.0, cut=True)
 
     def a_fail_sand(self, i, b, e):
         m1 = fr(b, e, 0.37)
-        s = fr(m1, e, 0.3)
+        s = fr(b, e, 0.58)
+        built, r0 = fr(b, e, 0.24), fr(b, e, 0.22)
         self.stage(b, {"v1", "shovel"})
-        self.weather(b + 10, True)
+        self.squall(b + 10)
         self.river(b, LOW)
-        self.river(m1 - 2, HIGH, f_from=b + 8)
+        self.river(m1 - 2, HIGH, f_from=r0)
         self.duck_river(b, -5.0, LOW)
-        self.duck_key(m1 - 2, (-1.55, 0.4, HIGH - 0.03))
-        events.add(b + 8, "water_rush", duration=m1 - b - 8, gain=0.4)
-        self.lamp(b, "off", SAND_LAMP)
-        # CHANGE: Max shovels up a tall, steep wall of pure sand
+        self.duck_key(r0, (-5.0, 0.6, LOW - 0.03))
+        self.duck_key(m1 - 2, (-2.6, 0.5, HIGH - 0.03))
+        events.add(r0, "water_rush", duration=m1 - r0, gain=0.4)
+        # CHANGE: Max shovels up a tall, steep wall of pure sand: it rises from the lawn beside him, in the shot
+        # with him (the result lamp only comes in with the cutaway)
+        self.v1.scale = (1, 1, 0.05)
+        self.v1.keyframe_insert("scale", frame=b + 4)
+        self.v1.scale = (1, 1, 1)
+        self.v1.keyframe_insert("scale", frame=built)
         self.at(b, SAND_MAX, 0)
         self.max.sweep(b + 6, m1 - 8, hand="R")
-        self.fill_puffs("puff_wall", range(b + 6, m1 - 8, 5), [(0.95, 0.5, 2.2), (1.25, 0.5, 1.4), (1.5, 0.5, 0.7)])
-        self.max.look_at(m1 - 6, (-1.0, 0, 2.2), hold=10)
-        self.close(b, m1, frac=0.36, offset=(-0.8, 0, 0.1), angle=-96)
-        # WHY + RESULT in one cutaway: water runs through the grains, the land side soaks, the face slumps,
-        # the duck oozes over the mush, the lamp behind Max turns red and he shrugs
-        for k, z in enumerate((0.5, 1.05, 1.6)):
-            st.arrow(f"arrow_seep{k}", (-1.65, -0.06, z), (3.7, 0, 0), m1 + 2 + 6 * k, e, color=BLUE, width=0.08)
-        self.label("SAND LEAKS", (0.0, -0.3, 3.6), m1 + 2, e, size=0.34)
-        self.vis(m1 + 10, "wet", True)
-        self.v1.scale = (1, 1, 1)
-        self.v1.keyframe_insert("scale", frame=s - 1)
-        self.v1.scale = (1.7, 1.0, 0.45)
-        self.v1.keyframe_insert("scale", frame=s + 14)
+        self.fill_puffs("puff_wall", range(b + 6, built, 5), [(1.1, 0.5, 0.5), (0.8, 0.5, 1.3), (0.5, 0.5, 2.1)],
+                        color="#D9BF80")
+        events.add(b + 6, "step", gain=0.3)
+        self.max.look_at(m1 - 6, (-0.6, 0, 2.0), hold=10)
+        st.frame_all(self.rig, b, m1, [self.max, (-0.65, 0.0, 0.05), (-0.1, 0.0, 2.9)], angle=-84,
+                     rise=0.08, lens=32.0, margin=0.05, push=0.06, swing=6.0, cut=True)
+        # WHY + RESULT in one side cutaway of the wall: the steep wall still stands tall at the beat's middle while
+        # thick blue seepage arrows run from the high river through its sand body and out of its land face, the
+        # land side darkens wet and the lamp beside Max turns red; then the soaked wall SLUMPS to a low mound
+        # (a third of its height) and stays down through the end, the arrows still running through it, Max shrugs
+        self.lamp(m1, "off", SAND_LAMP)
+        for k, (x0, z) in enumerate(((-1.6, 0.3), (-1.55, 0.55), (-1.5, 0.8))):
+            st.arrow(f"arrow_seep{k}", (x0, -0.06, z), (2.95 - 0.05 * k, 0, 0), m1 + 2 + 5 * k, e, color=BLUE,
+                     width=0.14)
+        lab = self.label("SAND LEAKS", (0.1, -0.3, 3.25), m1 + 2, e, size=0.4)
+        self.vis(m1 + 8, "wet", True)
+        events.add(m1 + 8, "pour", duration=s - m1 - 8, gain=0.25)
+        self.lamp(m1 + 16, "redbig")
+        self.max.look_at(m1 + 4, (0.0, 0, 0.8), hold=max(0, s - m1 - 8))
+        self.max.brows(m1 + 4, 0.9)
+        for sk in self.slump_keys:
+            sk.value = 0.0
+            sk.keyframe_insert("value", frame=s - 1)
+            sk.value = 1.0
+            sk.keyframe_insert("value", frame=s + 16)
         events.add(s, "creak", gain=0.5)
         events.add(s + 4, "rumble", duration=14, gain=0.6)
-        self.river(s + 20, 1.3, f_from=s)
-        self.duck_key(s, (-1.55, 0.4, HIGH - 0.03))
-        self.duck_key(s + 10, (-0.6, 0.4, 1.5), (0, R(-8), 0))
-        self.duck_key(s + 22, (0.9, 0.4, 1.45), (0, R(10), 0))
-        self.duck_key(s + 34, (1.8, 0.3, 0.8), (0, R(25), 0))
-        self.duck_key(s + 44, (2.1, 0.25, 0.6), (0, R(25), 0))
-        self.lamp(s + 18, "red")
-        self.shrug(s + 22, e - 2)
-        self.view(m1, e, 0.9, 2.0, 10.5)
+        self.river(s + 16, SAND_RIVER, f_from=s)
+        self.duck_key(s, (-2.6, 0.5, HIGH - 0.03))
+        self.duck_key(s + 16, (-2.6, 0.5, SAND_RIVER - 0.03), (0, R(-6), 0))
+        self.duck_key(e, (-2.75, 0.55, SAND_RIVER - 0.03), (0, R(4), R(-10)))
+        self.max.look_at(s, (0.0, 0, 0.5), hold=10)
+        self.shrug(s + 18, e - 2)
+        # the camera sits a little above the lawn: the wall's section (old full height), the three arrows across
+        # it, the label over it and Max with his lamp are solved into one close frame (~4 m wide)
+        things = (self.named("arrow_seep0", "arrow_seep1", "arrow_seep2", "levee1_wet")
+                  + [lab, self.max, self.plamp, (-1.6, 0, 0.05), (1.6, 0, 0.05), (0.0, 0, 2.85)])
+        fm = (m1 + e) // 2
+        st.frame_all(self.rig, m1, fm, things, angle=-93.0, rise=0.06, lens=30.0, margin=0.06, swing=7.0, cut=True)
+        st.frame_all(self.rig, fm, e, things, angle=-87.0, rise=0.06, lens=30.0, margin=0.06, swing=-7.0, cut=True)
 
     def a_fix_core(self, i, b, e):
         m1 = fr(b, e, 0.37)
-        g = fr(m1, e, 0.45)
+        g = fr(b, e, 0.42)
         self.stage(b, {"v2", "shovel"})
         self.weather(b, False)
         self.river(b, HIGH)
@@ -857,18 +1117,20 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.fill_puffs("puff_core", range(b + 8, m1 - 4, 5), [(0.3, 0.9, 2.25)])
         events.add(b + 8, "step", gain=0.4)
         self.close(b, m1, frac=0.38, offset=(0, 0, -0.7), angle=-92)
-        # WHY + RESULT: the arrow runs through the sand, stops short inside the clay; green lamp, Max cheers
+        # WHY + RESULT: the arrow runs through the sand, stops short inside the clay; the lamp is green well
+        # before the beat's middle, Max cheers
         st.arrow("arrow_sand", (-2.5, -0.06, 0.9), (1.6, 0, 0), m1 + 2, e, color=BLUE, width=0.09)
-        st.arrow("arrow_clay", (-0.75, -0.07, 0.9), (0.4, 0, 0), m1 + 10, e, color=BLUE, width=0.05)
-        self.label("SAND", (-1.75, -0.3, 1.45), m1 + 2, e, size=0.3)
-        self.label("CLAY CORE", (0.0, -0.3, -0.35), m1 + 2, e, size=0.28)
+        st.arrow("arrow_clay", (-0.75, -0.07, 0.9), (0.4, 0, 0), m1 + 10, e, color=BLUE, width=0.06)
+        labs = [self.label("SAND", (-1.75, -0.3, 1.45), m1 + 2, e, size=0.3),
+                self.label("CLAY CORE", (0.0, -0.3, -0.35), m1 + 2, e, size=0.3)]
         self.lamp(g, "green")
         self.v_arms(g + 4, e - 2)
-        self.view(m1, e, -0.3, 2.4, 9.0)
+        self.frame(m1, e, self.named("arrow_sand", "arrow_clay") + labs
+                   + [self.max, self.plamp, (-0.9, 0, 0.02), (0.9, 0, 0.02), (0, 0, 2.05)], rise=0.08)
 
     def a_fail_boil(self, i, b, e):
-        m1, erupt, p = fr(b, e, 0.3), fr(b, e, 0.4), fr(b, e, 0.45)
-        bag0, bag1 = fr(b, e, 0.55), fr(b, e, 0.8)
+        m1, erupt = fr(b, e, 0.3), fr(b, e, 0.4)
+        bag0, bag1 = fr(b, e, 0.44), fr(b, e, 0.62)
         self.stage(b, {"v2", "rain"})
         self.weather(b, True)
         self.river(b, HIGH)
@@ -876,14 +1138,16 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.lamp(b, "off", BOIL_LAMP)
         self.at(b, BOIL_MAX, 0)
         self.v_arms(b + 4, m1 - 2)
-        self.close(b, m1, frac=0.36, offset=(-0.9, 0, -0.2), angle=-94)
+        # One solved camera is assigned below for the whole action.  Keeping the former close-up here
+        # created a one-frame cut where Max touched the edge before the boil shot took over.
         # WHY: the camera follows the water UNDER the levee through the buried sand, up to the boil in the yard
         st.arrow("arrow_bed", (-9.0, -0.06, -1.0), (1.6, 0, -0.75), m1 + 2, e, color=BLUE, width=0.1)
         st.arrow("arrow_under0", (-6.6, -0.06, -1.9), (13.2, 0, 0), m1 + 2, e, color=BLUE, width=0.11)
         st.arrow("arrow_under1", (-5.6, -0.06, -2.5), (12.0, 0, 0), m1 + 8, e, color=BLUE, width=0.09)
         for k, x in enumerate((7.3, 8.7)):
             st.arrow(f"arrow_up{k}", (x, -0.06, -1.6), (0, 0, 1.45), erupt - 10, e, color=BLUE, width=0.11)
-        self.travel(m1, p, [(0.0, -3.6, -0.6, 8.0), (0.2, -3.0, -0.5, 8.0), (1.0, 8.1, 0.6, 9.0)])
+        # Keep the explanation and its outcome in one solved shot.  The former cross-levee travel
+        # briefly left Max outside the frame exactly where the result shot began.
         # RESULT in the same frame: the boil erupts beside Max, the lamp behind him turns red, he rings it
         self.vis(erupt, "boil", True)
         self.fountain.scale = (1, 1, 0.05)
@@ -894,7 +1158,7 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.boil_spray.run(erupt + 4, e, (BOIL.x, BOIL.y, 1.05), (BOIL.x, BOIL.y, 0.36), spread=0.5, arc=0.35,
                             period=14)
         events.add(erupt, "bubbles", duration=e - erupt, gain=0.6)
-        self.label("SAND BOIL", (BOIL.x, -0.3, 2.1), erupt + 4, e, size=0.32)
+        lab = self.label("SAND BOIL", (BOIL.x, -0.3, 2.1), erupt + 4, e, size=0.32)
         self.duck_cut(erupt + 4, (BOIL.x, BOIL.y, 0.1))
         self.duck_key(erupt + 16, (BOIL.x, BOIL.y, 1.1), (0, 0, R(-30)))
         self.lamp(erupt + 6, "red")
@@ -913,10 +1177,13 @@ class LeveeStoryEarthenRiverLeStorySet:
             if k % 4 == 0:
                 events.add(f, "stone_thud", gain=0.3)
         self.shrug(bag1 + 2, e - 2)
-        self.view(p, e, 8.1, 0.6, 9.0)
+        boil_things = self.named("arrow_up0", "arrow_up1") + [self.fountain, *self.bags, lab, self.max,
+                                                               self.plamp, (6.2, 0, -1.9)]
+        st.frame_all(self.rig, b, e, boil_things, angle=-90.0, rise=0.18, lens=28.0,
+                     margin=0.12, push=0.05, swing=3.0, cut=True, fstop=8.0)
 
     def a_fix_berm(self, i, b, e):
-        m1, a, g = fr(b, e, 0.37), fr(b, e, 0.44), fr(b, e, 0.6)
+        m1, a, g = fr(b, e, 0.37), fr(b, e, 0.41), fr(b, e, 0.45)
         self.stage(b, {"v2", "berm"})
         self.weather(b, False)
         self.river(b, HIGH)
@@ -933,44 +1200,48 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.vis(b + 20, "wells", True)
         events.add(b + 20, "steel_clank", gain=0.4)
         self.max.point(b + 8, m1 - 2, hand="R", up_deg=20, side_deg=70)
-        self.close(b, m1, frac=0.36, offset=(-1.3, 0, -0.3), angle=-100)
-        # WHY + RESULT in one cutaway: Max on the new berm, weight arrows press down, the wells vent into the
-        # ditch, the up-arrow under the yard shrinks, the lamp behind him turns green
+        st.frame_all(self.rig, b, m1, [self.max, (4.4, 0.0, 0.1), (9.9, 0.0, 0.5)], angle=-70,
+                     rise=0.08, lens=32.0, margin=0.06, push=0.07, swing=6.0, cut=True)
+        # WHY + RESULT in one cutaway, seen nearly level with the section face: Max on the new berm, weight arrows
+        # press down, the wells vent into the ditch, the up-arrow under the yard shrinks, the lamp turns green
         self.at(m1, BERM_MAX, 0)
         self.lamp(m1, "off", BERM_LAMP)
         st.arrow("arrow_under2", (5.0, -0.06, -1.7), (2.6, 0, 0), m1 + 2, e, color=BLUE, width=0.1)
         st.arrow("arrow_upbig", (8.0, -0.06, -1.6), (0, 0, 1.45), m1 + 2, a, color=BLUE, width=0.11)
-        st.arrow("arrow_upsmall", (8.0, -0.06, -1.6), (0, 0, 0.45), a, e, color=BLUE, width=0.08)
+        st.arrow("arrow_upsmall", (8.0, -0.06, -1.6), (0, 0, 0.7), a, e, color=BLUE, width=0.12)
         st.arrow("arrow_well", (9.9, -0.08, -2.1), (0, 0, 2.7), a, e, color=BLUE, width=0.09)
         st.arrow("arrow_ditch", (9.95, -0.08, 0.62), (0.35, 0, -0.55), a + 6, e, color=BLUE, width=0.07)
         for k, (x, z) in enumerate(((6.5, 1.65), (8.3, 1.2))):
             st.arrow(f"arrow_weight{k}", (x, -0.06, z), (0, 0, -0.6), m1 + 4, e, color=YELLOW, width=0.1)
-        self.label("SEEPAGE BERM", (7.9, -0.3, 2.3), m1 + 2, e, size=0.3)
-        self.label("RELIEF WELLS", (8.6, -0.3, -0.8), a, e, size=0.3)
+        labs = [self.label("SEEPAGE BERM", (7.9, -0.3, 2.3), m1 + 2, e, size=0.4),
+                self.label("RELIEF WELLS", (9.2, -0.3, -2.8), a, e, size=0.46)]
         events.add(a, "pour", duration=e - a, gain=0.25)
         self.lamp(g, "green")
         self.v_arms(g + 4, e - 2)
-        self.view(m1, e, 7.4, 0.4, 10.0, sway=0.4)
+        st.frame_all(self.rig, m1, e,
+                     self.named("well_section", "arrow_upsmall", "arrow_weight0", "arrow_weight1", "arrow_well")
+                     + labs + [self.max, self.plamp, (10.7, 0.0, -0.25)], angle=-70, rise=0.06,
+                     lens=32.0, margin=0.05, push=0.06, swing=7.0, cut=True)
 
     def a_fail_overtop(self, i, b, e):
         m1, m2 = fr(b, e, 0.37), fr(b, e, 0.8)
-        red = fr(b, e, 0.5)
-        self.stage(b, {"v2", "berm", "wells", "rain"})
-        self.weather(b, True)
+        red = fr(b, e, 0.45)
+        self.stage(b, {"v2", "berm", "wells"})
+        self.squall(b)
         self.river(b, HIGH)
         self.river(m1, OVER, f_from=b + 4)
         self.duck_river(b, -3.4, HIGH)
         self.duck_key(m1, (-0.3, 0.5, OVER - 0.03))
         events.add(b + 4, "water_rush", duration=e - b - 4, gain=0.6)
         self.lamp(b, "off", OVER_LAMP)
-        # CHANGE: a huge storm, the river climbs toward the crest while Max watches from the land slope
+        # CHANGE: a huge storm, the river climbs toward the crest while Max watches from the berm
         self.at(b, OVER_MAX, 0)
         self.max.look_at(b + 8, (-2.0, 0, 4.0), hold=max(0, m1 - b - 12))
         self.max.brows(b + 8, 0.9)
         self.max.brows(m1 - 2, 0.0)
-        self.close(b, m1, frac=0.36, offset=(-1.4, 0, 0.4), angle=-100)
-        # WHY + RESULT in one cutaway: water pours over the crest, scours the bare slope, the duck surfs down,
-        # the lamp behind Max turns red and he shrugs
+        self.close(b, m1, frac=0.38, offset=(-0.6, 0, 0.2), angle=-96)
+        # WHY + RESULT in one cutaway: the high river pours over the crest, runs down the bare slope until it hits
+        # the berm (it never reaches Max's boots), scours the gouge, the lamp behind Max turns red, he shrugs
         self.vis(m1 - 4, "falls", True)
         self.vis(m1 + 6, "gouge", True)
         self.gouge.scale = (0.15, 1, 0.15)
@@ -980,17 +1251,19 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.splash.run(m1, e, (3.4, 0.3, 1.2), (3.95, 0.3, 0.95), spread=0.3, arc=0.4, period=12)
         Puffs("puff_scour", "#5A4028", count=14, size=0.25, seed=8).emit(
             range(m1 + 8, m2 - 6, 4), lambda f: V((2.8, -0.25, 1.3)), rise=0.6, life=18)
-        self.label("OVERTOPPING", (1.4, -0.3, 3.7), m1 + 2, e, size=0.32)
+        lab = self.label("OVERTOPPING", (1.0, -0.3, 3.15), m1 + 2, e, size=0.46)
         sf = fr(m1, m2, 0.3)
         self.duck_key(sf, (0.6, 0.5, CREST2 + 0.15))
         self.duck_key(sf + 12, (2.2, 0.5, 1.75), (0, R(22), 0))
         self.duck_key(sf + 24, (3.0, 0.45, 1.38), (0, R(18), 0))
         self.lamp(red, "red")
         self.shrug(red + 4, e - 2)
-        self.view(m1, e, 2.5, 1.4, 10.0, sway=0.4)
+        # the river (left), the sheet over the crest, the gouge and Max with his lamp: all solved into frame
+        self.frame(m1, e, [self.gouge, lab, self.max, self.plamp, (-1.3, 0.0, OVER), (-1.3, 0.0, 1.2),
+                           (0.0, 0.0, CREST2 + 0.15)], swing=10.0, rise=0.08)
 
     def a_fix_armor(self, i, b, e):
-        m1, m2 = fr(b, e, 0.3), fr(b, e, 0.78)
+        m1, g = fr(b, e, 0.4), fr(b, e, 0.45)
         rise1 = b + 28
         self.stage(b, {"v3", "berm", "wells"})
         self.weather(b, False)
@@ -1007,27 +1280,37 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.show(self.v3[2], rise1)
         self.vis(rise1, "grass", True)
         self.vis(rise1, "tufts", True)
-        self.vis(rise1 + 4, "riprap", True)
+        self.vis(rise1 + 4, "riprapA", True)
         events.add(b + 4, "rumble", duration=rise1 - b - 4, gain=0.4)
         events.add(rise1 + 4, "stone_thud", gain=0.5)
         self.max.cut_place(b, V((CREST3_MAX.x, CREST3_MAX.y, CREST2 + 0.012)), 0)
         self.max.pose(b + 2)
         self.max.move(b + 4, rise1, CREST3_MAX)
         self.v_arms(rise1 + 2, m1 - 2)
-        # WHY: freeboard above the flood line + armour on both slopes
+        # WHY + RESULT in one cutaway, seen level with the section face: the flood line over the river, the full
+        # freeboard as one double-headed dimension arrow from the flood line to the crest, the riprap patch on the
+        # river slope (all of it in frame); the lamp behind Max on the crest turns green and he cheers
         self.vis(m1, "marker", True)
-        st.arrow("dim_up", (1.15, -0.07, 2.65), (0, 0, 0.45), m1 + 2, m2, color=YELLOW, width=0.07)
-        st.arrow("dim_down", (1.15, -0.07, 2.65), (0, 0, -0.45), m1 + 2, m2, color=YELLOW, width=0.07)
-        self.label("3 FT ABOVE\n100-YEAR FLOOD", (1.35, -0.3, 4.05), m1 + 2, m2, size=0.26)
-        self.label("RIPRAP", (-1.9, -0.3, 3.75), m1 + 6, m2, size=0.28)
-        self.close(b, m1, frac=0.34, offset=(0, 0, -0.5), angle=-92)
-        self.shot(m1, m2, (-0.7, -7.1, 2.6), (0.3, -6.6, 2.4), (-0.2, 0, 2.3), (0.0, 0, 2.25))
-        self.result(m2, e, ok=True)
+        st.arrow("dim_up", (1.15, -0.07, FLOOD100), (0, 0, CREST3 - FLOOD100), m1 + 2, e, color=YELLOW, width=0.15)
+        st.arrow("dim_down", (1.15, -0.1, CREST3), (0, 0, FLOOD100 - CREST3), m1 + 2, e, color=YELLOW, width=0.15)
+        labs = [self.label("3 FT ABOVE\n100-YEAR FLOOD", (1.0, -0.3, 4.0), m1 + 2, e, size=0.26),
+                self.label("RIPRAP", (-2.4, -0.3, 2.85), m1 + 6, e, size=0.40)]
+        self.lamp(m1, "off", FIN_LAMP2)
+        self.lamp(g, "green")
+        self.v_arms(g + 4, e - 2)
+        st.frame_all(self.rig, b, m1, [self.max, (-2.8, 0.0, 2.1), (0.4, 0.0, CREST3)], angle=-76,
+                     rise=0.08, lens=32.0, margin=0.05, push=0.07, swing=6.0, cut=True)
+        st.frame_all(self.rig, m1, e, self.named("dim_up", "dim_down", "bar_flood") + labs
+                     + [self.riprap_front, self.max, self.plamp], angle=-70, rise=0.05, lens=32.0,
+                     margin=0.05, push=0.06, swing=7.0, cut=True)
 
     def a_fail_burrow(self, i, b, e):
-        m1, rise = fr(b, e, 0.3), fr(b, e, 0.4)
-        p, jet = fr(b, e, 0.44), fr(b, e, 0.5)
-        dig = b + 14
+        # Hold the readable digging setup through the first review window.  The previous 30% cut
+        # changed weather, hid the squirrel and sent the camera into the levee while that window was
+        # still being judged.  Flood/piping begins only after the complete squirrel-and-mouth shot.
+        m1, rise = fr(b, e, 0.34), fr(b, e, 0.39)
+        p, jet = fr(b, e, 0.41), fr(b, e, 0.46)
+        dig = b + 10
         self.stage(b, {"v3", "grass", "tufts", "riprap", "berm", "wells", "squirrel"})
         self.weather(b, False)
         self.river(b, LOW)
@@ -1037,16 +1320,19 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.v_arms(b + 4, b + 22)
         self.max.look_at(b + 26, (4.6, 0, 1.0), hold=max(0, m1 - b - 28))
         # CHANGE: a ground squirrel digs a tunnel into the land slope, right beside Max
-        self.sq_cut(b, (5.1, 0.25, berm_z(5.1) + 0.13), -90)
-        self.sq_key(dig - 4, (4.75, 0.05, 1.0), -90)
+        self.sq_cut(b, (5.1, -0.08, berm_z(5.1) + 0.13), 0)
+        self.sq_key(dig - 4, (4.78, -0.08, 1.02), 0)
         self.vis(dig, "v3", False)
         self.vis(dig, "v3b", True)
-        for f, (x, _, z) in zip((dig, dig + 14, m1 - 6), BURROW[:3]):
-            self.sq_key(f, (x, 0.0, z - 0.17), -90)
-        self.vis(m1 - 4, "squirrel", False)
+        # Dig in place at the mouth instead of disappearing down the cutaway groove.  The bob and
+        # dust sell excavation while the whole animal remains readable at both review instants.
+        for k, f in enumerate(range(dig, m1 - 5, 8)):
+            self.sq_key(f, (4.72 - 0.06 * (k % 2), -0.08, 1.02 + 0.10 * (k % 2)), 0)
+        self.sq_key(m1 - 4, (4.68, -0.08, 1.02), 0)
         self.fill_puffs("puff_dig", range(dig - 2, m1 - 6, 4), [(4.7, 0, 1.15), (4.2, 0, 1.2), (3.6, 0, 1.25)])
         events.add(dig, "rumble", duration=m1 - dig - 6, gain=0.25)
-        self.view(b, m1, 5.7, 1.3, 6.4, sway=0.3)
+        # Camera is assigned once, below, across the complete beat: no transition can abandon the
+        # squirrel during digging or clip Max while the flood begins.
         # WHY: the camera follows the flood into the burrow; the water carries soil out and the hole widens
         self.weather(m1, True)
         self.river(rise, FLOOD100, f_from=m1 + 2)
@@ -1057,28 +1343,43 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.vis(p, "pipewater", True)
         st.arrow("arrow_pipe0", (-2.4, -0.12, 1.95), (2.0, 0, -0.15), p, e, color=BLUE, width=0.08)
         st.arrow("arrow_pipe1", (2.3, -0.12, 1.75), (2.0, 0, -0.45), p, e, color=BLUE, width=0.08)
-        self.label("PIPING", (4.0, -0.3, 3.0), jet - 4, e, size=0.42)
-        self.travel(m1, jet, [(0.0, -1.6, 1.4, 8.0), (0.4, -1.2, 1.4, 8.0), (1.0, 4.5, 1.3, 9.0)])
-        # RESULT in the same frame: a muddy jet blasts out beside Max, the duck rides it onto the berm,
-        # the squirrel pops out and salutes, the lamp behind Max turns red, his jaw drops
-        self.jet.run(jet - 4, e, JET_SRC, JET_HIT, spread=0.35, arc=0.9, period=14)
-        self.mud_jet.run(jet - 4, e, JET_SRC, JET_HIT, spread=0.3, arc=0.95, period=12)
+        lab = self.label("PIPING", (4.0, -0.3, 3.0), jet - 4, e, size=0.42)
+        # RESULT in the same frame: the thick muddy jet blasts out beside the squirrel and Max, the duck rides
+        # it onto the berm, the lamp behind Max turns red, his jaw drops
+        # Use the fat, tapered, surface-churned blowout made for the hook rather than the narrow
+        # constant-radius curve that read as a rigid brown pipe.  Its frayed drops keep moving through
+        # the last frame, so the burst remains unmistakably liquid.
+        self.vis(jet - 4, "jethook", True)
+        grow(self.jet_hook, jet - 4, jet + 4)
+        self.hook_flow(jet - 4, e)
+        self.jet_flow.location = (0, 0, 0)
+        self.jet_flow.keyframe_insert("location", frame=jet - 4)
+        self.jet_flow.location = (0.125 * (e - jet + 4), 0, -0.04 * (e - jet + 4))
+        self.jet_flow.keyframe_insert("location", frame=e)
+        toy.set_interpolation(self.jet_flow, "location", [jet - 4], "LINEAR")
+        self.hook_drops.run(jet - 2, e, (4.75, 0.2, 1.5), tuple(HOOK_LAND), spread=0.55, arc=0.75, period=12)
+        self.hook_fall.run(jet, e, (6.4, 0.36, 1.15), tuple(HOOK_LAND), spread=0.4, arc=0.05, period=9)
+        self.mud_jet.run(jet - 4, e, JET_SRC, JET_HIT, spread=0.42, arc=0.95, period=10)
         events.add(jet - 4, "pour", duration=e - jet + 4, gain=0.5)
         self.show(self.duck, p, False)
         self.duck_cut(jet - 2, (4.7, 0.3, 1.15), (0, R(-25), 0))
         self.show(self.duck, jet - 2, True)
-        self.duck_key(jet + 8, (5.6, 0.4, 1.85), (0, R(10), 0))
-        self.duck_key(jet + 18, (6.35, 0.45, berm_z(6.35) + 0.15), (0, R(15), 0))
-        self.vis(jet + 6, "squirrel", True)
-        self.sq_cut(jet + 6, tuple(SQ_PEEK), -20)
-        self.salute(jet + 10, e - 2)
+        self.duck_key(fr(jet, e, 0.52), tuple(HOOK_DUCK), (0, R(8), R(-8)))
+        self.duck_key(e, (6.18, 0.33, 1.58), (0, R(12), R(8)))
+        self.vis(jet, "squirrel", True)
+        # Plant the squirrel upright beside (not beneath) the jet and turn it squarely to camera so
+        # the raised forepaw silhouettes against the grass.
+        self.sq_cut(jet, (5.12, -0.22, berm_z(5.12) + 0.14), 0)
+        self.salute(jet + 4, e - 2)
         self.lamp(jet + 4, "red")
         self.jaw_drop(jet + 2, e - 2)
-        self.view(jet, e, 5.2, 1.3, 9.5, sway=0.3)
+        beat_things = [self.jet_hook, lab, self.max, self.plamp, self.squirrel,
+                       (4.05, 0.0, 1.18), (5.35, 0.0, 1.18)]
+        st.frame_all(self.rig, b, e, beat_things, angle=-72.0, rise=0.08, lens=32.0,
+                     margin=0.05, push=0.06, swing=6.0, cut=True, fstop=8.0)
 
     def a_fix_maintain(self, i, b, e):
-        m1, filled = fr(b, e, 0.37), fr(b, e, 0.6)
-        g0, g1 = fr(b, e, 0.66), fr(b, e, 0.76)
+        m1, fill_start, filled = fr(b, e, 0.36), fr(b, e, 0.43), fr(b, e, 0.86)
         self.stage(b, {"v3p", "grass", "riprap", "berm", "wells", "shovel"})
         self.weather(b, False)
         self.river(b, LOW)
@@ -1087,37 +1388,33 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.lamp(b, "off", MAINT_LAMP)
         # CHANGE: grass mowed short; Max inspects the hole and packs it shut with his shovel
         self.at(b, MAINT_MAX, facing_to(MAINT_MAX, V((4.5, MAINT_MAX.y, MAINT_MAX.z))))
-        self.max.hammer(b + 6, filled - 2, hand="R")
-        self.fill_puffs("puff_pack", range(b + 8, filled - 2, 5), [(4.8, 0.2, 1.05)])
-        for f in range(b + 12, filled - 2, 14):
+        self.max.hammer(b + 6, filled - 4, hand="R")
+        self.fill_puffs("puff_pack", range(b + 8, filled - 4, 5), [(4.8, 0.2, 1.05)])
+        for f in range(b + 12, filled - 4, 14):
             events.add(f, "stone_thud", gain=0.4)
         self.close(b, m1, frac=0.4, offset=(-0.4, 0, -0.3), angle=-98, swing=14)
-        # WHY + RESULT in one cutaway: the 8.2 m tunnel is a shortcut for the water; packed, it is gone,
-        # the lamp behind Max turns green
-        st.arrow("dim_burrow0", (2.6, -0.1, 1.95), (1.95, 0, -0.55), m1 + 2, e, color=YELLOW, width=0.06)
-        st.arrow("dim_burrow1", (2.6, -0.1, 1.95), (-5.3, 0, -0.05), m1 + 2, e, color=YELLOW, width=0.06)
-        self.label("8.2 m", (2.6, -0.3, 2.6), m1 + 2, e, size=0.5)
-        self.fill_puffs("puff_fill", range(filled - 14, filled + 6, 3),
-                        [(1.6, 0, 1.4), (2.6, 0, 1.33), (3.6, 0, 1.25), (4.4, 0, 1.18)])
-        self.vis(filled, "v3p", False)
-        self.vis(filled, "v3", True)
+        # WHY + RESULT in one cutaway: the 8.2 m tunnel is a shortcut for the water; fresh tan soil fills it
+        # from the mouth inward, the lamp behind Max turns green
+        st.arrow("dim_burrow0", (2.6, -0.16, 1.95), (1.95, 0, -0.55), m1 + 2, e, color=YELLOW, width=0.12)
+        st.arrow("dim_burrow1", (2.6, -0.16, 1.95), (-5.3, 0, -0.05), m1 + 2, e, color=YELLOW, width=0.12)
+        lab = self.label("BURROW\n8.2 m", (2.55, -0.36, 2.72), m1 + 2, e, size=0.58)
+        self.vis(fill_start, "plug", True)
+        grow(self.plug, fill_start, filled)
+        self.pack_clods(fill_start, filled)
+        self.fill_puffs("puff_fill", range(fill_start, filled + 2, 4),
+                        [(4.4, 0, 1.18), (3.6, 0, 1.25), (2.6, 0, 1.33), (1.6, 0, 1.4)])
         events.add(filled, "stone_thud", gain=0.6)
-        self.max.turn(filled + 2, 0, frames=8)
-        self.lamp(filled + 4, "green")
-        self.v_arms(filled + 10, e - 2)
-        self.view(m1, g0, 3.8, 1.3, 9.0)
-        # the squirrel moves into its own box in the yard (a short gag), then back to the packed levee
-        self.vis(g0, "sbox", True)
-        self.vis(g0, "squirrel", True)
-        self.sq_cut(g0, (SBOX.x, SBOX.y, SBOX_TOP), 0)
-        self.salute(g0 + 2, g1)
-        self.shot(g0, g1, (SBOX.x - 0.3, SBOX.y - 2.7, 1.95), (SBOX.x + 0.3, SBOX.y - 2.4, 1.9),
-                  (SBOX.x, SBOX.y, 1.6), lens=30)
-        self.view(g1, e, 3.8, 1.3, 9.0, sway=-0.9)
+        self.max.turn(filled - 2, 0, frames=6)
+        self.lamp(filled, "green")
+        self.v_arms(filled + 2, e - 2)
+        packed = self.named("dim_burrow0", "dim_burrow1") + [self.plug, lab, self.max, self.plamp]
+        # Do not leave the required packed tunnel for a separate gag shot.  The fill, dimension,
+        # green lamp and Max remain together through the middle and end of the beat.
+        st.frame_all(self.rig, m1, e, packed, angle=-62.0, rise=0.06, lens=34.0,
+                     margin=0.04, push=0.07, swing=7.0, cut=True, fstop=8.0)
 
     def a_finale(self, i, b, e):
-        s1, s2, s3, s4 = fr(b, e, 0.2), fr(b, e, 0.6), fr(b, e, 0.76), e
-        clear = fr(b, e, 0.48)
+        clear = fr(b, e, 0.22)
         self.stage(b, {"v3", "grass", "riprap", "berm", "wells", "sbox", "squirrel", "kids", "rain"})
         self.weather(b, True)
         self.weather(clear, False)
@@ -1125,52 +1422,76 @@ class LeveeStoryEarthenRiverLeStorySet:
         self.duck_river(b, -3.9)
         self.lamp(b, "green", FIN_LAMP)
         events.add(b, "water_rush", duration=clear - b, gain=0.4)
-        # every arrow stays on the river side
-        for k, (x, z, L) in enumerate(((-6.0, 1.0, 1.4), (-4.9, 1.8, 1.7), (-6.6, 0.4, 1.0))):
-            st.arrow(f"arrow_river{k}", (x, -0.06, z), (L, 0, 0), b + 2 + 4 * k, s1, color=BLUE, width=0.1)
-        self.view(b, s1, -3.4, 1.6, 8.0)
-        # Max cheers by the green lamp, the kids bounce on the dry trampoline, the squirrel salutes
+        # Start in the backyard, not on a river-only insert: storm streaks recede while the dry
+        # trampoline, Max and the already-green lamp are all present from the first judged frame.
         self.at(b, FIN_MAX, 0)
-        self.max.key("hips", s1, loc=(0, 0, 0.56))
-        self.max.cheer(s1 + 2, s2 - 2)
+        self.max.key("hips", b + 4, loc=(0, 0, 0.56))
+        self.max.cheer(b + 6, e - 2)
         for k, kid in enumerate(self.kids):
             kid.cut_place(b, KIDS_TRAMP[k], -15 if k == 0 else 15)
             kid.pose(b + 2)
-            kid.hop(s1 + 2 + 5 * k, s2 + 20, height=0.32, period=18, sound="boing")
-            kid.smile(s1 + 2, big=True)
+            kid.hop(b + 6 + 5 * k, e, height=0.32, period=18, sound="boing")
+            kid.smile(b + 6, big=True)
         self.sq_cut(b, (SBOX.x, SBOX.y, SBOX_TOP), 0)
-        self.salute(s1 + 10, s2 - 4)
-        events.add(s1 + 4, "kids_cheer", gain=0.7)
-        self.view(s1, s2, 14.2, 1.3, 6.8, yc=1.6)
-        # the duck floats away down the river
-        self.duck_key(s2, (-6.0, 0.8, 2.37))
-        self.duck_key(s3, (-11.0, 6.0, 2.37), (0, 0, R(120)))
-        self.shot(s2, s3, (-7.0, -6.2, 4.0), (-8.0, -5.4, 3.6), (-7.0, 2.0, 2.2), (-8.6, 3.5, 2.2))
-        # pull out to the map line
-        self.vis(s3, "map", True)
-        self.label("3,787 MILES", (0, 90, 24), s3 + 4, s4, size=9.0, tilt=0)
-        self.shot(s3, s4, (8.0, -12.0, 7.0), (6.0, -40.0, 48.0), (6.0, 6.0, 1.0), (0.0, 90.0, 6.0))
+        self.salute(b + 12, e - 4)
+        events.add(b + 8, "kids_cheer", gain=0.7)
+        # the storm clears over the dry yard: Max, the green lamp and the bouncing kids in one moving frame
+        rim = bpy.data.objects["tramp_rim"]
+        self.frame(b, e, [self.max, *self.kids, rim, self.plamp], angle=-92.0, swing=10.0, rise=0.16)
 
     # ------------------- hooks (epilogue, after the finale) -------------------
 
     def a_burrow_hook(self, i, h0, h1):
         hm = fr(h0, h1, 0.45)
-        self.stage(h0, {"v3p", "grass", "tufts", "riprap", "berm", "wells", "rain", "squirrel", "pipewater"})
-        self.weather(h0, True)
+        # a bright squall sky but NO rain streaks in front of the lens: the piped levee with its tunnel groove
+        # open and dark, the black burrow mouth on the land slope and the fat churning jet of mud blasting out
+        self.stage(h0, {"v3p", "grass", "tufts", "riprap", "berm", "wells", "squirrel", "jethook"})
+        self.light(h0, "squall")
         self.river(h0, FLOOD100)
         self.meter(h0, "red")
-        self.duck_cut(h0, (4.7, 0.3, 1.15), (0, R(-25), 0))
-        self.duck_key(h0 + 12, (6.6, 0.5, 1.9), (0, R(10), 0))
-        self.duck_key(h0 + 24, tuple(DUCK_LAND), (0, R(15), 0))
-        self.jet.run(h0, h1, JET_SRC, (7.6, 0.8, 0.45), spread=0.35, arc=0.9, period=14)
+        grow(self.jet_hook, h0, h0 + 6)
+        self.hook_flow(h0, h1)
+        # the lumps on the jet's surface rush along it (3 m/s), so it reads as moving liquid, not a solid arch
+        self.jet_flow.location = (0, 0, 0)
+        self.jet_flow.keyframe_insert("location", frame=h0)
+        self.jet_flow.location = (0.125 * (h1 - h0), 0, -0.04 * (h1 - h0))
+        self.jet_flow.keyframe_insert("location", frame=h1)
+        toy.set_interpolation(self.jet_flow, "location", [h0], "LINEAR")
+        # mud drops fly off the jet along its arc, and its frayed end rains down into a splash on the berm
+        self.hook_drops.run(h0 + 4, h1, (4.75, 0.2, 1.5), tuple(HOOK_LAND), spread=0.55, arc=0.75, period=14)
+        self.hook_fall.run(h0 + 6, h1, (6.4, 0.36, 1.15), tuple(HOOK_LAND), spread=0.4, arc=0.05, period=9)
         events.add(h0, "pour", duration=h1 - h0, gain=0.6)
-        events.add(h0 + 24, "boing", gain=0.4)
-        self.sq_cut(h0, tuple(SQ_HOOK), 0)
-        self.salute(h0 + 8, h1 - 2)
-        self.at(h0, YARD, 0)
-        self.jaw_drop(hm, h1)
-        self.shot(h0, hm, (5.8, -7.4, 1.6), (6.6, -6.8, 1.4), (6.4, 0, 0.9), (6.6, 0, 0.85))
-        self.close(hm, h1, frac=0.24, offset=(-1.4, 0, -0.3), angle=-94, swing=12)
+        Puffs("puff_hook", "#80552F", count=14, size=0.28, seed=12).emit(
+            range(h0 + 6, h1 - 2, 4), lambda f: HOOK_SPLASH, rise=0.5, life=16)
+        # the duck shoots out of the mouth with the mud and rides the jet's crest to the end
+        self.show(self.duck, h0, True)
+        self.duck_cut(h0, (4.6, 0.2, 1.3), (0, R(-30), 0))
+        self.duck_key(fr(h0, h1, 0.48), tuple(HOOK_DUCK), (0, R(-6), R(10)))
+        events.add(fr(h0, h1, 0.48), "boing", gain=0.4)
+        self.duck_key(fr(h0, h1, 0.76), (5.82, 0.28, 2.02), (0, R(6), R(-8)))
+        self.duck_key(h1, (6.18, 0.33, 1.62), (0, R(-4), R(6)))
+        # the squirrel, bigger for its close-up, hops with excitement beside the jet, then salutes
+        self.squirrel.keyframe_insert("scale", frame=h0 - 1)
+        self.squirrel.scale = (2.1, 2.1, 2.1)
+        self.squirrel.keyframe_insert("scale", frame=h0)
+        self.sq_cut(h0, tuple(HOOK_SQ), -15)
+        for k, f in enumerate(range(h0 + 4, hm, 5)):
+            self.sq_key(f, tuple(HOOK_SQ + V((0, 0, 0.14 if k % 2 == 0 else 0.0))), -15)
+        self.sq_key(hm, tuple(HOOK_SQ), -15)
+        self.salute(hm + 2, h1 - 2)
+        # Max points at his duck riding the jet (arm out to the side), then his jaw drops
+        self.at(h0, HOOK_MAX3, 0)
+        self.max.look_at(h0 + 4, (5.4, 0.2, 2.1), hold=max(0, h1 - h0 - 8))
+        self.max.point(h0 + 4, hm + 6, hand="R", up_deg=55, side_deg=70)
+        self.max.brows(h0 + 4, 1.0)
+        self.max.key("mouth", h0 + 6, scale=(1.2, 0.6, 2.4))
+        self.jaw_drop(hm + 8, h1)
+        # close on the burrow: the jet, the duck riding it, the mouth and Max, all in one moving frame
+        things = [self.jet_hook, self.duck, self.max, self.squirrel, (4.2, 0.0, 0.95)]
+        st.frame_all(self.rig, h0, hm, things, angle=-76.0, rise=0.08, lens=32.0,
+                     margin=0.05, push=0.07, swing=7.0, cut=True)
+        st.frame_all(self.rig, hm, h1, things, angle=-68.0, rise=0.08, lens=32.0,
+                     margin=0.05, push=0.07, swing=-7.0, cut=True)
 
     def a_happy_hook(self, i, h0, h1):
         self.stage(h0, {"v3", "grass", "riprap", "berm", "wells", "sbox", "squirrel", "kids", "rain"})

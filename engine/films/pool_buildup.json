@@ -1,0 +1,80 @@
+{
+  "title": "How a hole in the ground becomes a swimming pool",
+  "set": "pool",
+  "format": "buildup",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 1.2,
+  "cta": null,
+  "beats": [
+    {
+      "id": "dig",
+      "action": "dig",
+      "text": "If you dig a hole in your backyard and fill it with water, you have a pool. But dirt drinks water, so it needs a concrete shell."
+    },
+    {
+      "id": "layers",
+      "action": "layers",
+      "text": "Under the lawn: topsoil, clay, sand, and groundwater."
+    },
+    {
+      "id": "gravel",
+      "action": "gravel",
+      "text": "But concrete on wet dirt cracks, so the floor gets a bed of gravel to drain it."
+    },
+    {
+      "id": "valve",
+      "action": "valve",
+      "text": "And rising groundwater can push an empty pool right out of the ground. So the floor gets a valve that lets it in. This is a relief valve.",
+      "overlay": {
+        "type": "label",
+        "text": "Relief valve"
+      }
+    },
+    {
+      "id": "pipes",
+      "action": "pipes",
+      "text": "But still water turns green, so pipes run from a drain and a skimmer to a pump."
+    },
+    {
+      "id": "rebar+shotcrete",
+      "action": "rebar",
+      "text": "But concrete cracks when it's pulled, so a steel grid goes in first, and concrete is fired onto it from a hose. This is shotcrete.",
+      "actions": [
+        "rebar",
+        "shotcrete"
+      ]
+    },
+    {
+      "id": "cure",
+      "action": "cure",
+      "text": "Then you keep it wet for days, because concrete doesn't dry, it cures."
+    },
+    {
+      "id": "finish",
+      "action": "finish",
+      "text": "But raw concrete scrapes skin, so it gets smooth plaster, tiles and a stone edge."
+    },
+    {
+      "id": "fill",
+      "action": "fill",
+      "text": "Now fill it: twenty thousand litres, about twenty tons of water.",
+      "overlay": {
+        "type": "stat",
+        "value": "20 tons",
+        "text": "of water"
+      }
+    },
+    {
+      "id": "flow",
+      "action": "flow",
+      "text": "A pump pushes it through a sand filter and back, the whole pool every six hours."
+    },
+    {
+      "id": "glamour",
+      "action": "glamour",
+      "text": "Add a ladder and some sun. Congratulations, you've built a pool."
+    }
+  ]
+}

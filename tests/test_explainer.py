@@ -28,8 +28,11 @@ class RegistryTests(unittest.TestCase):
             self.assertIsNone(getattr(sets.spec(set_id), "HERO", None))
 
     def test_explainer_sets_get_the_no_hero_voice(self):
-        self.assertIs(sr._style("pool"), sr.STYLE)
+        from agents import buildup
+        self.assertIs(sr._style("pool"), buildup.STYLE)          # the "If you ..." build-up format
         self.assertIs(sr._style("pool_story"), sr.STORY_STYLE)
+        with patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"}):
+            self.assertIs(sr._style("pool"), sr.STYLE)
 
     def test_max_topic_pick_never_sees_explainer_sets(self):
         self.assertEqual(sr.available_topic_sets(history=[]), list(sets.AVAILABLE))
@@ -145,6 +148,23 @@ class AutopilotTests(unittest.TestCase):
             self.assertEqual(ap.stage_script(self.run, "explainer", None, None), self.film)
         self.assertEqual(calls, ["pool"])
         self.assertEqual(self.run["script_topic"]["set"], "pool")
+
+    def test_no_hero_explainer_render_enables_the_exact_timing_preflight(self):
+        video = os.path.join(self.tmp, "f.mp4")
+        open(video, "wb").write(b"video")
+        json.dump({"set": "pool", "beats": []}, open(self.film, "w"))
+        seen = {}
+
+        def produce(args):
+            seen.update(validate=os.environ.get("SCENE_VALIDATE"),
+                        preflight=os.environ.get("SCENE_PREFLIGHT"), args=args)
+            return video
+
+        with patch.dict(os.environ, {"SCENE_VALIDATE": "", "SCENE_PREFLIGHT": ""}), \
+                patch("engine.make_film.produce", side_effect=produce), patch.object(ap, "_backup"):
+            out, flagged = ap.stage_render(self.run, self.film)
+        self.assertEqual((out, flagged), (video, False))
+        self.assertEqual((seen["validate"], seen["preflight"]), ("1", "1"))
 
     def test_builds_a_new_explainer_set_when_none_fits(self):
         plan = {"subject": "Septic tank", "set_id": "septic_tank_explainer", "build_brief": "A cutaway yard.",

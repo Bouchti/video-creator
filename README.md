@@ -57,12 +57,30 @@ python -m local_video.cli resume output\projects\PROJECT_ID
 
 For `--source cutaway`, the showrunner searches current 14-day trend evidence before scoring the
 unused registered 3D subjects. A Max story subject is consumed after its first generated script;
-changing the title or joke does not make it new. If every registered Max set is consumed, the
-autopilot researches a new trend-backed subject, creates its Blender story set, renders preview
-frames, visually validates every beat, registers it only after it passes, and then writes and
-renders the video. This first run for a new subject is substantially longer than reusing an existing
-set. `SHOWRUNNER_AUTO_BUILD_SETS=0` disables automatic expansion; `SHOWRUNNER_ALLOW_REPEATS=1` is an
-explicit rerun override, not the production default.
+changing the title or joke does not make it new. `SHOWRUNNER_AUTO_BUILD_SETS=0` disables automatic
+expansion; `SHOWRUNNER_ALLOW_REPEATS=1` is an explicit rerun override, not the production default.
+
+### New Max stories: the story kit (default)
+
+When every registered Max set is consumed, the autopilot does **not** write Blender code. It plans the
+next story as a **storyboard**: plain data in the vocabulary of a pre-built, tested 3D world
+(`engine/kit/`). The kit's first world is a cutaway riverbank (levees, dikes, flood walls, sea walls,
+embankment dams); `engine/kit/vocab.py` lists everything a storyboard can ask for.
+
+1. `agents/kit_planner.py` researches a current news hook and returns the storyboard in one structured
+   call (plus at most one cheap correction if `agents/storyboard.py` finds a rule broken).
+2. `agents/storyboard.py` validates it and generates a normal set (a spec module and a three-line
+   builder subclassing `engine/kit/embankment.EmbankmentSet`), so the rest of the pipeline is unchanged.
+3. `agents/set_builder.build_kit_set` renders the preview and runs the measured gates (Max's size,
+   framing, must-see objects, labels, collisions, floating, flicker, textures). These are free and
+   deterministic, and they must pass. `KIT_VISION_CHECK=1` adds one advisory AI look.
+4. The showrunner writes the script from the kit's exact description of every beat (what is shown, the
+   running gag, the on-screen label), and the film renders without paid rehearsals or repair agents.
+
+A measured failure is a **kit bug** (`KitDefect`): fix it once in `engine/kit` for every future video,
+never in a single video. A subject the kit cannot show is not filmed; extending the kit (a new world,
+event or prop) is developer work with tests (`tests/test_kit_geometry.py`, `tests/test_storyboard_kit.py`).
+`SHOWRUNNER_SET_MODE=agent` restores the old coding-agent set builder.
 
 ### Explainer route
 
@@ -86,9 +104,11 @@ the set builder write, preview, measure, review and register a new `*_explainer`
 
 The Codex and Claude subscription routes use `SHOWRUNNER_QUALITY=efficient`: one strong script, an
 independent critique, and a revision only when needed. Trend selection and the winning topic's fact
-sheet share one web-search turn. Preview and full-render scene checks are reviewed in batches of
-four, compressed review frames and verdicts are cached, and unchanged source/settings reuse the
-existing Blender preview instead of rendering it again. Reasoning effort is capped independently
+sheet share one web-search turn. Builder previews and an exact-final-timing dress rehearsal are
+reviewed in batches of four. The rehearsal renders only the three production-review samples from
+each three-second window at phone resolution, repairs rejected windows before the full animation
+starts, and caches pixel-identical verdicts across repair rounds. Full-render checks remain as a
+safety net. Reasoning effort is capped independently
 for showrunning, visual review and set building; both CLIs log token/cache usage. Set building runs
 in an isolated source mirror and copies back only the three allowed set files, so it cannot
 overwrite changes made in the real repository during a long generation.

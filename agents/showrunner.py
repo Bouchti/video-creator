@@ -33,8 +33,13 @@ log = logging.getLogger("pipeline")
 
 WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 words → 82.8 s (pauses)
 TARGET_WORDS = (140, 192)              # ≈ 60–80 s with this voice (incl. the closing question)
+WORDS_PER_BEAT, WORDS_CAP = 18, 230    # long story ladders: ~18 words a beat, never over ~95 s
 HOOK_MAX_WORDS = 13
-PASS_SCORE = 8                         # every rubric score must reach this to ship
+PASS_SCORE = 8                         # what the editor and writer aim for
+# What actually ships: no rule breaks and EVERY score >= SHIP_FLOOR. Calibrated on the editor's real
+# scores: the old gate (all 8, or all 7 with an 8 average) was met by 0 of 77 graded scripts (median
+# average 6.6), so it failed nearly every run; all-7 sits above every script the channel has posted.
+SHIP_FLOOR = int(os.getenv("SHOWRUNNER_SHIP_FLOOR") or 7)
 MAX_REVISIONS = max(1, int(os.getenv("SHOWRUNNER_MAX_REVISIONS", "2")))
 # QUALITY=best: 3 competing drafts (~5 min). QUALITY=fast: 1 draft, 1 review, 1 fix (~2-3 min).
 QUALITY = os.getenv("SHOWRUNNER_QUALITY", "efficient")
@@ -128,7 +133,11 @@ The format is TRIAL AND ERROR:
 
 
 def _style(set_id):
-    """Story sets (with a hero) get the trial-and-error comedy voice; others the explainer voice."""
+    """Story sets (with a hero) get the trial-and-error comedy voice; explainer sets the build-up voice
+    ("If you ..., you have a ..." → "Congratulations, you've built a ...", agents/buildup.py); others STYLE."""
+    from agents import buildup
+    if buildup.enabled(set_id):
+        return buildup.STYLE
     return STORY_STYLE if getattr(sets.spec(set_id), "HERO", None) else STYLE
 
 
@@ -162,6 +171,12 @@ def activate_fallback(reason="Primary backend usage limit reached", failed_backe
     if fallback == "claude":
         fallback = "subscription"
     current = active_backend()
+    # A command-line/process override can change the primary without changing `.env`. For example,
+    # SHOWRUNNER_BACKEND=subscription with an `.env` written for codex -> subscription used to make
+    # the fallback point straight back at the exhausted primary. An explicitly blank value still
+    # disables fallback; a same-as-primary value means use the other installed subscription model.
+    if fallback == current and current in ("codex", "subscription"):
+        fallback = "codex" if current == "subscription" else "subscription"
     # Another worker may already have switched the process while this request was in flight.
     if failed_backend and current != failed_backend:
         return current == fallback
@@ -539,9 +554,23 @@ signal and must be different from every used subject."""
     return plan
 
 
+def _ensure_extras(set_id):
+    """A Max story set whose spec says nothing about its gags gets "extras" described once from its own
+    code, so the writer can joke about what is really on screen (see set_builder.backfill_extras)."""
+    import importlib
+    sp = sets.spec(set_id)
+    if not getattr(sp, "HERO", None) or getattr(sp, "KIT", None) or any(v.get("extras") for v in sp.ACTIONS.values()):
+        return                          # (a kit set's extras come from the kit itself, never from a model)
+    from agents.set_builder import backfill_extras
+    if backfill_extras(set_id):
+        importlib.reload(sp)
+
+
 def _set_brief(set_id):
     sp = sets.spec(set_id)
-    actions = "\n".join(f"  - {k} [{v['kind']}]: {v['shows']}" for k, v in sp.ACTIONS.items())
+    actions = "\n".join(f"  - {k} [{v['kind']}]: {v['shows']}"
+                        + (f" Also on screen (use it for jokes): {v['extras']}" if v.get("extras") else "")
+                        for k, v in sp.ACTIONS.items())
     facts = "\n".join(f"  - {k}: {v}" for k, v in sp.MODEL_FACTS.items())
     return (f"SET '{set_id}': {sp.SUBJECT}\nWhat the 3D model shows (fixed facts):\n{facts}\n"
             f"Actions (visual beats this set can play):\n{actions}")
@@ -612,6 +641,9 @@ For hero (story) sets, an ANGLE is a fresh telling of the hero's trial-and-error
 building it for, the running gag, which disaster becomes the hook, the comic voice, the payoff.
 Never frame it as a score or contest ("Physics 1, Max 0", "rounds", "fail #2"): a counter tells the
 viewer nothing. The hook line must make sense on its own to someone who has seen nothing else."""
+    from agents import buildup
+    if any(buildup.enabled(s_) for s_ in set_ids):
+        prompt += buildup.TOPIC_NOTE
     tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
     out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium", tools=tools)
     _save_wishlist(out.get("wishlist", []))
@@ -720,6 +752,9 @@ CRITIQUE_SCHEMA = _obj({
 
 
 def _rules(set_id):
+    from agents import buildup
+    if buildup.enabled(set_id):
+        return buildup.rules(set_id, WORDS_PER_SECOND, word_budget(set_id))
     sp = sets.spec(set_id)
     order = getattr(sp, "STORY_ORDER", None) or sp.BUILD_ORDER
     hooks = ", ".join(k for k, v in sp.ACTIONS.items() if v["kind"] == "hook")
@@ -730,6 +765,7 @@ def _rules(set_id):
     ladder = (f"\n- The fail_* actions are the hero's failures ({', '.join(fails)}): give each its own beat, name the"
               f"\n  real cause, and make the NEXT beat the fix that answers it. Never use stickers for fail counts,"
               f"\n  scores or attempts (no 'Fail #', no scoreboards).") if fails else ""
+    lo, hi = word_budget(set_id)
     return f"""STRUCTURE RULES (the renderer enforces them):
 - Beat 1 = a hook action ({hooks}): pick the one whose VISUAL matches your hook line (the viewer must
   see what the first words say); beat 2 = rewind.
@@ -739,8 +775,8 @@ def _rules(set_id):
   "shotcrete"]) to race through steps that are not the point. Hooks, the rewind{' and failures' if fails else ''} are single.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
   {WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. 10-17 beats in total.
-- Word budget: aim for 155-180 words and count before returning. The hard allowed range is
-  {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{WORDS_PER_SECOND} words/s); do not draft at
+- Word budget: aim for {hi - 37}-{hi - 12} words and count before returning. The hard allowed range is
+  {lo}-{hi} words in total (~{WORDS_PER_SECOND} words/s); do not draft at
   the upper boundary. Hook <= {HOOK_MAX_WORDS} words.
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "50 tons", text like "of dirt": a REAL measurement only); "label" = a short badge naming a real
@@ -778,7 +814,7 @@ def write_script(topic, facts, previous=None, critique=None, direction=None, eff
 
 TOPIC: {topic['title']}
 ANGLE: {topic['angle']}
-HOOK IDEA: {topic['hook_line']}  (opens with action: {topic['hook_action']})
+{_hook_idea(topic)}
 PAYOFF IDEA: {topic['payoff']}
 
 FACT SHEET (verified research):
@@ -804,19 +840,33 @@ Write the improved script."""
     return _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort=effort)
 
 
+def _hook_idea(topic):
+    from agents import buildup
+    if buildup.enabled(topic["set"]):
+        return (f"OPENING IDEA: {topic['hook_line']}  (the first sentence must start with \"If you\" and say "
+                "\"you have a <thing>\"; the film opens on the first build step)")
+    return f"HOOK IDEA: {topic['hook_line']}  (opens with action: {topic['hook_action']})"
+
+
 def _directions(set_id):
+    from agents import buildup
+    if buildup.enabled(set_id):
+        return buildup.DIRECTIONS
     return STORY_DIRECTIONS if getattr(sets.spec(set_id), "HERO", None) else DIRECTIONS
 
 
 def _tone_example(set_id):
     """Narration of a hand-written reference film for this set (engine/films/*.json), if any."""
     import glob
+    from agents import buildup
+    if buildup.enabled(set_id):
+        return buildup.tone_example(set_id)
     for path in glob.glob(os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "films", "*.json")):
         try:
             film = json.load(open(path, encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if film.get("set") == set_id:
+        if film.get("set") == set_id and film.get("format") != "buildup":
             return "\n".join(f"[{b.get('id')}] {b['text']}" for b in film["beats"])
     return ""
 
@@ -842,6 +892,7 @@ SCRIPT:
 
 
 def critique_script(script, topic, facts, hard_problems):
+    lo, hi = word_budget(topic["set"])
     prompt = f"""You are the channel's head editor. Grade this script ruthlessly (1-10 each): hook (would
 it stop the scroll in 2 s?), clarity (a 12-year-old follows every beat), story_flow (each beat
 answers the last and raises the next; a clear, satisfying ending; natural spoken sentences, not
@@ -862,8 +913,19 @@ SCRIPT:
 
 Automatic checks found: {hard_problems or 'nothing'}
 
+WORD BUDGET (a hard rule, not a preference): the whole narration must stay within {lo}-{hi}
+words, about {hi // max(1, len(script.get('beats', [])))} words per beat for this script ({len(script.get('beats', []))} beats).
+Grade clarity, problem_solution and learn against what fits: each beat needs ONE cause or ONE principle,
+said plainly, not every fact on the sheet. A better line is never more than a few words longer than the
+line it replaces; when a beat cannot hold both its lesson and its gag, keep the lesson and cut the gag.
+Edits that would push the total over budget are wrong edits (a revision that followed such notes grew to
+294 words and failed).
+
 List concrete problems and line edits (quote the line, give the better line). verdict = "ship"
 only if every score is {PASS_SCORE}+ and there are no factual errors or rule breaks."""
+    from agents import buildup
+    if buildup.enabled(topic["set"]):
+        prompt += buildup.CRITIQUE_NOTE
     return _call(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
@@ -881,7 +943,25 @@ GAG_RE = re.compile(r"\b(physics|fail(ure)?|round|attempt|score|plane|max|take)\
                     r"\b(physics|gravity)\s+(wins|won|leads|led|scores?|scored)\b", re.I)
 
 
+def word_budget(set_id):
+    """(min, max) narration words for a set. A Max story ladder gets ~WORDS_PER_BEAT words per beat (its
+    actions + hook + rewind), at least TARGET_WORDS' maximum and at most WORDS_CAP: a 12-beat ladder with
+    four failure mechanisms could not be both clear and funny in 192 words (16 a beat) - every revision
+    traded one for the other. Other formats keep TARGET_WORDS."""
+    try:
+        sp = sets.spec(set_id)
+    except Exception:                                    # noqa: BLE001  unknown set: the default budget
+        return TARGET_WORDS
+    order = getattr(sp, "STORY_ORDER", None)
+    if not (getattr(sp, "HERO", None) and order):
+        return TARGET_WORDS
+    return TARGET_WORDS[0], min(WORDS_CAP, max(TARGET_WORDS[1], WORDS_PER_BEAT * (len(order) + 2)))
+
+
 def hard_checks(script, set_id):
+    from agents import buildup
+    if buildup.enabled(set_id):
+        return buildup.checks(script, set_id, WORDS_PER_SECOND, word_budget(set_id))
     sp = sets.spec(set_id)
     beats = script["beats"]
     problems = list(sp.validate(beats))
@@ -896,8 +976,9 @@ def hard_checks(script, set_id):
         if n > 32:
             problems.append(f"beat {k + 1} has {n} words; max 32")
     words = sum(len(b["text"].split()) for b in beats)
-    if not TARGET_WORDS[0] <= words <= TARGET_WORDS[1]:
-        problems.append(f"total narration is {words} words; it must be {TARGET_WORDS[0]}-{TARGET_WORDS[1]}")
+    lo, hi = word_budget(set_id)
+    if not lo <= words <= hi:
+        problems.append(f"total narration is {words} words; it must be {lo}-{hi}")
     if beats and len(beats[0]["text"].split()) > HOOK_MAX_WORDS:
         problems.append(f"hook is {len(beats[0]['text'].split())} words; max {HOOK_MAX_WORDS}")
     stickers = sum(1 for b in beats if b.get("overlay", {}).get("type", "none") != "none")
@@ -927,7 +1008,7 @@ def _rank(review, problems):
 
 def _ships(review, problems):
     sc = list(review["scores"].values())
-    return not problems and (min(sc) >= PASS_SCORE or (min(sc) >= PASS_SCORE - 1 and sum(sc) / len(sc) >= PASS_SCORE))
+    return not problems and bool(sc) and min(sc) >= SHIP_FLOOR
 
 
 def develop(topic, facts):
@@ -943,16 +1024,24 @@ def develop(topic, facts):
     directions = _directions(topic["set"])
     keep = 2 if QUALITY == "best" else 1
     directions = dict(list(directions.items())[:keep])
-    with ThreadPoolExecutor(max_workers=len(directions)) as pool:
-        drafts = list(pool.map(draft_and_review, directions))
+    earlier = _last_rejected(topic)
+    if earlier:
+        # a retry continues from the best script so far and its editor notes instead of drafting from
+        # scratch: fresh drafts kept landing at the same scores and discarded the progress made
+        log.info(f"[showrunner] continuing from the earlier best script: {json.dumps(earlier[2]['scores'])}")
+        drafts = [(*earlier, "earlier best")]
+    else:
+        with ThreadPoolExecutor(max_workers=len(directions)) as pool:
+            drafts = list(pool.map(draft_and_review, directions))
     for script, problems, review, direction in drafts:
         log.info(f"[showrunner] draft '{direction}': {json.dumps(review['scores'])} | hard problems: {len(problems)}")
     script, problems, review, direction = max(drafts, key=lambda d: _rank(d[2], d[1]))
     log.info(f"[showrunner] best draft: '{direction}'")
     best = (script, problems, review)
     revised = False
+    trace = {}
     try:
-        best, revised = _revise(topic, facts, script, problems, review, best)
+        best, revised = _revise(topic, facts, script, problems, review, best, trace=trace)
     except UsageLimit as e:
         if not _ships(best[2], best[1]):
             raise
@@ -970,10 +1059,53 @@ def develop(topic, facts):
         except UsageLimit as e:
             log.warning(f"[showrunner] {e}; skipping the polish pass")
     if not _ships(review, problems):
+        _keep_rejected(topic, script, review, problems, last=trace.get("last"))
         raise RuntimeError(
             f"best script remained below the publication bar after revision: {json.dumps(review['scores'])}"
         )
     return script, review
+
+
+def _keep_rejected(topic, script, review, problems, last=None):
+    """Save a script that missed the bar WITH the editor's notes (output/films/_rejected/): the notes
+    lived only in memory, so a failed script stage could not be diagnosed without paying to redo it."""
+    try:
+        folder = os.path.join(FILMS_DIR, "_rejected")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{datetime.datetime.now():%Y%m%d_%H%M%S}_{slug(script.get('title', 'script'))}.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"set": topic.get("set"), "title": topic.get("title"), "script": script, "review": review,
+                       "hard_problems": problems,
+                       # the newest revision and ITS notes: a retry continues from here (continuing from the
+                       # best-ranked script reused stale notes and repeated the same revision)
+                       "last": {"script": last[0], "review": last[2]} if last else None},
+                      fh, indent=1, ensure_ascii=False)
+        log.info(f"[showrunner] rejected script and editor notes kept: {path}")
+    except (OSError, TypeError, ValueError) as exc:
+        log.warning(f"[showrunner] could not keep the rejected script: {exc}")
+
+
+def _last_rejected(topic):
+    """(script, hard problems, review) of the newest kept script for this same set and title, if any."""
+    folder = os.path.join(FILMS_DIR, "_rejected")
+    try:
+        names = sorted((n for n in os.listdir(folder) if n.endswith(".json")), reverse=True)
+    except OSError:
+        return None
+    for name in names:
+        try:
+            d = json.load(open(os.path.join(folder, name), encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if d.get("set") == topic.get("set") and d.get("title") == topic.get("title") and d.get("review"):
+            best = (d["script"], hard_checks(d["script"], topic["set"]), d["review"])
+            if _ships(best[2], best[1]):                 # already good enough: ship it, no more revising
+                return best
+            last = d.get("last") or {}
+            if last.get("review"):
+                return last["script"], hard_checks(last["script"], topic["set"]), last["review"]
+            return best
+    return None
 
 
 def repair_rules(script, set_id, problems, attempts=2):
@@ -1008,7 +1140,7 @@ a few filler words so the total lands well inside the limit (not on the boundary
     return script, problems
 
 
-def _revise(topic, facts, script, problems, review, best):
+def _revise(topic, facts, script, problems, review, best, trace=None):
     """Apply fresh editor notes and independently grade every revision.
 
     Re-grading costs one small call, but prevents a repaired script from being rejected with its
@@ -1022,8 +1154,11 @@ def _revise(topic, facts, script, problems, review, best):
             "automatic_checks": problems, **review,
             "also": ("Fix every score below 8, not only the automatic checks. Read it aloud as a "
                      "voice actor: full, flowing, funny sentences with punchlines; polish rhythm. "
-                     "If narration is over budget, cut it decisively to 180 words or fewer instead "
-                     "of shaving only enough words to sit on the hard boundary.")},
+                     f"If narration is over budget, cut it decisively to {word_budget(topic['set'])[1] - 12} "
+                     "words or fewer instead "
+                     "of shaving only enough words to sit on the hard boundary. Stay inside the word "
+                     "budget while fixing: take each editor line's IDEA in your own shorter words, and "
+                     "when a beat cannot hold both its lesson and a gag, keep the lesson.")},
             effort="high")
         fixed_problems = hard_checks(fixed, topic["set"])
         new_review = critique_script(fixed, topic, facts, fixed_problems)
@@ -1032,6 +1167,8 @@ def _revise(topic, facts, script, problems, review, best):
         if _rank(new_review, fixed_problems) > _rank(best[2], best[1]):
             best, revised = (fixed, fixed_problems, new_review), True
         script, problems, review = fixed, fixed_problems, new_review
+        if trace is not None:
+            trace["last"] = (fixed, fixed_problems, new_review)
     return best, revised
 
 
@@ -1052,13 +1189,15 @@ def to_film(script, topic, facts, review=None):
         ov = b.get("overlay") or {}
         if ov.get("type") == "label" and re.search(r"\d", str(ov.get("text", ""))):
             ov = {}                     # no counters/scores/"Fail #N" labels; numbers belong in real stats
+        if sp.ACTIONS[acts[0]].get("label"):
+            ov = {}                     # the scene already shows this beat's label: a sticker would stack on it
         if ov.get("type") == "stat" and ov.get("value"):
             beat["overlay"] = {"type": "stat", "value": ov["value"], "text": ov.get("text", "")}
         elif ov.get("type") == "label" and ov.get("text"):
             beat["overlay"] = {"type": "label", "text": ov["text"]}
         beats.append(beat)
     backend = active_backend()
-    return {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
+    film = {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
             "music": "synth", "beats": beats, "cta": closing_question(beats[-1]["text"]) if beats else None,
             # story sets end on a reunion: hold the payoff after the last word so it can land
             "tail": 2.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2,
@@ -1066,6 +1205,10 @@ def to_film(script, topic, facts, review=None):
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),
                      "model": CODEX_MODEL if backend == "codex" else CLI_MODEL}}
+    from agents import buildup
+    if buildup.enabled(topic["set"]):                  # starts on the first build step: no hook, no question
+        film.update(buildup.film_extras())
+    return film
 
 
 def slug(text):
@@ -1094,6 +1237,7 @@ def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on
     if on_topic:
         on_topic(dict(topic))
     facts = research(topic)
+    _ensure_extras(topic["set"])
     script, review = develop(topic, facts)
     log.info(f"[showrunner] script written in {(time.time() - t0) / 60:.1f} min")
     film = to_film(script, topic, facts, review)

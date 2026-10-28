@@ -46,49 +46,48 @@ STORY_ORDER = ["promise", "fail_sand", "fix_core", "fail_boil", "fix_berm", "fai
 
 ACTIONS = {
     # ---- hooks (staged on the finished set, shown FIRST, before the rewind) ----
-    "burrow_hook": {"kind": "hook", "shows": "Storm. Muddy water blasts out of a squirrel burrow in the levee's land "
-                    "side; the yellow rubber duck rides the jet onto the lawn, the squirrel salutes, Max's jaw drops.",
+    "burrow_hook": {"extras": "The squirrel, scaled up, hops beside the jet and then salutes, while Max points at the duck riding the jet and his jaw drops; mud drops and dust puffs splash onto the berm.", "must_see": ["jet_stream", "levee3_piped", "duck", "Max"], "kind": "hook", "shows": "A thick "
+                    "brown jet of muddy water blasts out of a squirrel burrow in the levee's land side, and the "
+                    "yellow rubber duck rides on top of the jet.",
                     "seconds": (3, 5)},
-    "happy_hook": {"kind": "hook", "shows": "Payoff first: storm on the river, but the yard is dry; Max cheers by the "
+    "happy_hook": {"extras": "The squirrel salutes from its box on a post in the yard and the rain keeps falling.", "must_see": ["Max", "Kid1", "tramp_rim", "meter_green"], "kind": "hook", "shows": "Payoff first: storm on the river, but the yard is dry; Max cheers by the "
                    "green yard lamp while his two kids bounce on the trampoline. (Use when the hook teases the "
                    "ending: 'It took Max four floods to get here.')", "seconds": (3, 5)},
     "rewind": {"kind": "rewind", "shows": "Freeze-frame, record scratch, the story plays BACKWARDS (VHS look) to a "
                "sunny day with a low river. Narration: a one-line bridge into the story."},
     # ---- the ladder ----
-    "promise": {"kind": "story", "shows": "Sunny day, the river is low, the duck bobs on it. Max with a shovel by a "
-                "sand pile promises his two kids a backyard that never floods and points at the river.",
+    "promise": {"extras": "The duck bobs slowly along the low river; the kids hop and smile, then turn to look at the river as Max talks and points.", "must_see": ["Max", "pile", "Kid1"], "kind": "story", "shows": "Sunny day, the river is low. Max "
+                "with a shovel by a sand pile promises his two kids a dry backyard.",
                 "seconds": (3, 6)},
-    "fail_sand": {"kind": "fail", "shows": "Max piles a tall steep wall of pure sand. Rain; the river rises; blue "
-                  "seepage arrows run straight through the sand (label SAND LEAKS), the land side turns dark and "
-                  "wet, the face slumps like porridge and the duck oozes over the mush into the yard. Red yard lamp, "
-                  "Max shrugs.", "seconds": (5, 9)},
-    "fix_core": {"kind": "fix", "shows": "Max on the crest of a new wide, gentle levee (label WIDER THAN TALL) with a "
-                 "dark brown clay core. A seepage arrow crosses the sand shell (label SAND) and a short arrow fades "
-                 "out inside the clay (label CLAY CORE). Green lamp, Max cheers.", "seconds": (5, 9)},
-    "fail_boil": {"kind": "fail", "shows": "The levee holds, but long blue pressure arrows run under it through the "
-                  "buried sand and push up on the topsoil blanket in the yard; a sand boil erupts (label SAND BOIL) "
-                  "with the duck bobbing on its fountain. Max rings it with sandbags. Red lamp.", "seconds": (5, 9)},
-    "fix_berm": {"kind": "fix", "shows": "A wide low seepage berm rises on the land side (label SEEPAGE BERM, yellow "
-                 "weight arrows), relief wells at the toe (label RELIEF WELLS) vent the pressure into a ditch; the "
+    "fail_sand": {"extras": "The duck rides the rising river up toward the wall, then drops and tips as the river falls after the slump; sand puffs fly while Max shovels, and he shrugs at the end.", "must_see": ["levee1", "arrow_seep", "levee1_wet", "Max"], "kind": "fail", "shows": "Blue seepage "
+                  "arrows run straight through Max's steep pure-sand wall (label SAND LEAKS) and the wall slumps "
+                  "low. Red lamp.", "seconds": (5, 9)},
+    "fix_core": {"extras": "The duck drifts on the high river; soil puffs rise as Max shapes the levee from its crest, and he cheers with both arms up.", "must_see": ["levee2", "core2", "arrow_clay", "Max"], "kind": "fix", "shows": "A seepage arrow "
+                 "crosses the sand and a short arrow stops inside the dark brown clay core (label CLAY CORE). "
+                 "Green lamp.", "seconds": (5, 9)},
+    "fail_boil": {"extras": "The duck is thrown up out of the sand boil, mud spray flies, the sandbags pop up one by one around it, and Max cheers at first, then stares and shrugs.", "must_see": ["arrow_up", "boil_fountain", "bag_", "Max"], "kind": "fail", "shows": "Blue pressure arrows come under the levee through the buried sand and "
+                  "push UP under the yard; a sand boil erupts there (label SAND BOIL). Max rings it with sandbags. "
+                  "Red lamp.", "seconds": (5, 9)},
+    "fix_berm": {"extras": "The duck drifts on the river; dust puffs rise as the berm grows, Max points and later cheers on it, and the relief wells pop in.", "must_see": ["berm", "well_", "arrow_upsmall", "arrow_weight"], "kind": "fix", "shows": "A wide "
+                 "low seepage berm with yellow weight arrows (label SEEPAGE BERM) and relief wells at its toe; the "
                  "up-arrow under the yard shrinks. Green lamp.", "seconds": (5, 9)},
-    "fail_overtop": {"kind": "fail", "shows": "A huge storm: the river pours over the crest (label OVERTOPPING); the "
-                     "waterfall scours a growing gouge into the bare land-side slope and the duck surfs down it. Red "
-                     "lamp, Max shrugs.", "seconds": (5, 9)},
-    "fix_armor": {"kind": "fix", "shows": "The crest grows taller; red 100-year-flood line and a dimension arrow "
+    "fail_overtop": {"extras": "The duck rides the rising river over the crest and slides down the land slope with the waterfall; water splashes and dirt puffs fly off the gouge, and Max looks up worried, then shrugs.", "must_see": ["falls", "gouge", "river", "Max"], "kind": "fail", "shows": "The river pours "
+                     "over the crest (label OVERTOPPING) and the waterfall scours a growing gouge into the bare "
+                     "land-side slope. Red lamp.", "seconds": (5, 9)},
+    "fix_armor": {"extras": "Max rises with the crest as it grows and cheers twice, and the duck drifts on the flood-level river.", "must_see": ["levee3", "bar_flood", "dim_up", "riprap"], "kind": "fix", "shows": "The crest grows taller; red 100-year-flood line and a dimension arrow "
                   "(label 3 FT ABOVE 100-YEAR FLOOD), thick grass on the slopes, rock riprap on the river side "
                   "(label RIPRAP). Green lamp. (Narration: Katrina's failures were mostly overtopping.)",
                   "seconds": (5, 9)},
-    "fail_burrow": {"kind": "fail", "shows": "Everything perfect, until a ground squirrel digs a tunnel into the land "
-                    "slope (cutaway groove). The flood rises, finds the burrow, the hole widens as water carries "
-                    "soil out (label PIPING) and a jet blasts out: the hook moment. Red lamp, jaw drop.",
+    "fail_burrow": {"extras": "Max cheers, then watches the squirrel vanish into its tunnel; when the jet blows out, the duck rides it onto the berm, the squirrel peeks out and salutes, and Max's jaw drops.", "must_see": ["squirrel", "levee3_piped", "jet_stream", "Max"], "kind": "fail", "shows": "A ground squirrel digs a tunnel into the land slope. The flood finds "
+                    "the burrow and the widened hole (label PIPING) blasts a thick brown muddy jet out beside the "
+                    "squirrel. Red lamp.",
                     "seconds": (5, 9)},
-    "fix_maintain": {"kind": "fix", "shows": "Grass mowed short, Max inspects and packs the burrow shut with his "
-                     "shovel (label 8.2 m along the tunnel), the hole is gone; the squirrel gets a box in the yard. "
-                     "Green lamp.", "seconds": (5, 9)},
-    "finale": {"kind": "story", "shows": "Full storm: every blue arrow stays on the river side of the levee. The kids "
-               "bounce on the dry trampoline, the squirrel salutes from its box, the duck floats away down the river. "
-               "The storm clears and the camera pulls out to a long map line along the levee labelled 3,787 MILES. "
-               "Closing question.", "seconds": (6, 10)},
+    "fix_maintain": {"extras": "Max hammers the hole shut with his shovel as dust puffs rise, turns and cheers, and in a short cutaway the squirrel salutes from its new box in the yard; the duck drifts on the low river.", "must_see": ["Max", "plug_burrow", "meter_port"], "kind": "fix", "shows": "Fresh tan soil "
+                     "packs the burrow tunnel shut (label BURROW 8.2 m). Green lamp.",
+                     "seconds": (5, 9)},
+    "finale": {"extras": "The storm and rain clear, blue arrows press on the river side, the squirrel salutes from its box, and the duck floats on the high river.", "must_see": ["Max", "tramp_rim", "Kid1"], "kind": "story", "shows": "The rain stops and the yard "
+               "stays dry: Max cheers by the green lamp while his two kids bounce on the trampoline. Closing "
+               "question.", "seconds": (6, 10)},
 }
 
 OVERLAY_TYPES = {"stat": "a number that counts up, e.g. {'type':'stat','value':'8.2 m','text':'average burrow'}",

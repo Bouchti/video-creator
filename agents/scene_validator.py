@@ -25,6 +25,8 @@ failed scene is known minutes into a render instead of at the end. make_film use
                               which costs one repair turn and one full re-render per bad window)
   SCENE_WINDOW_SECONDS=3      window length
   SCENE_MIN_SCORE=6           acceptance threshold (1-10)
+  SCENE_PREFLIGHT=1           rehearse exact final-timing samples before production rendering
+  SCENE_PREFLIGHT_FIX_ATTEMPTS=3  cheap rehearsal repair rounds before full frames may start
   SCENE_FIX_ATTEMPTS=2        auto-fix rounds per render (policy "fix")
   SCENE_REVIEW_BACKEND        "subscription" (default) or "codex"
   SCENE_REVIEW_CLI_MODEL      optional Claude subscription model override
@@ -33,6 +35,7 @@ Re-check an existing render without rendering:  python -m agents.scene_validator
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -102,6 +105,22 @@ def plan_windows(film: dict, spans: list, seconds: float = None, spec=None) -> l
                         "f0": a, "f1": b, "t0": (a - 1) / FPS, "t1": b / FPS, "shows": " ".join(shows),
                         "text": beat.get("text", "")})
     return out
+
+
+def sample_picks(w: dict) -> list[tuple[str, int]]:
+    """The exact three production frames used to judge a timeline window."""
+    n = w["f1"] - w["f0"]
+    return [("start", w["f0"] + max(1, n // 10)),
+            ("middle", w["f0"] + n // 2),
+            ("end", w["f1"] - max(1, n // 10))]
+
+
+def _is_rendered_window(w: dict, spec=None) -> bool:
+    """Rewind is assembled from existing frames in post; Blender never renders its timeline range."""
+    actions = str(w.get("action") or "").split("+")
+    if actions == ["rewind"]:
+        return False
+    return not (spec and actions and all(spec.ACTIONS.get(a, {}).get("kind") == "rewind" for a in actions))
 
 
 def _frame_path(frames_dir, f):
@@ -191,6 +210,13 @@ SCORES = ("visual_match", "readability", "image_quality", "continuity")
 
 def _instructions(w, subject, previous):
     extra = " (plus the previous window's end frame, for continuity)" if previous else ""
+    first, _, count = str(w.get("part") or "").partition("/")
+    if first == "1" and count.isdigit() and int(count) > 1:
+        # the film's first window of a beat is its setup shot (Max making his change), like the preview's
+        # 1/8 still: "no clay core shown yet" rejected a correct setup
+        extra += (". This is the FIRST part of its beat: the setup (Max making his change, close up). Never fault "
+                  "the absence of the result, its labels or arrows, or the payoff here; judge only that the "
+                  "setup is clear and on track")
     if w.get("part") == "whole beat":
         # Set previews: the stills sit at 1/8, 1/2 and 7/8 of the beat, and every beat opens on Max making his
         # change before the mechanism and its result are shown. Faulting the opening still for the payoff
@@ -405,8 +431,7 @@ def review_images(w: dict, images: list, subject: str, previous: str = None) -> 
 def _prepare_window(w: dict, frames_dir: str, review_dir: str):
     """Run local QC and encode review frames once; shared by single and batched review paths."""
     os.makedirs(review_dir, exist_ok=True)
-    n = w["f1"] - w["f0"]
-    picks = [("start", w["f0"] + max(1, n // 10)), ("middle", w["f0"] + n // 2), ("end", w["f1"] - max(1, n // 10))]
+    picks = sample_picks(w)
     paths = [_frame_path(frames_dir, f) for _, f in picks]
     tech = technical_check(paths)
     images = []
@@ -419,6 +444,86 @@ def _prepare_window(w: dict, frames_dir: str, review_dir: str):
     rep = {**{k: w[k] for k in ("window", "beat", "action", "part", "f0", "f1", "t0", "t1")},
            "technical": tech, "images": [p for _, p in images]}
     return rep, images, tech
+
+
+def review_sampled_windows(film: dict, spans: list, work: str, spec=None) -> dict:
+    """Review a cheap dress rehearsal made from the exact production-window sample frames.
+
+    ``work/frames`` contains only the three frames returned by :func:`sample_picks`, not a full
+    animation. Pixel+rubric keyed results persist across repair rounds, so accepted unchanged
+    windows consume neither another model call nor another judgment.
+    """
+    frames_dir, review_dir = os.path.join(work, "frames"), os.path.join(work, "review")
+    os.makedirs(review_dir, exist_ok=True)
+    windows = [w for w in plan_windows(film, spans, spec=spec) if _is_rendered_window(w, spec)]
+    subject = ((getattr(spec, "SUBJECT", "") if spec else "") + " | " + film.get("title", "")).strip(" |")
+    cache_path = os.path.join(work, "review_cache.json")
+    try:
+        cache = json.load(open(cache_path, encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+
+    def key_for(w, images):
+        meta = {"version": 1, "window": w, "subject": subject, "min_score": min_score(),
+                "review_width": REVIEW_W, "jpeg_quality": REVIEW_JPEG_QUALITY,
+                "rubric": hashlib.sha256(_instructions(w, subject, None).encode("utf-8")).hexdigest()}
+        h = hashlib.sha256(json.dumps(meta, sort_keys=True).encode("utf-8"))
+        for _, path in images:
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+        return h.hexdigest()
+
+    rows, pending = [], []
+    for w in windows:
+        rep, images, tech = _prepare_window(w, frames_dir, review_dir)
+        if not tech["valid"]:
+            rows.append({**rep, "valid": False, "acceptance": "rejected",
+                         "fatal_problems": tech["fatal_problems"], "problems": tech["problems"],
+                         "fix": "", "skipped": False})
+            continue
+        key = key_for(w, images)
+        if key in cache:
+            rows.append({**rep, **cache[key], "cached": True})
+        else:
+            pending.append((w, rep, images, key))
+
+    if _env_flag("SCENE_VISION", "1"):
+        size = max(1, int(os.getenv("SCENE_REVIEW_BATCH_SIZE") or "4"))
+        for start in range(0, len(pending), size):
+            batch = pending[start:start + size]
+            reviewed = review_batch([(w, images) for w, _, images, _ in batch], subject)
+            for w, rep, _images, key in batch:
+                result = reviewed[w["window"]]
+                cache[key] = result
+                rows.append({**rep, **result})
+            tmp = cache_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(cache, fh, indent=1)
+            os.replace(tmp, cache_path)
+    else:
+        for w, rep, images, key in pending:
+            result = review_images(w, images, subject)
+            if not result.get("skipped"):
+                cache[key] = result
+            rows.append({**rep, **result})
+
+    rows.sort(key=lambda r: r["f0"])
+    rejected = [r for r in rows if not r.get("valid")]
+    report = {"windows": rows, "rejected": rejected, "checked": len(rows), "planned": len(windows),
+              "accepted": sum(1 for r in rows if r.get("valid")), "policy": "preflight",
+              "complete": len(rows) == len(windows)}
+    report_path = os.path.join(work, "scene_review.json")
+    tmp = report_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=1)
+    os.replace(tmp, report_path)
+    for r in rows:
+        detail = "" if r.get("valid") else ": " + "; ".join(
+            (r.get("fatal_problems") or r.get("problems") or [r.get("reason", "")])[:2])
+        log.info(f"[preflight] window {r['window']:02d} [{r['action']} {r['part']}] "
+                 f"{'ACCEPTED' if r.get('valid') else 'REJECTED'}"
+                 + (" [cached]" if r.get("cached") else "") + detail)
+    return report
 
 
 def validate_window(w: dict, frames_dir: str, review_dir: str, subject: str, previous: str = None) -> dict:
@@ -437,13 +542,14 @@ class SceneWatcher:
     """Validates each window as soon as its frames are on disk. Thread-safe; call start() before the
     render, should_abort() while waiting on Blender, finish() after it ends."""
 
-    def __init__(self, film: dict, spans: list, work: str, spec=None, only_frames=None, keep_previous=True):
+    def __init__(self, film: dict, spans: list, work: str, spec=None, only_frames=None, keep_previous=True,
+                 preapproved=None):
         self.film, self.work = film, work
         self.frames_dir = os.path.join(work, "frames")
         self.review_dir = os.path.join(work, "review")
         self.report_path = os.path.join(work, "scene_review.json")
         self.subject = (getattr(spec, "SUBJECT", "") + " | " + film.get("title", "")).strip(" |")
-        self.windows = plan_windows(film, spans, spec=spec)
+        self.windows = [w for w in plan_windows(film, spans, spec=spec) if _is_rendered_window(w, spec)]
         if only_frames is not None:
             only = set(only_frames)
             self.windows = [w for w in self.windows if any(f in only for f in range(w["f0"], w["f1"] + 1))]
@@ -469,6 +575,7 @@ class SceneWatcher:
                            if _env_flag("SCENE_VISION", "1") else 1)
         self._pool = ThreadPoolExecutor(max_workers=int(os.getenv("SCENE_REVIEW_WORKERS", "1")))
         self._submitted = set(self.results)          # kept verdicts are not checked again
+        self.preapproved = preapproved or {}          # exact-timing rehearsal verdicts; still run local pixel QC
         self._thread = None
 
     # -- lifecycle --
@@ -489,7 +596,8 @@ class SceneWatcher:
         """Wait for every remaining window (the render is over), then return the report."""
         self._render_done.set()
         t0 = time.time()
-        while time.time() - t0 < timeout and not self._abort.is_set():
+        while (time.time() - t0 < timeout and not self._abort.is_set()
+               and self._fatal_error is None):
             with self._lock:
                 pending = [w for w in self.windows if (w["f0"], w["f1"]) not in self.results]
             ready = [w for w in pending if all(os.path.exists(_frame_path(self.frames_dir, f))
@@ -534,7 +642,21 @@ class SceneWatcher:
 
     def _check(self, w):
         try:
-            r = validate_window(w, self.frames_dir, self.review_dir, self.subject, self._previous_frame(w))
+            rep, images, tech = _prepare_window(w, self.frames_dir, self.review_dir)
+            approved = self.preapproved.get((w["f0"], w["f1"]))
+            if not tech["valid"]:
+                r = {**rep, "valid": False, "acceptance": "rejected",
+                     "fatal_problems": tech["fatal_problems"], "problems": tech["problems"],
+                     "fix": "", "skipped": False}
+            elif approved:
+                story = {k: v for k, v in approved.items() if k not in
+                         ("window", "beat", "action", "part", "f0", "f1", "t0", "t1", "images", "technical")}
+                r = {**rep, **story, "valid": True, "preflight_approved": True,
+                     "problems": tech["problems"] + story.get("problems", [])}
+            else:
+                story = review_images(w, images, self.subject, self._previous_frame(w))
+                story["problems"] = tech["problems"] + story.get("problems", [])
+                r = {**rep, **story}
         except Exception as exc:                     # noqa: BLE001
             if self._remember_usage_limit(exc):
                 return
@@ -550,12 +672,18 @@ class SceneWatcher:
             for w in windows:
                 rep, images, tech = _prepare_window(w, self.frames_dir, self.review_dir)
                 prepared[w["window"]] = (w, rep, tech)
-                if tech["valid"]:
-                    ai_items.append((w, images))
-                else:
+                approved = self.preapproved.get((w["f0"], w["f1"]))
+                if not tech["valid"]:
                     self._store_result(w, {**rep, "valid": False, "acceptance": "rejected",
                                            "fatal_problems": tech["fatal_problems"],
                                            "problems": tech["problems"], "fix": "", "skipped": False})
+                elif approved:
+                    story = {k: v for k, v in approved.items() if k not in
+                             ("window", "beat", "action", "part", "f0", "f1", "t0", "t1", "images", "technical")}
+                    self._store_result(w, {**rep, **story, "valid": True, "preflight_approved": True,
+                                           "problems": tech["problems"] + story.get("problems", [])})
+                else:
+                    ai_items.append((w, images))
             if self._abort.is_set() or not ai_items:
                 return
             reviewed = review_batch(ai_items, self.subject)
@@ -587,7 +715,10 @@ class SceneWatcher:
         with self._lock:
             if self._fatal_error is None:
                 self._fatal_error = exc if isinstance(exc, UsageLimit) else UsageLimit(str(exc))
-        self._abort.set()
+        # A temporary reviewer quota is not a reason to throw away render time. Stop submitting
+        # more reviews, let Blender finish writing frames, then surface the limit from finish().
+        # Autopilot will wait for the reset and resume with those frames intact.
+        self._stop.set()
         return True
 
     def _store_result(self, w, r):

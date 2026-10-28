@@ -26,12 +26,12 @@
     {
       "id": "fail_sand",
       "action": "fail_sand",
-      "text": "The river rises, water slips between the sand grains, and the soaked wall slumps. Duck through!"
+      "text": "The river rises, water slips between the sand grains, and the soaked wall slumps."
     },
     {
       "id": "fix_core",
       "action": "fix_core",
-      "text": "So Max adds a clay core; its tiny grains barely let water move. And gentle slopes, wider than tall.",
+      "text": "So Max adds a clay core; its tiny grains barely let water move, so the leak stops in the middle.",
       "overlay": {"type": "label", "text": "Clay core"}
     },
     {
@@ -48,7 +48,7 @@
     {
       "id": "fail_overtop",
       "action": "fail_overtop",
-      "text": "Then a huge storm pours over the top, scouring the bare dirt. Duck surfing!"
+      "text": "Then a huge storm pours right over the top, and the waterfall scours the bare dirt."
     },
     {
       "id": "fix_armor",
@@ -64,13 +64,13 @@
     {
       "id": "fix_maintain",
       "action": "fix_maintain",
-      "text": "Burrows average 8.2 metres. So Max mows short, inspects, packs holes, and moves the squirrel out.",
+      "text": "Burrows average 8.2 metres. So Max mows short, inspects, and packs every hole shut.",
       "overlay": {"type": "stat", "value": "8.2 m", "text": "average burrow"}
     },
     {
       "id": "finale",
       "action": "finale",
-      "text": "Next storm, everything stays riverside. Now picture 3,787 miles of levee. Which failure would you fix first?"
+      "text": "Next storm, the yard stays dry, the kids bounce, and Max cheers. Which levee failure would you fix first?"
     }
   ]
 }

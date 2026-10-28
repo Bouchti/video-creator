@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 
@@ -118,11 +119,82 @@ def _tts_with_rotation(url: str, payload: dict, characters: int):
     raise RuntimeError("All ElevenLabs keys are out of credits or unusable: " + " | ".join(errors))
 
 
+EDGE_VOICES = {                         # free Microsoft neural voices (fallback when ElevenLabs cannot speak)
+    "energetic": "en-US-AndrewMultilingualNeural",
+    "mysterious": "en-US-ChristopherNeural",
+    "storyteller": "en-US-BrianMultilingualNeural",
+}
+_BREAK = re.compile(r'<break\s+time="([\d.]+)s"\s*/>')
+_EDGE_RATE = 24000
+
+
+def _edge_voiceover(spoken_script: str, voice: str) -> str:
+    """Narration from Edge's free neural voices. Edge reads no SSML, so the ElevenLabs <break> tags between
+    beats become real silences: each part is spoken separately and joined with pauses of the tagged length
+    (the film's beat timing depends on them)."""
+    import asyncio
+    import subprocess
+
+    import edge_tts
+    import numpy as np
+
+    from agents.media import FFMPEG
+    name = os.getenv("EDGE_TTS_VOICE") or EDGE_VOICES.get(voice, EDGE_VOICES["energetic"])
+    rate = f"{round((float(os.getenv('VOICE_SPEED', '0.92')) - 1) * 100):+d}%"
+    pieces = _BREAK.split(spoken_script)                 # text, pause, text, pause, ..., text
+    stamp = f"{datetime.now():%Y%m%d_%H%M%S_%f}"
+    pcm = []
+    for k, piece in enumerate(pieces):
+        if k % 2:                                        # a pause length from a <break> tag
+            pcm.append(np.zeros(int(float(piece) * _EDGE_RATE), dtype=np.int16))
+            continue
+        text = piece.strip()
+        if not text:
+            continue
+        part = os.path.join(get_temp_dir(), f"edge_{stamp}_{k}.mp3")
+        for attempt in range(3):
+            try:
+                asyncio.run(edge_tts.Communicate(text, name, rate=rate).save(part))
+                break
+            except Exception as exc:                     # noqa: BLE001  network hiccups: retry, then report
+                if attempt == 2:
+                    raise RuntimeError(f"Edge TTS failed: {exc}") from exc
+                time.sleep(3 * (attempt + 1))
+        raw = subprocess.run([FFMPEG, "-v", "error", "-i", part, "-ac", "1", "-ar", str(_EDGE_RATE), "-f", "s16le",
+                              "-"], capture_output=True, check=True).stdout
+        os.remove(part)
+        pcm.append(np.frombuffer(raw, dtype=np.int16))
+    if not pcm:
+        raise RuntimeError("Edge TTS produced no audio")
+    path = os.path.join(get_temp_dir(), f"voiceover_{stamp}.mp3")
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "s16le", "-ar", str(_EDGE_RATE), "-ac", "1", "-i", "-",
+                    "-c:a", "libmp3lame", "-b:a", "128k", path], input=np.concatenate(pcm).tobytes(), check=True)
+    log.warning("Narration voiced by the Edge fallback (%s): every ElevenLabs key was out of credits or unusable",
+                name)
+    return path
+
+
 def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple[str, float]:
     if not spoken_script.strip():
         raise ValueError("Narration is empty")
+    fallback = (os.getenv("VOICE_FALLBACK") or "edge").strip().lower()
     if not elevenlabs_keys():
+        if fallback == "edge":
+            path = _edge_voiceover(spoken_script, voice)
+            return path, get_duration(path)
         raise RuntimeError("ELEVENLABS_API_KEY is not configured")
+    try:
+        path = _elevenlabs_voiceover(spoken_script, voice)
+    except RuntimeError as exc:
+        # out of credits on every key: a video must not stop for weeks waiting for a quota reset
+        if fallback != "edge" or "out of credits or unusable" not in str(exc):
+            raise
+        log.warning("ElevenLabs unavailable (%s); using the Edge voice fallback", str(exc)[:160])
+        path = _edge_voiceover(spoken_script, voice)
+    return path, get_duration(path)
+
+
+def _elevenlabs_voiceover(spoken_script: str, voice: str) -> str:
     voice_id = VOICES.get(voice, VOICES["energetic"])
     payload = {
         "text": spoken_script,
@@ -141,4 +213,4 @@ def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple[st
     path = os.path.join(get_temp_dir(), f"voiceover_{datetime.now():%Y%m%d_%H%M%S_%f}.mp3")
     with open(path, "wb") as stream:
         stream.write(response.content)
-    return path, get_duration(path)
+    return path

@@ -186,6 +186,35 @@ class WatcherTests(unittest.TestCase):
             self.assertTrue(w.should_abort())
             w.finish()
 
+    def test_reviewer_usage_limit_preserves_the_running_render(self):
+        from agents.showrunner import UsageLimit
+
+        self._write(1, 420)
+        watcher = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False)
+        exc = UsageLimit("You've hit your session limit; resets 1:50pm")
+        self.assertTrue(watcher._remember_usage_limit(exc))
+        self.assertFalse(watcher.should_abort())
+        self.assertTrue(watcher._stop.is_set())
+        started = time.time()
+        with self.assertRaises(UsageLimit):
+            watcher.finish(timeout=2)
+        self.assertLess(time.time() - started, 0.5)
+
+    def test_full_render_reuses_preflight_story_verdicts_but_still_runs_pixel_qc(self):
+        self._write(1, 420)
+        windows = sv.plan_windows(FILM, SPANS)
+        approved = {(w["f0"], w["f1"]): {"valid": True, "acceptance": "strict",
+                    "average_score": 8.0, "fatal_problems": [], "problems": [], "fix": "",
+                    "skipped": False} for w in windows}
+        with patch.dict(os.environ, {"SCENE_POLICY": "report", "SCENE_REVIEW_BATCH_SIZE": "4"}), \
+                patch.object(sv, "review_batch", side_effect=AssertionError("preflight-approved windows use no AI")), \
+                patch.object(sv, "window_ready", lambda w, d, settle=2.0: _ready(w, d)):
+            watcher = sv.SceneWatcher(FILM, SPANS, self.work, keep_previous=False,
+                                      preapproved=approved).start()
+            report = watcher.finish()
+        self.assertEqual(report["accepted"], report["planned"])
+        self.assertTrue(all(r.get("preflight_approved") for r in report["windows"]))
+
 
 def _ready(w, frames_dir):
     return all(os.path.exists(os.path.join(frames_dir, f"f_{f:04d}.png")) for f in range(w["f0"], w["f1"] + 1))
@@ -334,3 +363,47 @@ class PreviewRubricTests(unittest.TestCase):
     def test_reviewer_never_asks_for_post_production_text(self):
         w = {"beat": 12, "action": "finale", "part": "whole beat", "t0": 0.0, "t1": 3.0, "shows": "", "text": ""}
         self.assertIn("added in post-production", sv._instructions(w, "levee", None))
+
+
+class FilmWindowRubricTests(unittest.TestCase):
+    def test_the_first_window_of_a_beat_is_judged_as_its_setup(self):
+        w = {"beat": 5, "action": "fix_core", "t0": 0.0, "t1": 3.0, "shows": "x", "text": "y"}
+        self.assertIn("FIRST part of its beat", sv._instructions({**w, "part": "1/3"}, "levee", None))
+        self.assertNotIn("FIRST part of its beat", sv._instructions({**w, "part": "2/3"}, "levee", None))
+        self.assertNotIn("FIRST part of its beat", sv._instructions({**w, "part": "1/1"}, "levee", None))
+
+
+class ExactTimingPreflightTests(unittest.TestCase):
+    def test_uses_the_same_three_samples_as_production_and_skips_rewind(self):
+        w = {"f0": 101, "f1": 190}
+        self.assertEqual(sv.sample_picks(w), [("start", 109), ("middle", 145), ("end", 182)])
+        self.assertFalse(sv._is_rendered_window({"action": "rewind"}))
+        self.assertTrue(sv._is_rendered_window({"action": "promise"}))
+
+    def test_pixel_identical_windows_reuse_cached_verdicts(self):
+        work = tempfile.mkdtemp()
+        frames = os.path.join(work, "frames")
+        os.makedirs(frames)
+        windows = sv.plan_windows(FILM, SPANS)
+        for w in windows:
+            for _label, f in sv.sample_picks(w):
+                _frame(os.path.join(frames, f"f_{f:04d}.png"), seed=f)
+
+        calls = []
+
+        def review(items, subject):
+            calls.append([w["window"] for w, _images in items])
+            return {w["window"]: {"valid": True, "average_score": 8.0, "fatal_problems": [],
+                                   "problems": [], "fix": "", "skipped": False}
+                    for w, _images in items}
+
+        with patch.dict(os.environ, {"SCENE_REVIEW_BATCH_SIZE": "4"}), \
+                patch.object(sv, "review_batch", side_effect=review):
+            first = sv.review_sampled_windows(FILM, SPANS, work)
+        self.assertEqual(first["accepted"], first["planned"])
+        self.assertEqual(calls, [[1, 2, 3, 4], [5]])
+
+        with patch.object(sv, "review_batch", side_effect=AssertionError("cached windows must not be reviewed")):
+            second = sv.review_sampled_windows(FILM, SPANS, work)
+        self.assertEqual(second["accepted"], second["planned"])
+        self.assertTrue(all(r.get("cached") for r in second["windows"]))

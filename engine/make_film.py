@@ -215,11 +215,14 @@ def _stale_beats(cmd, film, beats, spans, work, keep, code):
     return changed
 
 
-def _run_blender(cmd, watcher=None):
+def _run_blender(cmd, watcher=None, env=None):
     """Run one Blender process. With a scene watcher, poll it while Blender renders and stop
     Blender as soon as a window is rejected (returns "aborted")."""
     logf = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
-    p = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, text=True)
+    kwargs = {"stdout": logf, "stderr": subprocess.STDOUT, "text": True}
+    if env is not None:
+        kwargs["env"] = env
+    p = subprocess.Popen(cmd, **kwargs)
     while p.poll() is None:
         if watcher is not None and watcher.should_abort():
             p.terminate()
@@ -299,20 +302,112 @@ def _scene_verdict(args, film, watcher, spans, work):
         bad_beats = {r["beat"] for r in rep["rejected"]}
         keep = sorted({r["action"] for r in rep["windows"] if r.get("valid") and r["beat"] not in bad_beats})
         frozen = freeze_methods(film["set"], [a for k in keep for a in k.split("+")])
+        # Film-window repairs have their own cap.  SET_FIX_MAX_WINDOWS belongs to the
+        # initial set-builder preview loop; using it here silently ignored the
+        # documented SCENE_FIX_MAX_WINDOWS setting and stretched production repair
+        # across unnecessary full rerenders.
         fix_scenes(film["set"], rep["rejected"], keep=keep,
-                   max_windows=int(os.getenv("SET_FIX_MAX_WINDOWS") or 3))
+                   max_windows=int(os.getenv("SCENE_FIX_MAX_WINDOWS") or
+                                   os.getenv("SET_FIX_MAX_WINDOWS") or 3), measure=False)
         restored = restore_methods(film["set"], frozen)
         if restored:
             log.info(f"Kept the accepted scenes as they were: put back {', '.join(restored)}")
-        first = min(r["beat"] for r in rep["rejected"]) - 1    # re-render from the first rejected beat on
-        frames_dir = os.path.join(work, "frames")
-        for p in glob.glob(os.path.join(frames_dir, "f_*.png")):
-            if int(os.path.basename(p)[2:6]) >= spans[first]["start"] + 1:
-                os.remove(p)
+        # Use the existing targeted-redo renderer. The old implementation deleted every
+        # frame from the earliest rejected beat onward; one bad hook therefore discarded an
+        # otherwise complete film and forced thousands of accepted frames through Blender and
+        # vision review again. Beat numbers are unambiguous even when actions are reused.
+        rejected_beats = sorted({int(r["beat"]) for r in rep["rejected"]})
         args._scene_attempt = attempt + 1
-        args.resume, args.reuse_voice, args.redo = True, True, ""
+        args.resume, args.reuse_voice = True, True
+        args.redo = ",".join(str(beat) for beat in rejected_beats)
+        log.info(f"Auto-fix round {attempt + 1}: targeted redo of beat(s) {args.redo}; "
+                 "all other production frames are preserved")
         return produce(args)
     raise sv.SceneRejected(rep["rejected"], watcher.report_path)
+
+
+def _scene_preflight(film, film_json, film_py, timings_path, spans, work, spec):
+    """Approve the exact final timeline cheaply before rendering production frames.
+
+    The set builder's three stills per *beat* cannot catch a late camera cut or a prop that vanishes
+    in one three-second production window. This rehearsal stages the real film and renders only the
+    same start/middle/end frames the production reviewer will inspect, at phone-review resolution.
+    Rejected windows are repaired here; unchanged pixel-identical verdicts are cached by the scene
+    validator. The expensive full animation starts only after every rehearsal window passes.
+    """
+    from agents import scene_validator as sv
+    if not sv._env_flag("SCENE_PREFLIGHT", "1"):
+        return {}
+
+    import hashlib
+    from agents.set_builder import fix_scenes, freeze_methods, restore_methods
+
+    root = os.path.join(work, "preflight")
+    os.makedirs(root, exist_ok=True)
+    rounds = max(1, int(os.getenv("SCENE_PREFLIGHT_FIX_ATTEMPTS") or "3"))
+    cap = max(1, int(os.getenv("SCENE_PREFLIGHT_FIX_WINDOWS") or "6"))
+    report_path = os.path.join(root, "scene_review.json")
+    manifest_path = os.path.join(root, "manifest.json")
+
+    for attempt in range(rounds + 1):
+        h = hashlib.sha256()
+        h.update(_code_hash(film).encode("ascii"))
+        with open(film_json, "rb") as fh:
+            h.update(fh.read())
+        with open(timings_path, "rb") as fh:
+            h.update(fh.read())
+        h.update(b"exact-window-preflight-v1")
+        fingerprint = h.hexdigest()
+        try:
+            manifest = json.load(open(manifest_path, encoding="utf-8"))
+        except (OSError, ValueError):
+            manifest = {}
+        if manifest.get("fingerprint") == fingerprint and manifest.get("accepted"):
+            try:
+                saved = json.load(open(report_path, encoding="utf-8"))
+            except (OSError, ValueError):
+                saved = {}
+            if saved.get("complete") and not saved.get("rejected"):
+                log.info("[preflight] exact-timing rehearsal already accepted; reusing it")
+                return {(r["f0"], r["f1"]): r for r in saved["windows"] if r.get("valid")}
+
+        frames_dir, review_dir = os.path.join(root, "frames"), os.path.join(root, "review")
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        shutil.rmtree(review_dir, ignore_errors=True)
+        os.makedirs(frames_dir)
+        windows = [w for w in sv.plan_windows(film, spans, spec=spec) if sv._is_rendered_window(w, spec)]
+        samples = sorted({f for w in windows for _, f in sv.sample_picks(w)})
+        env = dict(os.environ)
+        env.update(CUT_PCT=os.getenv("SCENE_PREFLIGHT_RENDER_PCT") or "35",
+                   CUT_SAMPLES=os.getenv("SCENE_PREFLIGHT_SAMPLES") or "8", CUT_RT="0")
+        env.pop("CUT_PROBE", None)
+        cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--",
+               film_json, timings_path, frames_dir, f"--frames={','.join(str(f) for f in samples)}"]
+        log.info(f"[preflight] round {attempt + 1}: rendering {len(samples)} exact timeline samples "
+                 f"before the {spans[-1]['end'] + 1}-frame production render")
+        _run_blender(cmd, env=env)
+        for f in samples:
+            src, dst = os.path.join(frames_dir, f"still_{f:04d}.png"), os.path.join(frames_dir, f"f_{f:04d}.png")
+            if os.path.exists(src):
+                os.replace(src, dst)
+        rep = sv.review_sampled_windows(film, spans, root, spec=spec)
+        log.info(f"[preflight] {rep['accepted']}/{rep['planned']} exact windows accepted")
+        if not rep["rejected"]:
+            with open(manifest_path, "w", encoding="utf-8") as fh:
+                json.dump({"fingerprint": fingerprint, "accepted": True,
+                           "windows": rep["planned"]}, fh, indent=1)
+            return {(r["f0"], r["f1"]): r for r in rep["windows"] if r.get("valid")}
+        if attempt >= rounds:
+            raise sv.SceneRejected(rep["rejected"], report_path)
+
+        bad_beats = {r["beat"] for r in rep["rejected"]}
+        keep = sorted({r["action"] for r in rep["windows"] if r.get("valid") and r["beat"] not in bad_beats})
+        frozen = freeze_methods(film["set"], [a for actions in keep for a in actions.split("+")])
+        log.info(f"[preflight] repairing {len(rep['rejected'])} rejected windows before production render")
+        fix_scenes(film["set"], rep["rejected"], keep=keep, max_windows=cap, measure=False)
+        restored = restore_methods(film["set"], frozen)
+        if restored:
+            log.info(f"[preflight] kept accepted scenes unchanged: {', '.join(restored)}")
 
 
 def _overlay(beat):
@@ -452,6 +547,9 @@ def produce(args):
     # Data-driven films (a 3D set + one action per beat) all render through a generic runner:
     # "evolution" films (no hook/rewind, e.g. bridge_evolution) through evolution_film.py.
     evolution = film.get("format") == "evolution"
+    # build-up explainers ("If you ...", agents/buildup.py) render with the cutaway runner but, like
+    # evolution films, start on the first build step: no epilogue hook to render, no rewind.
+    hookless = evolution or film.get("format") == "buildup"
     film_py = os.path.join(films, "evolution_film.py" if evolution else
                            "cutaway_film.py" if film.get("set") else f"{name}_film.py")
     beats = film["beats"]
@@ -503,9 +601,14 @@ def produce(args):
     from agents import scene_validator as sv
     validate = sv.enabled(film) and not (args.preview or args.frames)
     watcher = None
+    preapproved = {}
     if validate:
         from engine import sets as _sets
         spec = _sets.spec(film["set"])
+        # A fresh production render must first pass the exact final-timing rehearsal. Resumes and
+        # targeted redos already have production frames and use the live watcher below.
+        if not (redo or args.preview or args.frames or resume):
+            preapproved = _scene_preflight(film, film_json, film_py, timings_path, spans, work, spec)
     if redo:                                           # only the requested scenes are re-rendered
         targets = _parse_redo(redo, film, beats, spans)
         frames_dir = os.path.join(work, "frames")
@@ -558,12 +661,13 @@ def produce(args):
     extra = (["--preview"] if args.preview else []) + ([f"--frames={args.frames}"] if args.frames else [])
     workers = int(os.getenv("RENDER_WORKERS", "1"))   # measured: 2 = no gain on the laptop GPU
     if validate and not redo:                          # every ~3 s window is judged as soon as it is rendered
-        watcher = sv.SceneWatcher(film, spans, work, spec=spec, keep_previous=resume).start()
+        watcher = sv.SceneWatcher(film, spans, work, spec=spec, keep_previous=resume,
+                                  preapproved=preapproved).start()
     if redo:
         pass
     elif film.get("set") and not (args.preview or args.frames) and (workers > 1 or resume):
         start, hook = None, True
-        if evolution:                                  # no hook staged in an epilogue: frames 1..N
+        if hookless:                                   # no hook staged in an epilogue: frames 1..N
             hook, start = False, 1
             if resume:
                 have = {int(os.path.basename(p)[2:6]) for p in glob.glob(os.path.join(work, "frames", "f_*.png"))}

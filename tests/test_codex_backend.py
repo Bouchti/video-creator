@@ -163,6 +163,18 @@ class CodexCliTests(unittest.TestCase):
         self.assertEqual(claude.call_count, 1)
         self.assertEqual(codex.call_count, 2)
 
+    def test_runtime_primary_override_never_uses_the_same_backend_as_its_fallback(self):
+        with patch.object(showrunner, "BACKEND", "subscription"), \
+                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
+                patch.object(showrunner, "_call_cli",
+                             side_effect=showrunner.UsageLimit("limit resets 1:50pm")) as claude, \
+                patch.object(showrunner, "_call_codex", return_value={"ok": True}) as codex:
+            self.assertEqual(showrunner._call("s", "p"), {"ok": True})
+            self.assertEqual(showrunner.active_backend(), "codex")
+        claude.assert_called_once()
+        codex.assert_called_once()
+
 
 class CodexVisionTests(unittest.TestCase):
     def test_batch_review_returns_each_window(self):
