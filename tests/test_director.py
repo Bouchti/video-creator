@@ -135,6 +135,15 @@ class FrameQATest(unittest.TestCase):
         self.assertGreater(frame_qa.pan_speed(whip), frame_qa.PAN_MAX)
         self.assertLess(frame_qa.flicker(whip), 0.5)        # a pan is motion, not strobing
 
+    def test_highlights_catch_a_greyed_picture(self):
+        import numpy as np
+        from PIL import Image
+        from agents import frame_qa
+        grey = np.linspace(0, 181, 480 * 270).reshape(480, 270).astype(np.uint8)    # tops out at 0.71 (AgX)
+        full = np.linspace(0, 255, 480 * 270).reshape(480, 270).astype(np.uint8)
+        self.assertLess(frame_qa.highlights(Image.fromarray(grey).convert("RGB")), frame_qa.HIGHLIGHT_MIN)
+        self.assertGreater(frame_qa.highlights(Image.fromarray(full).convert("RGB")), frame_qa.HIGHLIGHT_MIN)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -233,3 +233,12 @@ Each was a pipeline gap, so each became a pipeline rule or gate, not a one-off f
 | Found too late | Stills -> 2 h final | **Animatic stage**: every frame at half resolution (~20 min) -> gates + a sound-off, text-off viewer review (what happens / clear / funny 1-5 / incoherent / biggest fix) -> `qa_report.json`, before the final render |
 
 These apply to every future world and to the Max route (Max is the hero; same gates, same format).
+
+## 9. Why the colours were faded (2026-10-29)
+
+Measured on identical frames: under AgX (even "Punchy") the brightest 2 % of every frame stopped at 0.71 and
+colourfulness was ~50, so nothing ever approached white and the picture read grey. AgX is built for
+photoreal light levels: it compresses highlights and desaturates strong colours. Khronos PBR Neutral at
++0.4 exposure keeps material colours true: colourfulness ~84, highlights 0.86-0.92, no clipping (Standard
+clipped the water to neon). It is now the default look (`lib.LOOKS["vivid"]`). The colourfulness gate was
+too lenient (40 let the faded frames through): it is 65 now, plus a highlights gate (brightest 2 % >= 0.8).

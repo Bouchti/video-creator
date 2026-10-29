@@ -305,31 +305,33 @@ def stage_animatic(plan, timing, work):
 
 
 def gates(plan, timing, render_dir):
-    """Deterministic checks on rendered frames + Blender's action measurements. Returns warnings per beat."""
+    """Deterministic checks on EVERY rendered frame + Blender's action and camera measurements."""
     from agents import frame_qa
     frames = sorted(glob.glob(os.path.join(render_dir, "frames", "*.png")))
+    series = frame_qa.scan(frames)
     warnings, beats = [], {}
     for b in timing["beats"]:
-        n = b["f1"] - b["f0"]
-        row = {"flicker": 0.0, "colorfulness": [], "pan": 0.0}
-        for share in (0.2, 0.5, 0.8):
-            i = b["f0"] + int(n * share) - 1
-            window = frames[max(0, i - 2): i + 3]
-            if len(window) >= 3:
-                fl = frame_qa.flicker(window)
-                if fl > row["flicker"]:
-                    row["flicker"], row["flicker_where"] = fl, frame_qa.flicker_map(window)
-                row["pan"] = max(row["pan"], frame_qa.pan_speed(window))
-            if 0 <= i < len(frames):
-                row["colorfulness"].append(frame_qa.colorfulness(frames[i]))
-        row["colorfulness"] = round(min(row["colorfulness"]), 1) if row["colorfulness"] else 0.0
-        row["flicker"] = round(row["flicker"], 2)
-        if row["flicker"] > frame_qa.FLICKER_MAX:
-            warnings.append(f"{b['id']}: {row['flicker']}% of pixels strobe ({row['flicker_where']} of the frame)")
-        row["pan"] = round(row["pan"], 4)
-        if row["pan"] > frame_qa.PAN_MAX:
-            warnings.append(f"{b['id']}: the camera moves {row['pan'] * 100:.1f}% of the frame width per frame "
-                            f"(max {frame_qa.PAN_MAX * 100:.1f}%): it stutters; slow it, widen it, or cut")
+        rows = [r for r in series if b["f0"] <= r[0] <= b["f1"]]
+        strobing = [r for r in rows if r[1] > frame_qa.FLICKER_MAX]
+        fast = [r for r in rows if r[2] > frame_qa.PAN_MAX]
+        colour = [frame_qa.colorfulness(frames[i - 1]) for i in
+                  (b["f0"] + int((b["f1"] - b["f0"]) * s) for s in (0.2, 0.5, 0.8)) if 0 < i <= len(frames)]
+        light = [frame_qa.highlights(frames[i - 1]) for i in
+                 (b["f0"] + int((b["f1"] - b["f0"]) * s) for s in (0.2, 0.5, 0.8)) if 0 < i <= len(frames)]
+        row = {"strobe_frames": len(strobing), "worst_strobe": round(max([r[1] for r in rows] or [0]), 2),
+               "highlights": round(min(light), 2) if light else 0.0,
+               "fast_frames": len(fast), "worst_pan": round(max([r[2] for r in rows] or [0]), 4),
+               "colorfulness": round(min(colour), 1) if colour else 0.0}
+        if len(strobing) > 3:
+            warnings.append(f"{b['id']}: {len(strobing)} frames strobe (worst {row['worst_strobe']}% at frame "
+                            f"{max(strobing, key=lambda r: r[1])[0]})")
+        if len(fast) > 3:
+            warnings.append(f"{b['id']}: the picture moves too fast on {len(fast)} frames (worst "
+                            f"{row['worst_pan'] * 100:.1f}% of the width per frame at frame "
+                            f"{max(fast, key=lambda r: r[2])[0]})")
+        if row["highlights"] < frame_qa.HIGHLIGHT_MIN:
+            warnings.append(f"{b['id']}: flat, greyed picture: its brightest 2 % only reach {row['highlights']} "
+                            f"(needs {frame_qa.HIGHLIGHT_MIN}); check the view transform and exposure")
         if row["colorfulness"] < frame_qa.COLORFUL_MIN:
             warnings.append(f"{b['id']}: washed-out colour (colourfulness {row['colorfulness']} < "
                             f"{frame_qa.COLORFUL_MIN})")
@@ -344,6 +346,9 @@ def gates(plan, timing, render_dir):
             warnings.append(f"action '{a['name']}' is out of frame {100 - a['visible'] * 100:.0f}% of its time")
         if (a["f1"] - a["f0"]) < 18:
             warnings.append(f"action '{a['name']}' lasts {a['f1'] - a['f0']} frames; hold it >= 18 (0.6 s)")
+    notes_path = os.path.join(render_dir, "camera_notes.json")
+    for note in (_load(notes_path) if os.path.isfile(notes_path) else []):
+        warnings.append(f"camera: {note}")
     return {"beats": beats, "actions": actions, "warnings": warnings}
 
 
@@ -448,7 +453,7 @@ def stage_sound(plan, timing, voice, total_seconds, work):
 
 # ------------------------------------------------------------------ 5. compose
 
-GRADE = {"saturate": 1.15, "contrast": 1.06, "brightness": 1.02}
+GRADE = {"saturate": 1.05, "contrast": 1.04, "brightness": 1.0}   # the render is vivid now; just a touch
 
 
 def props(plan, timing, words, anchors, total_frames):

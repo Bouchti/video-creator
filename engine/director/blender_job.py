@@ -63,6 +63,8 @@ def main():
     scene = bpy.context.scene
     world.anchors.export(os.path.join(out, "anchors.json"), 1, scene.frame_end)
     measure_actions(world, os.path.join(out, "actions.json"))
+    with open(os.path.join(out, "camera_notes.json"), "w") as fh:     # moves the camera had to shorten
+        json.dump(getattr(world.cam, "notes", []), fh)
     if job.get("save_blend"):
         bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, "scene.blend"))
     if job.get("stills"):
