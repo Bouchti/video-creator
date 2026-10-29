@@ -253,8 +253,8 @@ class SetBuilderTests(unittest.TestCase):
         self.assertTrue(any("FORMAT" in e for e in errs), errs)
 
     def test_hook_check(self):
-        self.assertEqual(sb._hook_check("pool", "float_hook"), [])
-        self.assertTrue(sb._hook_check("pool", "dig"))
+        self.assertEqual(sb._hook_check("pool", "dig"), [])
+        self.assertTrue(sb._hook_check("pool", "float_hook"))
 
     def test_register_adds_to_the_explainer_list_only(self):
         tmp = tempfile.mkdtemp()
@@ -272,14 +272,17 @@ class SetBuilderTests(unittest.TestCase):
         import types
         work = tempfile.mkdtemp()
         fake = types.SimpleNamespace(FORMAT="explainer", ACTIONS={"x": {"kind": "build"}})
-        cmds = []
-        with patch.dict(sys.modules, {"engine.sets.septic_tank_explainer_spec": fake}), \
+        calls = []
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.dict(sys.modules, {"engine.sets.septic_tank_explainer_spec": fake}), \
                 patch.object(sb, "_film_file", return_value=os.path.join(
                     os.path.dirname(__file__), "..", "engine", "films", "pool_cut.json")), \
-                patch("engine.make_film._run_blender", lambda cmd, *a, **k: cmds.append(cmd)), \
+                patch("engine.make_film._run_blender", lambda cmd, *a, **k: calls.append((cmd, k.get("env")))), \
                 patch.object(sb, "_complete_preview", return_value=False):
             sb.preview_render("septic_tank_explainer", work)
-        self.assertTrue(cmds and cmds[0][4].endswith("cutaway_film.py"), cmds)
+            self.assertNotIn("CUT_PCT", os.environ)       # preview quality never leaks into production
+        self.assertTrue(calls and calls[0][0][4].endswith("cutaway_film.py"), calls)
+        self.assertEqual(calls[0][1]["CUT_PCT"], "50")
 
     def test_measuring_is_on_for_explainers(self):
         import types

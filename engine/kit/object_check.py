@@ -22,7 +22,7 @@ sys.path.insert(0, ROOT)
 import bpy  # noqa: E402
 from mathutils import Vector  # noqa: E402
 
-from engine import qa, toy  # noqa: E402
+from engine import qa, studio as st, textures as tx, toy  # noqa: E402
 
 TOLERANCE = (0.6, 1.6)
 
@@ -55,6 +55,11 @@ def check(world, out_dir, render=True):
         name, want = item["name"], item["size_m"]
         issues = report["objects"].setdefault(name, [])
         scene = toy.reset_scene()
+        # each object gets a fresh scene: the kit's material caches would hand back the last scene's deleted
+        # materials (in a film every object shares one scene, so the caches are right there)
+        for cache in (getattr(tx, "_cache", None), getattr(st, "_cache", None)):
+            if isinstance(cache, dict):
+                cache.clear()
         toy.setup_world(sun_elevation_deg=42, sun_rotation_deg=190, strength=0.22)
         toy.add_sun(rotation_deg=(52, 0, 22), strength=4.2, angle_deg=2)
         build = getattr(objects, f"build_{name}", None)
@@ -114,3 +119,4 @@ if __name__ == "__main__":
     os.makedirs(args[1], exist_ok=True)
     rep = check(args[0], os.path.abspath(args[1]), render="--no-render" not in args)
     print(f"OBJECT CHECK: {sum(len(v) for v in rep['objects'].values())} issues")
+    print("DONE")                      # make_film._run_blender treats a run without it as a failure

@@ -215,6 +215,7 @@ STATIC_SECONDS = 2.5     # a camera that does not move for longer than this is "
 FLAT_AREA = 0.03         # a flat (untextured) surface covering more than this share of the frame is flagged
 FAR = 30.0               # ...unless it is background this far from the camera (soft in depth of field)
 TEXT_MIN = 0.018         # a label's letters must be at least this share of the frame height
+TEXT_MAX = 0.10          # ...and at most this share: bigger letters bury the shot (a camera inside the label)
 _TEXTURE_NODES = {"TEX_NOISE", "TEX_VORONOI", "TEX_WAVE", "TEX_IMAGE", "TEX_MUSGRAVE", "TEX_GRADIENT",
                   "TEX_MAGIC", "TEX_CHECKER", "TEX_BRICK", "TEX_WHITE_NOISE", "BUMP", "ATTRIBUTE",
                   "NEW_GEOMETRY", "VALTORGB"}
@@ -455,6 +456,7 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
         hits = []
         frames = list(range(b0, b1 + 1, step)) or [b0]
         hero_fracs, track, flat_seen, text_seen, float_frames = [], [], {}, {}, {}
+        text_big = {}
         for f in frames:
             scene.frame_set(frame_map(f))
             dg = bpy.context.evaluated_depsgraph_get()
@@ -490,6 +492,10 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                 key = o.data.body.strip().replace("\n", " ")[:40]
                 if h < TEXT_MIN:
                     text_seen[key] = min(text_seen.get(key, 1.0), h)
+                # a label the camera is almost inside: letters filling the frame, or running past both
+                # edges (every corner outside the frame, so the crop check never saw it)
+                if h > TEXT_MAX or box[0] < -0.02 and box[2] > 1.02:
+                    text_big[key] = max(text_big.get(key, 0.0), h)
             for name, objs in char_objs.items():
                 vis = [o for o in objs if _visible(o)]
                 if not vis:
@@ -534,6 +540,9 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
         for body, h in text_seen.items():
             hits.append((b0, f"text_small: label '{body}' letters are {h:.1%} of the frame height (need >= "
                              f"{TEXT_MIN:.1%}): enlarge it or bring the camera closer"))
+        for body, h in text_big.items():
+            hits.append((b0, f"text_big: label '{body}' letters are {h:.0%} of the frame height or run past both "
+                             f"frame edges (max {TEXT_MAX:.0%}): size the label from the camera distance"))
         for name, fl in float_frames.items():
             if len(fl) * step >= 10 and len(fl) >= 0.4 * len(frames):        # a jump is fine, standing on air is not
                 hits.append((fl[0], f"floating: {name} has no surface under the feet in {len(fl)} of "

@@ -292,7 +292,8 @@ class SetBuilderTests(unittest.TestCase):
     def test_preview_fingerprint_changes_only_when_render_inputs_change(self):
         from agents import set_builder as sb
         root = tempfile.mkdtemp()
-        for directory in ("engine", os.path.join("engine", "films"), os.path.join("engine", "sets")):
+        for directory in ("engine", os.path.join("engine", "films"), os.path.join("engine", "sets"),
+                          os.path.join("engine", "kit", "worlds")):
             os.makedirs(os.path.join(root, directory), exist_ok=True)
         files = {
             "engine/shared.py": "SHARED = 1\n",
@@ -300,6 +301,7 @@ class SetBuilderTests(unittest.TestCase):
             "engine/films/demo_story.json": "{}\n",
             "engine/sets/demo_story.py": "# set\n",
             "engine/sets/demo_story_spec.py": "# spec\n",
+            "engine/kit/worlds/demo.py": "# imported kit staging\n",
         }
         for relative, content in files.items():
             with open(os.path.join(root, relative), "w", encoding="utf-8") as fh:
@@ -311,6 +313,10 @@ class SetBuilderTests(unittest.TestCase):
             with open(os.path.join(root, "engine", "sets", "demo_story.py"), "a", encoding="utf-8") as fh:
                 fh.write("CHANGED = 1\n")
             self.assertNotEqual(first, sb._preview_fingerprint("demo_story", runner, True))
+            nested = sb._preview_fingerprint("demo_story", runner, True)
+            with open(os.path.join(root, "engine", "kit", "worlds", "demo.py"), "a", encoding="utf-8") as fh:
+                fh.write("CHANGED = 1\n")
+            self.assertNotEqual(nested, sb._preview_fingerprint("demo_story", runner, True))
 
     def test_complete_preview_does_not_require_synthesized_rewind_stills(self):
         from agents import set_builder as sb

@@ -1,7 +1,7 @@
 """Generic story-spec rules for kit sets (pure python): every generated spec gets the same functions."""
 
 
-def make_rules(actions: dict, story_order: list):
+def make_rules(actions: dict, story_order: list, hookless: bool = False):
     """(beat_actions, min_seconds, validate) for a spec with these ACTIONS and STORY_ORDER."""
 
     def beat_actions(beat: dict) -> list:
@@ -21,13 +21,17 @@ def make_rules(actions: dict, story_order: list):
         if unknown:
             errs.append(f"unknown actions: {unknown}")
         hooks = [a for a in acts if actions.get(a, {}).get("kind") == "hook"]
-        if not acts or actions.get(acts[0], {}).get("kind") != "hook":
-            errs.append(f"beat 1 must be a hook action ({', '.join(k for k, v in actions.items() if v['kind'] == 'hook')})")
-        if len(hooks) != 1:
-            errs.append(f"exactly one hook action is allowed (got {hooks})")
-        if len(acts) < 2 or acts[1] != "rewind":
-            errs.append("beat 2 must be 'rewind'")
-        story = [a for a in acts if actions.get(a, {}).get("kind") in ("story", "fail", "fix")]
+        if hookless:
+            if hooks or "rewind" in acts:
+                errs.append("a linear build has no hook replay or rewind")
+        else:
+            if not acts or actions.get(acts[0], {}).get("kind") != "hook":
+                errs.append(f"beat 1 must be a hook action ({', '.join(k for k, v in actions.items() if v['kind'] == 'hook')})")
+            if len(hooks) != 1:
+                errs.append(f"exactly one hook action is allowed (got {hooks})")
+            if len(acts) < 2 or acts[1] != "rewind":
+                errs.append("beat 2 must be 'rewind'")
+        story = [a for a in acts if actions.get(a, {}).get("kind") in ("build", "story", "fail", "fix")]
         if story != list(story_order):
             errs.append(f"story actions must appear exactly once each, in order: {list(story_order)} (got {story})")
         if len(set(acts)) != len(acts):

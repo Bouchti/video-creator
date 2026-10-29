@@ -1,0 +1,75 @@
+{
+  "title": "How an Empty Site Becomes a Septic",
+  "set": "kitw_septic_yard_ref_explainer",
+  "format": "buildup",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "beats": [
+    {
+      "action": "build_dig_pit",
+      "text": "If you begin with an empty site, a rough hole opens in the dirt at. You have the start of a septic. Everything that leaves the house has.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "build_build_tank",
+      "text": "Next, a watertight concrete tank lowers into the hole. This is the build tank. Still water lets heavy solids sink.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "build_lay_drain_field",
+      "text": "Next, an outlet pipe extends to gravel trenches and. This is the lay drain field. Soil and its microbes filter and.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "build_fit_baffles",
+      "text": "Next, inlet and outlet tees slot into the tank,. This is the fit baffles. A pipe that dips below the.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "build_strap_anchors",
+      "text": "Next, concrete ballast blocks settle beside the tank and. This is the strap anchors. Ballast weight strapped to the tank.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "build_add_distribution_box",
+      "text": "Next, a levelled distribution box drops in between the. This is the add distribution b. Outlets set at the same level.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "build_add_risers",
+      "text": "Next, ribbed risers grow up from the tank lids. This is the add risers. Sludge builds up over the years.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "show_function_8",
+      "text": "Next, the camera follows the working system. This is the quiet yard. Everything that leaves the house has.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "finished_system",
+      "text": "Now all the installed parts work together. Congratulations, you've built a septic.",
+      "overlay": {
+        "type": "none"
+      }
+    }
+  ],
+  "cta": null,
+  "tail": 1.2
+}

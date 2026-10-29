@@ -1,7 +1,7 @@
 """
 Explainer route (--source explainer): pure 3D cutaway explainers with NO hero, in the format of
 channels like @youbuiltit. One continuous cut-open diorama, the build told in physical order as a
-chain of "problem, then the fix" beats, one bold word on screen at a time.
+linear transformation from raw site to finished system, one visible component at a time.
 
     python main.py --source explainer                              # autopilot picks the topic
     python main.py --source explainer "Why pools have a valve in the floor"
@@ -178,7 +178,8 @@ def new_set_id(subject: str) -> str:
 
 def plan_new_set(angle=None) -> dict:
     """Research a subject no registered set covers and write the brief the set builder works from."""
-    from agents.showrunner import STYLE, _call, _history, _wishlist
+    from agents.showrunner import _call, _history, _wishlist
+    from agents.buildup import STYLE
     published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
     wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in _wishlist()[-30:]) or "- none"
     have = "\n".join(_brief(s) for s in registered()) or "- none"
@@ -191,8 +192,9 @@ def plan_new_set(angle=None) -> dict:
     prompt = f"""Today is {datetime.date.today().isoformat()}. {task}
 
 The video is a pure cutaway explainer with NO characters as heroes: the world is sliced open and
-the camera follows how the thing is built or how it works, in physical order, as a chain of real
-problems and the engineering fix for each ("But groundwater pushes up. So the floor gets a valve").
+the camera starts at the raw site and follows how the thing is built in real installation order.
+Each beat adds one visible component or shows the function that component unlocks. There is no
+finished-state hook, rewind, wrong attempt, failure scene, repair, host or character story.
 
 SETS WE ALREADY HAVE (never pick their subjects):
 {have}
@@ -205,27 +207,27 @@ OLDER WISHLIST (inspiration only):
 
 Return:
 - subject: a short concrete name for the thing being built or shown
-- title, angle, hook_line (13 words maximum, a TRUE fact that stops the scroll) and payoff
-- hook_action: the snake_case id of the opening hook action the set will stage, ending in "_hook"
-  (for example "float_hook"); the hook shows the most dramatic moment on the FINISHED build
+- title: exactly the shape "How a <starting thing> Becomes a <finished system>"
+- angle, opening hook_line (20 words maximum, starts "If you" and describes the first visible build
+  step) and payoff
+- hook_action: the snake_case id of the FIRST BUILD action (for example "excavate_site"); this is not
+  a hook replay—the film starts on this action
 - trend_signal and the direct trend_source_url from the research (empty only for a producer topic)
 - why_people_care_now
 - fact_sheet: 8-12 bullets (maximum 250 words), verified in this same search, a source domain or URL
   on every bullet, and a TRUE / NEEDS REWORDING verdict for hook_line
 - build_brief: a self-contained production brief for ONE coherent cut-open diorama (ground in
-  section, the structure, surroundings) that a Blender coder can build from primitives: the 6-10
-  build steps in physical order, the 2-4 hidden problems the build must answer (each made VISIBLE:
-  arrows, water rising, cracks, flow), the fix for each, 2-4 optional explainer moments (forces, flow,
-  layers), the finished working result with a little life (people, water, lights), the hook action
-  `hook_action` staged on the finished build, the real dimensions and numbers the model shows, and
-  the short 3D labels it needs. No logos, brands or downloaded assets."""
+  section, the structure, surroundings) that a Blender coder can build from primitives: 9-13 additive
+  steps from empty site through excavation, base/foundation, main structure, connections, hidden
+  internals, working flow and surface finish. Every step installs one visible part or demonstrates its
+  newly available function. Explain constraints while the correct part goes in; never show a failure
+  or redo. End on the finished working result with a little life (people for scale, water, lights), plus
+  real dimensions, model numbers and short 3D component labels. No logos, brands or downloaded assets."""
     tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
     plan = _call(STYLE, prompt, PLAN_SCHEMA, effort="medium", tools=tools)
     if not angle and not str(plan.get("trend_source_url", "")).startswith(("http://", "https://")):
         raise NoUnusedExplainerSets("fresh topic research returned no verifiable trend source; no set was built")
-    plan["hook_action"] = re.sub(r"[^a-z0-9_]+", "_", str(plan.get("hook_action") or "reveal_hook").lower()).strip("_")
-    if not plan["hook_action"].endswith("_hook"):
-        plan["hook_action"] += "_hook"
+    plan["hook_action"] = re.sub(r"[^a-z0-9_]+", "_", str(plan.get("hook_action") or "prepare_site").lower()).strip("_")
     plan["set_id"] = new_set_id(plan["subject"])
     log.info(f"[explainer] new subject: {plan['subject']} ({plan['set_id']}) | trend: {plan.get('trend_signal')}")
     return plan

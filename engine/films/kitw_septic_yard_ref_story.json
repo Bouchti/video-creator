@@ -1,0 +1,94 @@
+{
+  "title": "The Tank That Floated Out of the Ground",
+  "set": "kitw_septic_yard_ref_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "beats": [
+    {
+      "action": "float_hook",
+      "text": "This is Max. It just went wrong.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "rewind",
+      "text": "Let's rewind to the start.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "promise",
+      "text": "Max had a plan. How hard could it be, really?",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fail_pit",
+      "text": "It failed, because Untreated sewage soaks straight down with its solids and germs into the water people pump from wells.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fix_tank",
+      "text": "So Max fixed it, and it held, because Still water lets heavy solids sink and fats float, so the liquid separates into layers.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fail_backup",
+      "text": "It failed, because A watertight box with no exit just fills up and the sewage comes back the way it came.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fix_field",
+      "text": "So Max fixed it, and it held, because Soil and its microbes filter and treat the liquid before it reaches groundwater.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fail_scum",
+      "text": "It failed, because With nothing blocking the outlet, solids and grease escape and clog the gravel's pores.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fix_baffles",
+      "text": "So Max fixed it, and it held, because A pipe that dips below the surface only drinks from the clear middle layer.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fail_float",
+      "text": "It failed, because An empty tank in saturated soil is like a boat: groundwater pushes it up harder than its weight holds it down.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "fix_anchors",
+      "text": "So Max fixed it, and it held, because Ballast weight strapped to the tank outweighs the groundwater's upward push.",
+      "overlay": {
+        "type": "none"
+      }
+    },
+    {
+      "action": "finale",
+      "text": "Now every fix works together, and it holds. Which fix would you build?",
+      "overlay": {
+        "type": "none"
+      }
+    }
+  ],
+  "cta": "Which fix would you build?"
+}

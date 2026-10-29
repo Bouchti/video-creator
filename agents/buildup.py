@@ -1,12 +1,13 @@
 """
-BUILD-UP format for the explainer route (--source explainer), the @youbuiltit structure:
+LINEAR BUILD-UP format for the explainer route (--source explainer), the @youbuiltit structure:
 
-    "If you <crudest version>, you have a <thing>. But <real problem>, so <real fix>. This is a
-     <part name>. But ... so ... Add <finishing touches>. Congratulations, you've built a <thing>."
+    "If you <make the first physical change>, you have the start of a <thing>. Next add <part>.
+     This is the <part name>. Now <function becomes visible>. ... Congratulations, you've built it."
 
-The viewer builds the thing in their head from its dumbest working version, fixing one real
-problem at a time in the physical order of the build. There is no hook staged on the finished
-build and no rewind: the film starts on the first build step (rendered hookless by
+The viewer builds the thing in their head from an empty site, adding one real component at a time
+in installation order. Constraints may be explained as the reason for a component, but the video
+never builds a deliberately wrong version and never cuts to a failure. There is no host, finished-
+state hook or rewind: the film starts on the first build step (rendered hookless by
 engine/films/cutaway_film.py, film JSON "format": "buildup").
 
 agents/showrunner.py asks this module for the voice, rules, checks, editor notes and tone example
@@ -27,28 +28,31 @@ OPEN_MAX_WORDS = 34
 BEAT_MAX_WORDS = 32
 MAX_STICKERS = 4
 HERO_NAMES = re.compile(r"\bMax\b")
+TITLE_RE = re.compile(r"^How\s+.+\s+Becomes?\s+.+$", re.I)
 
 STYLE = """You write narration for 55-75 second vertical 3D cutaway BUILD-UP explainers (TikTok, Reels,
-Shorts), the format of @youbuiltit: the viewer builds the thing in their head, starting from the
-crudest version that technically works and fixing one real problem at a time until it is the real thing.
+Shorts), the format of @youbuiltit: the viewer watches an empty site become a finished system in one
+continuous, satisfying construction sequence.
 
 THE FORMAT (follow it exactly):
-- THE OPENING: the very first words of beat 1 are "If you". Give the crudest version that technically
-  works, then "you have a <thing>". The shape: "If you dig a hole in your backyard and fill it with
-  water, you have a pool." Concrete, physical, a little funny in its simplicity. Never a question,
-  never "Did you know", never a statistic first.
-- THE CHAIN: then problem, fix, problem, fix, in the physical order of the build. A problem starts with
-  "But" (or "And" / "Then" for variety) and is a real, specific failure of the version so far; its fix
-  starts with "so" and is the real engineering answer that solves exactly that failure. Sentences flow
-  into each other with but / so / and, spoken like one confident explanation that never stops moving.
-- NAME IT: right after a fix, give the part its real name in a short sentence: "This is a relief
-  valve." Name at least two parts in the video.
+- THE TITLE: "How a <starting thing> Becomes a <finished system>." It promises a visible transformation,
+  not a mystery, warning, failure or question.
+- THE OPENING: the very first words of beat 1 are "If you". Describe the first physical construction
+  step, then say what it starts becoming. Concrete and visible. Never "Did you know", never a question,
+  never a statistic first.
+- THE CHAIN: raw site -> excavation -> base/foundation -> main structure -> connections -> hidden
+  internals -> working flow -> finish. Each beat adds ONE visible component or demonstrates the new
+  function unlocked by the component just added. Use Next / Then / Inside / From here / Finally so it
+  feels like one uninterrupted build.
+- EXPLAIN, DON'T DEMOLISH: state the engineering reason while the correct part goes in ("A gravel bed
+  spreads the load"). Never stage or narrate a wrong attempt, disaster, failure, rewind, repair or redo.
+- NAME IT: when a component appears, give its real name in a short sentence: "This is a relief valve."
+  Name at least two parts in the video.
 - ONE PICTURE PER HARD IDEA: when a principle is abstract, one short everyday comparison ("like a
   seesaw").
 - ONE HUMAN DETAIL: one year, inventor, record or picturable number from the fact sheet, placed where
   it lands hardest.
-- THE FINISHING TOUCHES: the last beat races through two or three final details ("Add tiles, a ladder
-  and a light"), at least one of them a surprising true detail.
+- THE FINISHING TOUCHES: the last beat completes the surface and pulls back to the finished system.
 - THE ENDING: the very last sentence is exactly "Congratulations, you've built a <thing>." (or "an
   <thing>"). Nothing after it. No question to the viewer, no call to action.
 - VOICE: second person ("you"), present tense, plain words a 12-year-old gets, contractions, no
@@ -59,30 +63,39 @@ THE FORMAT (follow it exactly):
 - Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
 
 DIRECTIONS = {
-    "plain": "Calm and crisp: each fix lands as a small 'oh, that's clever' moment. No jokes needed.",
-    "numbers": "Numbers-forward: every problem or fix carries one picturable number or comparison.",
-    "history": "Give the single best human story (an inventor, a famous failure, a year) its own moment.",
+    "plain": "Calm and crisp: every installed component lands as a small 'oh, that's clever' moment.",
+    "numbers": "Numbers-forward: selected construction steps carry one picturable number or comparison.",
+    "history": "Give the single best human detail (an inventor, a year or a record) one concise moment.",
 }
 
 TOPIC_NOTE = """
 
 These are BUILD-UP explainers (no characters): the hook line is the OPENING sentence and must start
 with "If you" and end with "you have a <thing>" (at most 20 words), and hook_action is the FIRST build
-action (the film starts on the first build step; there is no hook staged on the finished build)."""
+action (the film starts on the first build step; there is no hook staged on the finished build).
+Every title uses "How a <starting thing> Becomes a <finished system>" and promises the visible build."""
 
 CRITIQUE_NOTE = """
 
 FORMAT NOTE (build-up explainer, overrides anything above that assumes a hook, a hero or a question):
-"hook" grades the "If you ..., you have a ..." opening (concrete, crude, instantly clear); "fun" grades
-rhythm and the satisfaction of each fix (the but / so chain, named parts, one great human detail), not
-jokes; "story_flow" requires every fix to answer exactly the problem just named. The script must end
+"hook" grades the opening transformation (concrete, visible, instantly clear); "fun" grades rhythm and
+the satisfaction of watching each part click into place, not jokes; "story_flow" requires an unbroken
+physical construction order with one visible addition or newly unlocked function per beat;
+"problem_solution" grades whether the narration briefly explains WHY each correct component is installed,
+not whether a failure is shown. Never request a fail/fix scene. The script must end
 with "Congratulations, you've built a <thing>." and must NOT end with a question."""
 
 
 def enabled(set_id) -> bool:
     if (os.getenv("EXPLAINER_FORMAT") or FORMAT).strip().lower() != FORMAT:
         return False
-    return set_id in list(getattr(sets, "EXPLAINER", []))
+    if set_id in list(getattr(sets, "EXPLAINER", [])):
+        return True
+    try:
+        sp = sets.spec(set_id)
+        return getattr(sp, "FORMAT", "") == "explainer" and not getattr(sp, "HERO", None)
+    except (ImportError, ModuleNotFoundError):
+        return False
 
 
 def _beat_actions(sp, beat):
@@ -110,7 +123,10 @@ def validate(sp, beats) -> list:
     if banned:
         errs.append(f"no hook or rewind in a build-up explainer: remove {banned}; beat 1 is the first build step")
     order = _order(sp)
-    build = [a for a in acts if sp.ACTIONS.get(a, {}).get("kind") in ("build", "story", "fail", "fix")]
+    failures = [a for a in acts if sp.ACTIONS.get(a, {}).get("kind") in ("fail", "fix")]
+    if failures:
+        errs.append(f"linear construction explainers cannot use fail/fix actions: {failures}")
+    build = [a for a in acts if sp.ACTIONS.get(a, {}).get("kind") in ("build", "story")]
     if order and build != order:
         errs.append(f"build actions must appear exactly once each, in order: {order} (got {build})")
     if order and acts and acts[0] != order[0]:
@@ -138,9 +154,11 @@ def rules(set_id, words_per_second, budget) -> str:
     return f"""STRUCTURE RULES (the renderer enforces them):
 - No hook and no rewind. Beat 1 plays the first build action ({order[0] if order else 'the first step'}) and
   its narration starts with "If you" and says "you have a <thing>".
-- Then these build actions exactly once each, in this order: {' → '.join(order)}.
+- Then these build actions exactly once each, in this installation order: {' → '.join(order)}.
 - Optional explainer actions after their prerequisite: {explain or 'none'}.{(' Optional outro (last beat only): ' + outros + '.') if outros else ''}
 {montage}
+- Every beat adds one visible component or shows the function unlocked by the last addition. Never show
+  or narrate a wrong attempt, failure, disaster, rewind, repair or redo.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
   {words_per_second} x 0.75 words. Beat 1 at most {OPEN_MAX_WORDS} words, every other beat at most {BEAT_MAX_WORDS}. 8-15 beats.
 - Word budget: aim for {hi - 37}-{hi - 12} words and count before returning; the hard range is {lo}-{hi}.
@@ -189,11 +207,13 @@ def checks(script, set_id, words_per_second, budget) -> list:
             problems.append("the script must end with \"Congratulations, you've built a <thing>.\"")
         if (beats[0].get("overlay") or {}).get("type", "none") != "none":
             problems.append("no sticker on beat 1")
+    if not TITLE_RE.match(str(script.get("title") or "")):
+        problems.append("title must use 'How a <starting thing> Becomes a <finished system>'")
     full = " ".join((b.get("text") or "") for b in beats)
     if len(NAME_RE.findall(full)) < 1:
-        problems.append('name the real parts: at least one "This is a <part>." after a fix')
-    if len(re.findall(r"\bbut\b", full, re.I)) < 3:
-        problems.append('the chain needs at least 3 "But ..., so ..." problem/fix steps')
+        problems.append('name the real parts: at least one "This is a <part>." as it appears')
+    if re.search(r"\b(?:rewind|try again|attempt|fails?|failed|failure|disaster|redo|repair)\b", full, re.I):
+        problems.append("keep the visual story additive: no failure, repair, retry or rewind narration")
     stickers = sum(1 for b in beats if (b.get("overlay") or {}).get("type", "none") != "none")
     if stickers > MAX_STICKERS:
         problems.append(f"{stickers} stickers; max {MAX_STICKERS}")
@@ -204,17 +224,14 @@ def checks(script, set_id, words_per_second, budget) -> list:
 # lines). Sets without one get the pool example as a structure example.
 EXAMPLES = {
     "pool": [
-        ("dig", "If you dig a hole in your backyard and fill it with water, you have a pool. But dirt drinks "
-                "water, so it needs a concrete shell."),
-        ("layers", "Under the lawn: topsoil, clay, sand, and groundwater."),
-        ("gravel", "But concrete on wet dirt cracks, so the floor gets a bed of gravel to drain it."),
-        ("valve", "And rising groundwater can push an empty pool right out of the ground. So the floor gets a "
-                  "valve that lets it in. This is a relief valve."),
-        ("pipes", "But still water turns green, so pipes run from a drain and a skimmer to a pump."),
-        ("rebar+shotcrete", "But concrete cracks when it's pulled, so a steel grid goes in first, and concrete "
-                            "is fired onto it from a hose. This is shotcrete."),
+        ("dig", "If you carve a pool-shaped hole into a backyard, you have the start of a swimming pool."),
+        ("layers", "The cut face reveals topsoil, clay, sand, rock, and the groundwater below them."),
+        ("gravel", "Next, a level bed of gravel spreads underneath the future floor and lets water drain."),
+        ("valve", "A small valve seats in that floor so rising groundwater can enter safely. This is a relief valve."),
+        ("pipes", "Then hidden pipes connect the main drain and skimmer to a pump and return jets."),
+        ("rebar+shotcrete", "A steel grid forms the shell's skeleton. Concrete fired from a hose covers it. This is shotcrete."),
         ("cure", "Then you keep it wet for days, because concrete doesn't dry, it cures."),
-        ("finish", "But raw concrete scrapes skin, so it gets smooth plaster, tiles and a stone edge."),
+        ("finish", "Smooth plaster covers the concrete, followed by waterline tiles, stone coping, and a ladder."),
         ("fill", "Now fill it: twenty thousand litres, about twenty tons of water."),
         ("flow", "A pump pushes it through a sand filter and back, the whole pool every six hours."),
         ("glamour", "Add a ladder and some sun. Congratulations, you've built a pool."),

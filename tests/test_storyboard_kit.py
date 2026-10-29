@@ -65,8 +65,8 @@ class CompileTests(unittest.TestCase):
         root = tempfile.mkdtemp()
         for d in ("engine/sets", "engine/films"):
             os.makedirs(os.path.join(root, d))
-        explainer = dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:]), hero=False)
-        self.assertEqual(sbm.validate(explainer), [])           # opens on the crudest build, no setup step
+        explainer = dict(kit_planner._linear_example("embankment"), hero=False)
+        self.assertEqual(sbm.validate(explainer), [])
         set_id = sbm.compile_set(explainer, root=root)
         self.assertTrue(set_id.startswith("kit_") and set_id.endswith("_explainer"), set_id)
         ns = {}
@@ -83,10 +83,11 @@ class CompileTests(unittest.TestCase):
         self.assertIn("(EmbankmentSet)", builder)
         self.assertIn('\\"hero\\": false', builder)
 
-    def test_only_an_explainer_may_skip_the_calm_setup(self):
+    def test_an_explainer_starts_with_construction_not_the_calm_story_setup(self):
         no_setup = dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:]))
         self.assertTrue(any("first step must be kind 'setup'" in p for p in sbm.validate(no_setup)))
-        self.assertEqual(sbm.validate(dict(sbm.LEVEE, hero=False)), [])      # a calm opening is still allowed
+        self.assertTrue(any("first step must build" in p for p in sbm.validate(dict(sbm.LEVEE, hero=False))))
+        self.assertEqual(sbm.validate(dict(kit_planner._linear_example("embankment"), hero=False)), [])
 
     def test_an_invalid_storyboard_is_never_compiled(self):
         bad = dict(sbm.LEVEE, steps=sbm.LEVEE["steps"][:2])
@@ -125,20 +126,22 @@ class PlannerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             kit_planner.plan_kit_story(call=call)
 
-    def test_an_explainer_plan_is_the_same_storyboard_without_the_hero(self):
+    def test_an_explainer_plan_is_a_separate_linear_storyboard_without_the_hero(self):
         seen = {}
+        linear = kit_planner._linear_example("embankment")
 
         def call(system, prompt, schema, effort="high", tools=None):
             seen.update(system=system, prompt=prompt, schema=schema)
-            return self._plan(dict(copy.deepcopy(sbm.LEVEE), steps=copy.deepcopy(sbm.LEVEE["steps"][1:])))
+            return self._plan(copy.deepcopy(linear))
         plan = kit_planner.plan_kit_explainer(angle="how levees hold back a flood", call=call)
         self.assertIs(plan["storyboard"]["hero"], False)        # set by the route, never by the model
         self.assertTrue(plan["set_id"].endswith("_explainer"))
-        self.assertEqual(seen["schema"], kit_planner.PLAN_SCHEMA)
+        self.assertEqual(seen["schema"], kit_planner.plan_schema("embankment", hero=False))
         self.assertIn("how levees hold back a flood", seen["prompt"])
         self.assertIn("NO hero", seen["prompt"])
         self.assertNotIn("Max shovels", seen["prompt"])
         self.assertNotIn("TRIAL AND ERROR", seen["system"])
+        self.assertEqual(plan["storyboard"]["hooks"], [])
 
 
 class BuildKitSetTests(unittest.TestCase):
@@ -165,7 +168,7 @@ class BuildKitSetTests(unittest.TestCase):
         self.assertIn('"kit_x_story"', open(os.path.join(self.root, "engine", "sets", "__init__.py")).read())
 
     def test_a_no_hero_storyboard_is_registered_as_an_explainer_not_a_max_story(self):
-        explainer = dict(copy.deepcopy(sbm.LEVEE), hero=False)
+        explainer = dict(kit_planner._linear_example("embankment"), hero=False)
         with patch.object(sb, "preview_render", return_value=""), patch.object(sb, "qa_check", return_value={}), \
                 patch.object(sb, "review_preview", return_value=[]):
             status = sb.build_kit_set({"storyboard": explainer, "set_id": "kit_x_explainer"})

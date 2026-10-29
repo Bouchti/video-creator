@@ -157,12 +157,15 @@ Return:
 - objects: 6-16 physical objects the videos need (the ground/terrain with its cut face counts as one), each
   with a snake_case name that starts with "{{world}}_"... use the world id as prefix, what it is, the look that
   makes it recognisable at a glance, and its real size in metres (x = left-right, y = depth, z = height)
-- changes: what can be built, 4-8 entries: id, does (Max ...), built (the same with nobody building), adds
+- changes: what can be built, preferably 6-8 real additive parts: id, does (Max ...), built (the same
+  with nobody building), adds
   (state flags it creates, e.g. "valve"), first (true for exactly one: the crudest version, built first)
-- events: 6-12 entries: id, outcome fail|hold, shows (what is visibly on screen: arrows, water, cracks),
+- events: 6-12 entries: id, outcome fail|hold, shows (what is visibly on screen: arrows, water, flow),
   teaches (the physical reason, one plain clause), needs (flags that must be built before it), must_see
   (the object names that show it). Include one calm opening event (calm_event, outcome hold, nothing goes
-  wrong yet) and one finale event (finale_event, outcome hold: everything works).
+  wrong yet) and one finale event (finale_event, outcome hold: everything works). Every change after
+  first_build should add a flag used by at least one HOLD event that visibly demonstrates that component
+  working; a linear explainer must omit a change that has only failure events.
 - first_build: the id of the change with first=true
 - reference_storyboard: a valid ladder in this world: title, subject, model_facts (name, fact with a
   number, from research), steps, hooks. The validator enforces, exactly:
@@ -246,8 +249,8 @@ def validate_design(d: dict) -> list:
 
 
 def _storyboard_problems(d: dict) -> list:
-    """The storyboard validator's verdict on the design's reference storyboard, with and without a hero,
-    against the design's vocabulary loaded in memory (nothing is written or registered)."""
+    """The storyboard validator's verdict on the world's Max reference storyboard. Linear no-hero
+    explainers have a different 9-13-step contract and are planned later from the same vocabulary."""
     import sys
     import types
 
@@ -265,8 +268,7 @@ def _storyboard_problems(d: dict) -> list:
     worlds.REGISTERED.append(world)
     try:
         ref = module.REFERENCE_STORYBOARD
-        return sbm.validate(ref) + [f"no-hero: {x}" for x in sbm.validate(dict(ref, hero=False))
-                                    if x not in sbm.validate(ref)]
+        return sbm.validate(ref)
     finally:
         worlds.REGISTERED.remove(world)
         if previous is None:
@@ -345,7 +347,7 @@ def write_vocab(d: dict) -> list:
     worlds.REGISTERED.append(world)
     try:
         ref = vocab.for_world(world).REFERENCE_STORYBOARD
-        return sbm.validate(ref) + [f"no-hero: {x}" for x in sbm.validate(dict(ref, hero=False))]
+        return sbm.validate(ref)
     finally:
         worlds.REGISTERED.remove(world)
 
@@ -389,8 +391,9 @@ LOOK_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["ob
         "properties": {"name": S, "recognisable": {"type": "boolean"}, "problem": S}}}}}
 
 
-def check_objects(d: dict, work: str) -> dict:
-    """{object_name: [issue, ...]} for the objects that fail: measured in Blender, then one vision look."""
+def check_objects(d: dict, work: str, look_fatal: bool = True) -> dict:
+    """{object_name: [issue, ...]} for the objects that fail: measured in Blender, then one vision look.
+    With look_fatal=False the look's notes are only logged (the measured checks decide)."""
     from agents import ai_router
     from engine.make_film import BLENDER, _run_blender
     out = os.path.join(work, "objects")
@@ -400,7 +403,9 @@ def check_objects(d: dict, work: str) -> dict:
         _run_blender([BLENDER, "--background", "--factory-startup", "--python", script, "--", d["world"], out])
         report = json.load(open(os.path.join(out, "objects.json"), encoding="utf-8"))
     except (RuntimeError, OSError, ValueError) as exc:
-        return {"(module)": [f"the objects module failed to load or build: {str(exc)[-1500:]}"]}
+        text = str(exc)
+        text = text[text.rfind("Traceback"):] if "Traceback" in text else text[-1500:]
+        return {"(module)": [f"the objects module failed to load or build: {text[:2500]}"]}
     problems = {n: list(items) for n, items in report["objects"].items() if items}
     stills = [(o["name"], os.path.join(out, f"{o['name']}.png")) for o in d["objects"]
               if o["name"] not in problems and os.path.exists(os.path.join(out, f"{o['name']}.png"))]
@@ -408,13 +413,19 @@ def check_objects(d: dict, work: str) -> dict:
         what = "\n".join(f"- {o['name']}: {o['what']} ({o['look']})" for o in d["objects"])
         try:
             look = ai_router.ask("You check 3D models for an explainer channel.",
-                                 f"Each image is one 3D object built for a cutaway diorama. It must be "
-                                 f"recognisable at a glance as what it is meant to be:\n{what}\n\nFor each image, "
-                                 "say whether it is recognisable; if not, the one concrete thing to change.",
-                                 LOOK_SCHEMA, images=stills)
+                                 f"Each image is one 3D object built for a cutaway diorama, rendered ALONE with a "
+                                 f"quick low-quality preview (no scene around it, no final lighting):\n{what}\n\n"
+                                 "For each image, say whether a viewer would recognise it as what it is meant to be. "
+                                 "Mark recognisable=false only when it reads as something else or as nothing; "
+                                 "colour, layer or styling preferences are not failures. If false, give the one "
+                                 "concrete thing to change.", LOOK_SCHEMA, images=stills)
             for row in look.get("objects") or []:
                 if row.get("name") in dict(stills) and not row.get("recognisable"):
-                    problems.setdefault(row["name"], []).append(f"look: {row.get('problem') or 'not recognisable'}")
+                    note = f"look: {row.get('problem') or 'not recognisable'}"
+                    if look_fatal:
+                        problems.setdefault(row["name"], []).append(note)
+                    else:
+                        log.info(f"[kit world] look note (advisory) {row['name']}: {note[6:200]}")
         except Exception as exc:                          # noqa: BLE001  the look is the only advisory part
             from agents.showrunner import BudgetExceeded, UsageLimit
             if isinstance(exc, (BudgetExceeded, UsageLimit)):
@@ -448,9 +459,9 @@ Mirror its structure:
   Its must_see objects (by name prefix) are on screen at the beat's middle and at 7/8, a change is still
   happening at the middle and finished by 7/8, the camera always moves, labels >= 1.8% of the frame height.
 - The cut face shows the inside clearly; motivated sounds only (engine.events.add); deterministic.
-The pipeline compiles the world's reference storyboard twice (with Max and with no hero), renders
-previews and MEASURES them (collisions, floating, Max's size, camera motion, flat surfaces, labels,
-must_see). Whatever fails comes back to you."""
+The pipeline compiles the world's Max reference storyboard and a separate linear no-hero build,
+renders previews and MEASURES them (collisions, floating, Max's size, camera motion, flat surfaces,
+labels, must_see). Whatever fails comes back to you."""
 
 
 def staging_prompt(d: dict, problems: str = None) -> str:
@@ -471,25 +482,40 @@ def staging_prompt(d: dict, problems: str = None) -> str:
 
 
 def check_staging(world: str) -> str:
-    """Compile the reference storyboard with and without a hero, preview and measure both. Returns the
-    problems as text ("" = verified). The two reference sets are not registered: they are the world's
-    regression films."""
+    """Compile the Max reference and a 9-step linear construction explainer, preview and measure both.
+    Returns the problems as text ("" = verified). These sets are unregistered regression films."""
     from agents import set_builder as sb
     from agents import storyboard as sbm
+    from agents.kit_planner import _linear_example
     ref = vocab.for_world(world).REFERENCE_STORYBOARD
+    linear = dict(_linear_example(world), hero=False)
     found = []
-    for hero, set_id in ((True, f"kitw_{world}_ref_story"), (False, f"kitw_{world}_ref_explainer")):
-        set_id = sbm.compile_set(dict(ref, hero=False) if not hero else ref, set_id)
+    for hero, storyboard, set_id in ((True, ref, f"kitw_{world}_ref_story"),
+                                     (False, linear, f"kitw_{world}_ref_explainer")):
+        set_id = sbm.compile_set(storyboard, set_id)
         work = os.path.join(PROJECT_ROOT, "output", "sets", set_id)
         os.makedirs(work, exist_ok=True)
+        who = "with Max" if hero else "no hero"
         err = sb.preview_render(set_id, work)
         if err:
-            found.append(f"{'with Max' if hero else 'no hero'}: Blender failed:\n{err[-2500:]}")
+            found.append(f"{who}: Blender failed:\n{err[-2500:]}")
             continue
-        measured = sb.qa_check(set_id, work)
+        try:
+            measured = sb.qa_check(set_id, work, strict=True)
+        except sb.KitDefect as exc:
+            found.append(f"{who}: {exc}")
+            continue
         fatal = [f"beat {b}: {x}" for b, items in sorted(measured.items()) for x in items if not sb._advisory(x)]
         if fatal:
-            found.append(f"{'with Max' if hero else 'no hero'}: " + "; ".join(fatal[:12]))
+            found.append(f"{who}: " + "; ".join(fatal[:12]))
+            continue
+        # composition, readability and whether the beat shows its story are judged by eye: the measured
+        # gates passed a world whose labels filled the frame and whose objects were out of view
+        rejected = [r for r in sb.review_preview(set_id, work) if not r.get("valid")]
+        if rejected:
+            found.append(f"{who}: the reviewer rejected " + "; ".join(
+                f"beat {r['beat']} [{r['action']}]: {'; '.join((r.get('fatal_problems') or r.get('problems') or [])[:2])}"
+                for r in rejected[:8]))
     return "\n".join(found)
 
 
@@ -546,14 +572,19 @@ def build_world(topic: str, design: dict = None, rounds: int = None, call=None) 
         objects_file = f"engine/kit/worlds/{world}_objects.py"
         status["stage"] = "objects"
         bad = None
+        # the vision look gets ONE repair round per world (remembered across resumes); after it the look is
+        # advisory: taste on quick isolated stills must not burn the budget the staging needs
+        looked = os.path.join(work, "look_repaired")
         for rnd in range(1, rounds + 1):
             if not os.path.exists(os.path.join(PROJECT_ROOT, objects_file)):
                 log.info(f"[kit world] '{world}': writing the {len(design['objects'])} objects")
                 claude_agent(objects_prompt(design), [objects_file], allow_edit=False, measure=False)
             elif bad:
                 log.info(f"[kit world] '{world}' round {rnd}: fixing {len(bad)} object(s): {', '.join(bad)}")
-                claude_agent(objects_prompt(design, bad), [objects_file], measure=False)
-            bad = check_objects(design, work)
+                claude_agent(objects_prompt(design, bad), [objects_file], allow_edit=False, measure=False)
+                if any(x.startswith("look:") for items in bad.values() for x in items):
+                    open(looked, "w").close()
+            bad = check_objects(design, work, look_fatal=not os.path.exists(looked))
             if not bad:
                 log.info(f"[kit world] '{world}': every object passed on its own")
                 break

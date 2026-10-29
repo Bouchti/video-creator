@@ -1,11 +1,11 @@
-"""
+r"""
 Autopilot: runs the whole 3D video pipeline unattended and repairs what goes wrong on its own.
 
     python main.py --source evolution                 # (uses the autopilot)
     python main.py --source cutaway                   # (uses the autopilot)
     python main.py --source explainer                 # (uses the autopilot; no-hero cutaway explainers)
-    python -m agents.autopilot --source evolution --angle "..." --set bridge_evolution
-    python -m agents.autopilot --resume output/autopilot/<run>.json   # continue an interrupted run
+    .\venv\Scripts\python.exe -m agents.autopilot --source evolution --angle "..." --set bridge_evolution
+    .\venv\Scripts\python.exe -m agents.autopilot --resume output/autopilot/<run>.json
 
 Stages and what happens when one fails:
 
@@ -63,6 +63,35 @@ def _enabled(name, default=True):
 
 class GiveUp(RuntimeError):
     """A failure the autopilot cannot repair (e.g. no voice credits left)."""
+
+
+def _project_python():
+    """The installed project interpreter, falling back to the one running us."""
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    executable = "python.exe" if os.name == "nt" else "python"
+    relative = os.path.join("venv", scripts, executable)
+    candidate = os.path.join(PROJECT_ROOT, relative)
+    return candidate if os.path.isfile(candidate) else sys.executable
+
+
+def _resume_command(path):
+    python = _project_python()
+    try:
+        python = os.path.relpath(python, PROJECT_ROOT)
+        if not python.startswith("."):
+            python = "." + os.sep + python
+    except ValueError:                                      # another Windows drive
+        python = f'& "{python}"'
+    return f'{python} -m agents.autopilot --resume "{path}"'
+
+
+def _require_runtime():
+    """Fail before paid work when the command used an interpreter without project dependencies."""
+    try:
+        import requests  # noqa: F401
+    except ModuleNotFoundError as exc:
+        raise GiveUp(f"project dependency '{exc.name or 'requests'}' is missing from {sys.executable}; "
+                     f"run this project with {_project_python()}") from exc
 
 
 # ------------------- run record -------------------
@@ -269,6 +298,9 @@ def stage_script(run, source, angle, set_id):
         except Exception as exc:                          # noqa: BLE001
             if _is_budget(exc):
                 raise GiveUp(str(exc)) from exc
+            if isinstance(exc, ModuleNotFoundError):
+                raise GiveUp(f"pipeline dependency/module '{exc.name or str(exc)}' is missing; retries cannot "
+                             f"install it. Run the pipeline with {_project_python()}") from exc
             from agents.set_builder import RepairNotApplied
             if isinstance(exc, RepairNotApplied):
                 # A set repair that changed nothing would get the same inputs again on a retry: stop instead.
@@ -491,6 +523,10 @@ def stage_check(run, video, film_json):
         if not problems:
             run.event("check", "final video checked: 1080x1920, audio, duration OK")
             return video
+        if len(problems) == 1 and problems[0].startswith("video is ") and _normalize_final_resolution(video):
+            run.event("check", "normalized the completed 9:16 video to 1080x1920",
+                      detail=problems[0])
+            continue
         run.event("check", f"final video has problems; rebuilding post-production (try {attempt})",
                   detail="; ".join(problems))
         args = argparse.Namespace(film=film_json, reuse_voice=True, preview=False, frames="", remix=True,
@@ -500,6 +536,32 @@ def stage_check(run, video, film_json):
     if problems:
         raise GiveUp(f"final video still invalid: {problems}")
     return video
+
+
+def _normalize_final_resolution(video):
+    """Upscale a completed 9:16 encode without rerendering thousands of Blender frames."""
+    from agents.media import FFMPEG, get_dimensions
+    try:
+        width, height = get_dimensions(video)
+    except Exception:                                     # noqa: BLE001  normal repair can still run
+        return False
+    if not width or not height or width * 16 != height * 9:
+        return False
+    tmp = os.path.splitext(video)[0] + ".normalized.tmp.mp4"
+    try:
+        result = subprocess.run([
+            FFMPEG, "-y", "-i", video, "-vf", "scale=1080:1920:flags=lanczos,setsar=1",
+            "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
+            "-c:a", "copy", "-movflags", "+faststart", tmp,
+        ], capture_output=True, text=True, timeout=1800)
+        if result.returncode:
+            log.warning(f"[autopilot] final resolution normalization failed: {result.stderr[-300:]}")
+            return False
+        os.replace(tmp, video)
+        return True
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def _cleanup_successful_work(film_json):
@@ -539,12 +601,30 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
     if resume_path:
         # A manual resume is a fresh repair session. Source may have been corrected between runs;
         # make that current version the new rollback baseline and renew the bounded attempt budget.
+        previous_error = r["error"]
         r.set(status="running", error=None, render_attempts=0, first_backup=None)
+        # Attempt three deliberately tries a fresh subject.  If all script attempts failed, that rejected
+        # subject must not replace an explicit angle on the next manual resume.
+        if previous_error and "no script could be written" in previous_error and r["angle"] and not r["film"]:
+            r.set(script_topic=None)
+        if previous_error and "final video still invalid" in previous_error and not r["video"] and r["film"]:
+            # Older runs did not persist the completed encode until after validation.  Recover it so a
+            # resolution-only failure can be repaired without rebuilding audio, captions, or Blender frames.
+            name = os.path.splitext(os.path.basename(r["film"]))[0]
+            candidate = os.path.join(get_output_dir(), f"{name}.mp4")
+            if os.path.isfile(candidate):
+                r.set(video=candidate, render_flagged=False)
     source, angle, set_id = r["source"] or source, r["angle"], r["set"]
     t0 = time.time()
     try:
+        _require_runtime()
         film_json = stage_script(r, source, angle, set_id)
-        video, flagged = stage_render(r, film_json)
+        if r["video"] and os.path.isfile(r["video"]):
+            video, flagged = r["video"], bool(r["render_flagged"])
+            r.event("render", "reusing the completed video for final validation", detail=os.path.basename(video))
+        else:
+            video, flagged = stage_render(r, film_json)
+            r.set(video=video, render_flagged=flagged)
         video = stage_check(r, video, film_json)
         if flagged:
             flagged_path = re.sub(r"\.mp4$", "_NEEDS_REVIEW.mp4", video)
@@ -561,7 +641,7 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
     except GiveUp as exc:
         r.set(status="failed", error=str(exc))
         log.error(f"[autopilot] STOPPED: {exc}\n  run log: {r.path}\n  continue later with: "
-                  f"python -m agents.autopilot --resume \"{r.path}\"")
+                  f"{_resume_command(r.path)}")
         raise
     except KeyboardInterrupt:
         r.set(status="interrupted", error="stopped by user")

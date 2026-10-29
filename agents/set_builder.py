@@ -750,9 +750,9 @@ simple, robust Blender geometry. Then write exactly these three files:
 Finish with a short summary of the visual ladder."""
 
 
-EXPLAINER_GUIDE = """HOW EXPLAINER SETS WORK. An explainer set is a Max story set WITHOUT a hero: one cut-open 3D
-diorama in which the camera follows how something is built or how it works, in physical order, each
-hidden problem made visible and answered by the real engineering fix (the format of channels like
+EXPLAINER_GUIDE = """HOW EXPLAINER SETS WORK. An explainer set is one cut-open 3D diorama with NO hero. The camera
+starts on the raw site and follows the real installation in physical order, one visible component at a
+time, until the complete system works (the format of channels like
 @youbuiltit). Everything you need is IN THIS PROMPT: the API REFERENCE at the end (every helper's
 signature and purpose, generated from the code) and the example spec. DO NOT open the engine modules
 or the reference sets to learn them: every file you read is re-sent with every later step and
@@ -767,24 +767,21 @@ engine/sets/pumped_storage_mountain_batt_story.py (grep a method by name; never 
 The spec is pure data, in the format of the example below, and must define SET_ID, FORMAT =
 "explainer", SUBJECT, MODEL_FACTS, BUILD_ORDER, ACTIONS, OVERLAY_TYPES, beat_actions(), min_seconds()
 and validate(). It must NOT define HERO. ACTIONS kinds:
-  * hook (2-3): staged on the FINISHED build, the most dramatic or surprising moment (one of them is
-    named exactly as the brief's hook action);
-  * rewind (exactly one, named "rewind", no method needed: make_film builds it from the frames);
-  * build (6-10, every one required, in BUILD_ORDER): the build steps in physical order; where the
-    brief names a hidden problem, the build action that answers it SHOWS the problem first (blue
-    arrows, water rising, a crack) and then the fix;
+  * NO hook action and NO rewind action. The first frame is the first construction step;
+  * build (8-12, every one required, in BUILD_ORDER): additive construction steps in real installation
+    order. Each adds one visible component or shows the new function unlocked by the component just
+    added. Never build a wrong version, stage a failure, undo work, repair it or try again;
   * explain (2-4, optional, with "after"): forces, flow, layers, the numbers made visible;
-  * outro (1-2, optional, last): the finished thing in use, with a little life.
-Every action needs kind, shows and seconds (min, max) except hooks and rewind. The validator must
-require a hook first, rewind second, every BUILD_ORDER action exactly once and in order, explainers
-after their prerequisite, outros last, and each action at most once.
+  * outro (exactly one, last): pull back to the finished thing in use.
+Every action needs kind, shows and seconds (min, max). The validator must
+require the first BUILD_ORDER action first, every BUILD_ORDER action exactly once and in order,
+explainers after their prerequisite, the outro last, and each action at most once.
 
 The Blender module defines one class whose name ends in Set. Its constructor is
 (scene, sun, fill, bg, total); it builds every model (hidden until its action reveals it) and owns a
 CameraRig. Its run(beats, spans, epilogue_offset) method flattens montage beats exactly like the
-example sets, plays every non-hook, non-rewind action through a_<action>(i, start, end), then stages
-the opening hook at start + epilogue_offset on the finished build, then calls rig.build(). Every
-action named by the spec except rewind needs a method. The class sets QA_ALLOW: a regex of
+example sets, plays every action forward through a_<action>(i, start, end), then calls rig.build(). Every
+action named by the spec needs a method. The class sets QA_ALLOW: a regex of
 "objA x objB" pairs that touch BY DESIGN (a pipe entering a wall); every other intersection is
 reported as a collision. People are optional extras (engine.character.Character) for scale and the
 finale only; nobody is a hero, nobody is harmed.
@@ -799,8 +796,8 @@ VISUAL RULES (the reference look: a clean, bright, semi-realistic diorama sliced
   groundwater as a blue band when the subject involves it).
 - The active subject is big and centred in the 9:16 frame; wide shots only briefly, to establish.
 - The camera always moves: never still for more than 2.5 s.
-- Every hidden problem is VISIBLE (big white or blue arrows for pressure, water rising, flow
-  stripes in clear pipes, cracks); every fix visibly answers it.
+- Every hidden mechanism is VISIBLE (arrows for pressure, water level, flow stripes in clear pipes,
+  layers separating). Show the correct component being installed and then doing its job; no disasters.
 - Short 3D labels and fact arrows only where they explain the mechanism, >= 1.8% of the frame
   height per line, fully inside the frame, up for >= 2 s and through the middle of their beat.
 - No narration, captions, lettering, watermarks or title cards in Blender.
@@ -814,21 +811,58 @@ VISUAL RULES (the reference look: a clean, bright, semi-realistic diorama sliced
   names is on screen at the beat's middle and at 7/8; screens show a picture, not blank white; time of
   day reads in the sky (studio.key_sky with the sun lamp).
 - The reference film JSON names this set, uses captions "word", voice "energetic", one beat per
-  required action (hook, rewind, every build action, any explainers/outro you want previewed),
-  140-192 spoken words, a <=13-word hook and a final short question to the viewer as the last
-  sentence plus "cta" with that question. It exists for preview validation; the showrunner writes
+  required action (every build action, any explainers and the outro), format "buildup", 140-192 spoken
+  words, a title shaped "How a <start> Becomes a <finished system>", an opening that starts "If you",
+  and a final "Congratulations, you've built a <thing>." Set cta to null. It exists for preview
+  validation; the showrunner writes
   the production script after the set passes. Numbers only from MODEL_FACTS.
 """
 
 
 def _example_explainer_spec():
-    p = os.path.join(PROJECT_ROOT, "engine", "sets", "pool_spec.py")
-    return open(p, encoding="utf-8").read() if os.path.isfile(p) else ""
+    """A small hookless example. The old pool spec contains hook/rewind actions for a legacy format and
+    made the coding agent copy the exact structure the explainer guide now forbids."""
+    return '''SET_ID = "utility_tunnel_explainer"
+FORMAT = "explainer"
+SUBJECT = "a utility tunnel built under a street, shown in cutaway"
+MODEL_FACTS = {"depth": "the model is 4 m below the street"}
+BUILD_ORDER = ["excavate", "base", "walls", "pipes", "restore_street"]
+ACTIONS = {
+    "excavate": {"kind": "build", "shows": "The street opens and the trench is excavated.", "seconds": (4, 7)},
+    "base": {"kind": "build", "shows": "A level gravel and concrete base builds upward.", "seconds": (4, 7)},
+    "walls": {"kind": "build", "shows": "Precast wall sections lower onto the base.", "seconds": (4, 7)},
+    "pipes": {"kind": "build", "shows": "Colour-coded utility pipes install on brackets.", "seconds": (4, 7)},
+    "restore_street": {"kind": "build", "shows": "The roof, soil and road surface close the cutaway.", "seconds": (4, 7)},
+    "working_system": {"kind": "outro", "shows": "The camera pulls back over the finished working street.",
+                       "seconds": (3, 6)},
+}
+OVERLAY_TYPES = {"stat": "a sourced number", "label": "a component name"}
+
+def beat_actions(beat):
+    return list(beat.get("actions") or [beat.get("action")])
+
+def min_seconds(beat):
+    return sum(ACTIONS.get(a, {}).get("seconds", (0, 0))[0] for a in beat_actions(beat))
+
+def validate(beats):
+    acts = [a for beat in beats for a in beat_actions(beat)]
+    errors = []
+    build = [a for a in acts if ACTIONS.get(a, {}).get("kind") == "build"]
+    if build != BUILD_ORDER:
+        errors.append(f"build in order: {BUILD_ORDER}")
+    if not acts or acts[0] != BUILD_ORDER[0]:
+        errors.append("beat 1 is the first build step")
+    if any(ACTIONS.get(a, {}).get("kind") in ("hook", "rewind", "fail", "fix") for a in acts):
+        errors.append("linear explainers have no hook, rewind or fail/fix actions")
+    if len(set(acts)) != len(acts):
+        errors.append("each action is used once")
+    return errors
+'''
 
 
 def explainer_design_prompt(subject, set_id, hook_action=None):
-    hook = (f"\nOne hook action must be named exactly `{hook_action}` (the showrunner opens the video with it)."
-            if hook_action else "")
+    hook = (f"\nThe first build action must be named exactly `{hook_action}` (the video starts on it; it is NOT a "
+            "finished-state hook)." if hook_action else "")
     return f"""Create a completely new 3D cutaway EXPLAINER set (no hero).
 
 Set id: {set_id}
@@ -1043,8 +1077,10 @@ def fake_timings(film: dict, path: str):
 
 def _preview_fingerprint(set_id: str, runner: str, story: bool) -> str:
     """Hash every input that can change preview pixels, so unchanged previews are reusable."""
-    paths = set(glob.glob(os.path.join(PROJECT_ROOT, "engine", "*.py")))
-    paths.update(glob.glob(os.path.join(PROJECT_ROOT, "engine", "films", "*.py")))
+    # Kit sets import their staging and object builders from engine/kit/worlds.  Hashing only
+    # engine/*.py left those nested modules out, so a repair could change the scene while both the
+    # preview and its QA report were incorrectly reused forever.
+    paths = set(glob.glob(os.path.join(PROJECT_ROOT, "engine", "**", "*.py"), recursive=True))
     paths.update(os.path.join(PROJECT_ROOT, p) for p in _files(set_id))
     paths.add(runner)
     h = hashlib.sha256()
@@ -1087,8 +1123,13 @@ def preview_render(set_id, work) -> str:
     story = bool(getattr(spec, "HERO", None)) or getattr(spec, "FORMAT", "") == "explainer"
     runner = os.path.join(PROJECT_ROOT, "engine", "films",
                           "cutaway_film.py" if story else "evolution_film.py")
-    os.environ.setdefault("CUT_PCT" if story else "EVO_PCT", "50")
-    os.environ.setdefault("CUT_SAMPLES" if story else "EVO_SAMPLES", "16")
+    # Preview quality belongs only to the Blender child.  Mutating os.environ here leaked CUT_PCT=50
+    # into the later production render in the same autopilot process, silently making 540x960 finals.
+    pct_key = "CUT_PCT" if story else "EVO_PCT"
+    samples_key = "CUT_SAMPLES" if story else "EVO_SAMPLES"
+    preview_env = dict(os.environ)
+    preview_env.setdefault(pct_key, "50")
+    preview_env.setdefault(samples_key, "16")
     fingerprint = _preview_fingerprint(set_id, runner, story)
     manifest_path = os.path.join(work, "preview_manifest.json")
     try:
@@ -1102,7 +1143,7 @@ def preview_render(set_id, work) -> str:
         os.remove(p)
     try:
         _run_blender([BLENDER, "--background", "--factory-startup", "--python", runner, "--", film_json, timings,
-                      work, "--preview"])
+                      work, "--preview"], env=preview_env)
     except RuntimeError as exc:
         return str(exc)[-4000:]
     if not _complete_preview(work, film, spec):
@@ -1127,11 +1168,13 @@ def _advisory(text):
     return text.startswith("collision:") and not _CORE.search(text)
 
 
-def qa_check(set_id, work) -> dict:
+def qa_check(set_id, work, strict=False) -> dict:
     """The MEASURED quality gates (engine/qa.py run on the staged preview scene, no rendering):
     collisions, floating characters, Max's on-screen size, camera motion, flat untextured surfaces,
     label size/crops, coplanar (flickering) faces, squashed bump, live booleans.
-    Returns {beat_number: [issue, ...]} (0 = whole set). Reused while the preview is unchanged."""
+    Returns {beat_number: [issue, ...]} (0 = whole set). Reused while the preview is unchanged.
+    strict=True (kit sets and worlds, which have no vision gate to fall back on) raises KitDefect when the
+    measurement itself fails: a measurement that never ran is not a pass."""
     import importlib
 
     from engine.make_film import BLENDER, _run_blender
@@ -1160,6 +1203,10 @@ def qa_check(set_id, work) -> dict:
                           _film_file(set_id), os.path.join(work, "timings.json"), work, "--qa"])
             rep = json.load(open(qa_path, encoding="utf-8"))
         except (RuntimeError, OSError, ValueError) as exc:
+            if strict:
+                text = str(exc)
+                raise KitDefect(f"the measured gates could not run on '{set_id}': "
+                                f"{text[text.rfind('Traceback'):] if 'Traceback' in text else text[-1500:]}") from exc
             log.warning(f"[set_builder] scene measurement failed ({str(exc)[-300:]}); vision review only")
             return {}
         rep["fingerprint"] = fingerprint
@@ -1496,14 +1543,15 @@ def _restore(files, folder):
 
 
 def _hook_check(set_id, hook_action) -> list:
-    """The topic plan opens on this hook: the set must offer it as a hook action."""
+    """The topic plan opens on this construction action: it must be the first required build step."""
     code = (f"from engine.sets import {set_id}_spec as sp; a = sp.ACTIONS.get({hook_action!r}) or {{}}; "
-            "print(a.get('kind', ''))")
+            f"print(a.get('kind', '') + '|' + str(bool(getattr(sp, 'BUILD_ORDER', []) and "
+            f"sp.BUILD_ORDER[0] == {hook_action!r})))")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=PROJECT_ROOT)
-    if r.returncode == 0 and r.stdout.strip().splitlines()[-1:] == ["hook"]:
+    if r.returncode == 0 and r.stdout.strip().splitlines()[-1:] == ["build|True"]:
         return []
-    return [f"the spec must define a hook action named exactly '{hook_action}' (kind \"hook\"): the planned "
-            "video opens with it"]
+    return [f"the spec must define '{hook_action}' as the FIRST BUILD_ORDER action (kind \"build\"): the "
+            "linear video starts there, with no hook replay"]
 
 
 def build_explainer_set(subject: str, set_id: str = None, rounds: int = 4, hook_action: str = None) -> dict:
@@ -1537,23 +1585,31 @@ def build_kit_set(plan: dict) -> dict:
     err = preview_render(set_id, work)
     if err:
         raise KitDefect(f"the kit failed to render '{set_id}' (a kit bug, fix engine/kit):\n{err[-1500:]}")
-    measured = qa_check(set_id, work)
+    measured = qa_check(set_id, work, strict=True)
     fatal = {b: [x for x in items if not _advisory(x)] for b, items in measured.items()}
     fatal = {b: items for b, items in fatal.items() if items}
     if fatal:
         lines = "; ".join(f"beat {b}: {x}" for b, items in sorted(fatal.items()) for x in items[:3])
         raise KitDefect(f"the kit's render of '{set_id}' fails the measured gates (a kit bug, fix engine/kit): "
                         f"{lines[:1500]}")
+    # The hand-built embankment was looked at by people; a world an agent built (agents/kit_world.py) was
+    # not, and the measured gates cannot judge composition: there the vision review decides (the 2026-10-28
+    # septic world passed every measurement with labels filling the frame and its objects out of view).
+    hand_built = sb.get("world") == "embankment"
     review = []
-    if os.getenv("KIT_VISION_CHECK", "1") == "1":
+    if os.getenv("KIT_VISION_CHECK", "1") == "1" or not hand_built:
         try:
             review = [{"beat": r["beat"], "action": r["action"], "problems": r.get("fatal_problems") or []}
                       for r in review_preview(set_id, work) if not r.get("valid")]
         except Exception as exc:                          # noqa: BLE001  advisory: never blocks the video
             from agents.showrunner import BudgetExceeded, UsageLimit
-            if isinstance(exc, (BudgetExceeded, UsageLimit)):
+            if isinstance(exc, (BudgetExceeded, UsageLimit)) or not hand_built:
                 raise
             log.warning(f"[kit] advisory vision check unavailable: {exc}")
+        if review and not hand_built:
+            lines = "; ".join(f"beat {r['beat']} [{r['action']}]: {'; '.join(r['problems'][:2])}" for r in review)
+            raise KitDefect(f"the '{sb.get('world')}' world films '{set_id}' badly (the reviewer rejected "
+                            f"{len(review)} beat(s)); repair the world with agents/kit_world.py: {lines[:1500]}")
         for r in review:
             log.warning(f"[kit] reviewer note (advisory) beat {r['beat']} [{r['action']}]: {r['problems'][:2]}")
     sheet = contact_sheet(work, os.path.join(work, "contact_sheet.png"))
@@ -1651,7 +1707,7 @@ def main():
     ap.add_argument("--rounds", type=int, default=int(os.getenv("SET_BUILD_ROUNDS") or "4"))
     ap.add_argument("--story", action="store_true", help="build a Max cutaway story instead of evolution")
     ap.add_argument("--explainer", action="store_true", help="build a no-hero cutaway explainer set")
-    ap.add_argument("--hook", default=None, help="hook action the explainer set must offer (with --explainer)")
+    ap.add_argument("--hook", default=None, help="first build action the explainer must start on (with --explainer)")
     ap.add_argument("--fix", default=None, help="fix an existing set from a scene_review.json (with --report)")
     ap.add_argument("--report", default=None, help="scene_review.json whose rejected windows to fix")
     ap.add_argument("--measure", default=None, help="print the measured quality problems of a story set")

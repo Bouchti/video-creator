@@ -71,8 +71,17 @@ class BuildupTests(unittest.TestCase):
         self.assertIn("Congratulations", rules)
         topic = {"set": "pool", "hook_line": "If you dig a hole and fill it, you have a pool.", "hook_action": "dig"}
         self.assertIn("OPENING IDEA", sr._hook_idea(topic))
-        self.assertIn("[dig] If you dig", sr._tone_example("pool"))
+        self.assertIn("[dig] If you carve", sr._tone_example("pool"))
         self.assertIs(sr._directions("pool"), buildup.DIRECTIONS)
+
+    def test_title_promises_a_visible_transformation(self):
+        bad = json.loads(json.dumps(self.script))
+        bad["title"] = "The Secret Danger Under Your Pool"
+        self.assertTrue(any("title must use" in p for p in sr.hard_checks(bad, "pool")))
+
+    def test_failure_retry_language_is_rejected(self):
+        bad = _with(self.script, 2, "The first attempt failed, so rewind and repair the gravel bed.")
+        self.assertTrue(any("no failure" in p for p in sr.hard_checks(bad, "pool")))
 
     def test_hook_mode_never_takes_the_buildup_film_as_tone(self):
         with patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"}):

@@ -148,12 +148,32 @@ class ScriptAndCheckTests(_Env):
                 ap.stage_script(self.run, "evolution", None, None)
         self.assertEqual(len(calls), 1)
 
+    def test_missing_dependency_fails_fast_instead_of_consuming_script_attempts(self):
+        calls = []
+
+        def write(angle=None, set_id=None, render=True):
+            calls.append(1)
+            raise ModuleNotFoundError("No module named 'requests'", name="requests")
+
+        with patch("agents.evolution_writer.run", write):
+            with self.assertRaisesRegex(ap.GiveUp, "dependency/module 'requests' is missing"):
+                ap.stage_script(self.run, "evolution", "my angle", None)
+        self.assertEqual(calls, [1])
+
     def test_bad_final_video_is_rebuilt(self):
         probes = [["no audio stream"], []]
         produce, calls = self._produce([self.video])
         with patch.object(ap, "probe", lambda p: probes.pop(0)), patch.object(mf, "produce", produce):
             ap.stage_check(self.run, self.video, self.film)
         self.assertTrue(calls[0].remix)
+
+    def test_half_resolution_final_is_normalized_without_rerendering(self):
+        probes = [["video is 540x960, not 1080x1920"], []]
+        with patch.object(ap, "probe", side_effect=lambda p: probes.pop(0)), \
+                patch.object(ap, "_normalize_final_resolution", return_value=True) as normalize, \
+                patch.object(mf, "produce", side_effect=AssertionError("must not rerender")):
+            self.assertEqual(ap.stage_check(self.run, self.video, self.film), self.video)
+        normalize.assert_called_once_with(self.video)
 
     def test_cutaway_forwards_set_and_does_not_retry_consumed_subject(self):
         from agents.showrunner import NoUnusedStorySets
@@ -289,6 +309,40 @@ class ScriptAndCheckTests(_Env):
         again = ap.Run(self.run.path)
         self.assertEqual(again["render_attempts"], 0)
         self.assertIsNone(again["first_backup"])
+
+    def test_resume_after_all_script_attempts_discards_the_rejected_fallback_topic(self):
+        self.run.set(angle="how a septic tank works", error="no script could be written after 3 attempts",
+                     script_topic={"title": "Why the Pool Hole Looks Too Big", "set": "pool"})
+
+        def script(run, *_args):
+            self.assertIsNone(run["script_topic"])
+            return self.film
+
+        with patch.object(ap, "stage_script", side_effect=script), \
+                patch.object(ap, "stage_render", return_value=(self.video, False)), \
+                patch.object(ap, "stage_check", return_value=self.video), \
+                patch.object(ap, "write_notes", return_value=self.video + ".txt"), \
+                patch.object(ap, "_cleanup_successful_work"):
+            ap.run(resume_path=self.run.path)
+
+    def test_resume_command_uses_the_project_interpreter(self):
+        command = ap._resume_command(self.run.path)
+        self.assertIn(os.path.join("venv", "Scripts", "python.exe"), command)
+        self.assertIn(self.run.path, command)
+
+    def test_resume_after_final_check_failure_reuses_the_completed_encode(self):
+        film = os.path.join(self.tmp, "finished.json")
+        video = os.path.join(self.tmp, "finished.mp4")
+        open(film, "w").write("{}")
+        open(video, "w").write("video")
+        self.run.set(film=film, error="final video still invalid: 540x960")
+        with patch.object(ap, "get_output_dir", return_value=self.tmp), \
+                patch.object(ap, "stage_script", return_value=film), \
+                patch.object(ap, "stage_render", side_effect=AssertionError("must not rebuild")), \
+                patch.object(ap, "stage_check", return_value=video), \
+                patch.object(ap, "write_notes", return_value=video + ".txt"), \
+                patch.object(ap, "_cleanup_successful_work"):
+            self.assertEqual(ap.run(resume_path=self.run.path), video)
 
     def test_success_cleanup_removes_only_reproducible_frame_caches(self):
         work = os.path.join(self.tmp, "f_work")

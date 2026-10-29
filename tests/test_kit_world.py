@@ -133,18 +133,52 @@ class DesignTests(_WorldFiles):
         self.assertEqual(v.WORLD_CLASS, (f"engine.kit.worlds.{WORLD}", "SepticTankTestWorld"))
         ref = v.REFERENCE_STORYBOARD
         self.assertEqual(sbm.validate(ref), [])
+        linear = dict(kit_planner._linear_example(WORLD), hero=False)
+        self.assertEqual(sbm.validate(linear), [])
         root = tempfile.mkdtemp()
         for folder in ("engine/sets", "engine/films"):
             os.makedirs(os.path.join(root, folder))
-        set_id = sbm.compile_set(dict(ref, hero=False), "kitw_test_explainer", root=root)
+        set_id = sbm.compile_set(linear, "kitw_test_explainer", root=root)
         builder = open(os.path.join(root, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
         self.assertIn(f"from engine.kit.worlds.{WORLD} import SepticTankTestWorld", builder)
         self.assertIn("a big bucket sinks into the ground", kit_planner.vocabulary(False, WORLD))
-        self.assertEqual(kit_planner.plan_schema(WORLD)["properties"]["storyboard"]["properties"]["world"]["enum"],
+        self.assertEqual(kit_planner.plan_schema(WORLD, hero=False)["properties"]["storyboard"]["properties"]["world"]["enum"],
                          [WORLD])
+
+    def test_no_hero_schema_is_linear_and_has_no_failure_kinds(self):
+        self.assertEqual(kit_world.write_vocab(design()), [])
+        worlds.REGISTERED.append(WORLD)
+        schema = kit_planner.plan_schema(WORLD, hero=False)["properties"]["storyboard"]
+        kinds = schema["properties"]["steps"]["items"]["properties"]["kind"]["enum"]
+        self.assertEqual(kinds, ["build", "finale"])
+        prompt = kit_planner.vocabulary(False, WORLD)
+        self.assertIn("exactly 9-13 additive construction steps", prompt)
+        self.assertIn("hooks: [] exactly", prompt)
+        self.assertNotIn("bucket_cracks [fail]", prompt)
 
     def test_a_storyboard_in_an_unknown_world_is_refused(self):
         self.assertTrue(any("world must be one of" in p for p in sbm.validate(dict(sbm.LEVEE, world="moon"))))
+
+    def test_explainer_planner_returns_a_hookless_linear_build(self):
+        linear = kit_planner._linear_example("embankment")
+        plan = {"title": linear["title"], "angle": "how levees are built",
+                "hook_line": "If you raise compacted earth, you have the start of a levee.",
+                "hook_action": "wrong_finished_hook", "payoff": "a dry yard", "trend_signal": "flood season",
+                "trend_source_url": "https://example.test/flood", "fact_sheet": "- sourced fact",
+                "storyboard": linear}
+        seen = {}
+
+        def call(style, prompt, schema, **kwargs):
+            seen.update(style=style, prompt=prompt, schema=schema)
+            return copy.deepcopy(plan)
+
+        out = kit_planner.plan_kit_explainer(angle="how levees are built", call=call, world="embankment")
+        self.assertFalse(out["storyboard"]["hero"])
+        self.assertEqual(out["storyboard"]["hooks"], [])
+        self.assertEqual(out["hook_action"], out["storyboard"]["steps"][0]["id"])
+        self.assertTrue(all(s["kind"] == "build" for s in out["storyboard"]["steps"][:-1]))
+        self.assertIn("Never stage the wrong version failing", seen["prompt"])
+        self.assertIn("continuous, satisfying construction sequence", seen["style"])
 
 
 class BuildWorldTests(_WorldFiles):
@@ -174,7 +208,7 @@ class BuildWorldTests(_WorldFiles):
         written, order = [], []
         results = [{f"{WORLD}_tank": ["size: z is 4.00 m, the design says 1.60 m"]}, {}]
 
-        def objects(d, work):
+        def objects(d, work, look_fatal=True):
             order.append("objects")
             return results.pop(0)
 
@@ -206,6 +240,25 @@ class BuildWorldTests(_WorldFiles):
         kit_world.register_world.assert_not_called()
         self.assertNotIn(WORLD, worlds.REGISTERED)
 
+    def test_the_look_gets_one_repair_round_then_only_notes(self):
+        seen, written = [], []
+
+        def objects(d, work, look_fatal=True):
+            seen.append(look_fatal)
+            return {f"{WORLD}_ground": ["look: layers in the wrong order"]} if look_fatal else {}
+
+        with patch.object(sb, "claude_agent", self._agent(written)), \
+                patch.object(kit_world, "check_objects", objects), \
+                patch.object(kit_world, "check_staging", return_value=""):
+            status = kit_world.build_world("septic tanks", design=design())
+        self.assertTrue(status["accepted"])
+        self.assertEqual(seen, [True, False])                   # one look repair, then advisory
+        self.assertEqual(len(written), 3)                       # write objects, one look fix, staging
+
+    def test_object_check_reports_success_the_way_blender_runs_are_judged(self):
+        src = open(os.path.join(os.path.dirname(kit_world.WORLDS_DIR), "object_check.py"), encoding="utf-8").read()
+        self.assertIn('print("DONE")', src)                    # make_film._run_blender needs it
+
     def test_ensure_world_reuses_a_world_that_fits(self):
         with patch.object(kit_world, "world_for", return_value="embankment"), \
                 patch.object(kit_world, "build_world", side_effect=AssertionError("rebuilt")):
@@ -219,6 +272,70 @@ class BuildWorldTests(_WorldFiles):
                 patch.object(kit_world, "world_for", return_value=None):
             with self.assertRaises(kit_world.WorldNotBuilt):
                 kit_world.ensure_world("septic tanks")
+
+
+class GeneratedWorldGateTests(_WorldFiles):
+    """A world an agent built is judged by eye as well: the measured gates passed the 2026-10-28 septic world
+    with labels filling the frame and its objects out of view."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        for folder in ("engine/sets", "engine/films", "output/sets"):
+            os.makedirs(os.path.join(self.root, folder))
+        open(os.path.join(self.root, "engine", "sets", "__init__.py"), "w").write('EXPLAINER = ["pool"]\n')
+        self.assertEqual(kit_world.write_vocab(design()), [])
+        worlds.REGISTERED.append(WORLD)
+        self.sb = dict(kit_planner._linear_example(WORLD), hero=False)
+        self.p = [patch.object(sb, "PROJECT_ROOT", self.root), patch.object(sbm, "PROJECT_ROOT", self.root),
+                  patch.object(sb, "contact_sheet", return_value=None),
+                  patch.object(sb, "preview_render", return_value=""), patch.object(sb, "qa_check", return_value={})]
+        for x in self.p:
+            x.start()
+
+    def tearDown(self):
+        for x in self.p:
+            x.stop()
+        shutil.rmtree(self.root, ignore_errors=True)
+        super().tearDown()
+
+    def test_a_rejected_beat_in_a_generated_world_stops_the_set(self):
+        notes = [{"beat": 3, "action": "fail_bucket", "valid": False, "fatal_problems": ["label fills the frame"]}]
+        with patch.dict(os.environ, {"KIT_VISION_CHECK": "0"}), patch.object(sb, "review_preview", return_value=notes):
+            with self.assertRaisesRegex(sb.KitDefect, "label fills the frame"):
+                sb.build_kit_set({"storyboard": self.sb, "set_id": "kit_septic_explainer"})
+        self.assertNotIn("kit_septic_explainer", open(os.path.join(self.root, "engine", "sets", "__init__.py")).read())
+
+    def test_the_hand_built_embankment_keeps_an_advisory_look(self):
+        notes = [{"beat": 3, "action": "promise", "valid": False, "fatal_problems": ["duck small"]}]
+        with patch.object(sb, "review_preview", return_value=notes):
+            status = sb.build_kit_set({"storyboard": sbm.LEVEE, "set_id": "kit_x_story"})
+        self.assertTrue(status["accepted"])
+
+    def test_a_staging_the_reviewer_rejects_is_sent_back(self):
+        rejected = [{"beat": 2, "action": "fail_bucket", "valid": False, "fatal_problems": ["the tank is out of view"]}]
+        with patch.object(sb, "review_preview", return_value=rejected):
+            problems = kit_world.check_staging(WORLD)
+        self.assertIn("the tank is out of view", problems)
+        self.assertIn("with Max", problems)
+        self.assertIn("no hero", problems)
+
+
+class StrictMeasurementTests(unittest.TestCase):
+    def test_a_measurement_that_never_ran_is_not_a_pass_for_kit_sets(self):
+        work = tempfile.mkdtemp()
+        json.dump({"fingerprint": "f"}, open(os.path.join(work, "preview_manifest.json"), "w"))
+        import types
+        spec = types.ModuleType("engine.sets.x_explainer_spec")
+        spec.FORMAT = "explainer"
+
+        def blender(cmd, watcher=None, env=None):
+            raise RuntimeError("Traceback (most recent call last):\nNameError: name 'tank' is not defined")
+        with patch.dict(sys.modules, {"engine.sets.x_explainer_spec": spec}), \
+                patch("engine.make_film._run_blender", blender), \
+                patch.object(sb, "_film_file", return_value="film.json"):
+            self.assertEqual(sb.qa_check("x_explainer", work), {})              # other sets: vision review only
+            with self.assertRaisesRegex(sb.KitDefect, "NameError"):
+                sb.qa_check("x_explainer", work, strict=True)
 
 
 class PrepareTests(unittest.TestCase):

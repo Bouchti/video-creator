@@ -7,9 +7,9 @@ QA all work on it unchanged. No Blender code is written per video, and nothing h
     problems = validate(storyboard)        # [] = renderable
     set_id = compile_set(storyboard)       # writes engine/sets/<set_id>_spec.py and <set_id>.py
 
-A storyboard with "hero": false is a no-hero explainer (agents/explainer.py): the same ladder filmed
-with nobody in it, compiled into an explainer spec (FORMAT "explainer", no HERO) that the explainer
-writer and its build-up voice use.
+A storyboard with "hero": false is a no-hero linear construction explainer
+(agents/explainer.py): the site changes one real component at a time, with no staged mistakes,
+failure loop, finished-state hook or rewind.
 """
 import json
 import os
@@ -23,7 +23,7 @@ _ID = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
 S = {"type": "string"}
 
 
-def schema(world: str = vocab.WORLD) -> dict:
+def schema(world: str = vocab.WORLD, hero: bool = True) -> dict:
     """The storyboard schema for one world: its changes, events and weather are the only choices."""
     v = vocab.for_world(world)
     return {
@@ -40,7 +40,8 @@ def schema(world: str = vocab.WORLD) -> dict:
             "steps": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "required": ["id", "kind", "change", "event", "weather", "label"],
-                "properties": {"id": S, "kind": {"type": "string", "enum": list(v.STEP_KINDS)},
+                "properties": {"id": S, "kind": {"type": "string", "enum":
+                               (["build", "finale"] if not hero else list(v.STEP_KINDS))},
                                "change": {"type": "string", "enum": list(v.CHANGES)},
                                "event": {"type": "string", "enum": list(v.EVENTS)},
                                "weather": {"type": "string", "enum": list(v.WEATHER)},
@@ -57,6 +58,10 @@ SCHEMA = schema()                       # the embankment's
 
 def has_hero(sb: dict) -> bool:
     return sb.get("hero", True) is not False
+
+
+def is_linear(sb: dict) -> bool:
+    return not has_hero(sb)
 
 
 def world_vocab(sb: dict):
@@ -79,9 +84,14 @@ def validate(sb: dict) -> list:
         return p + [f"world must be one of {vocab.worlds()}"]
     calm, thing = v.CALM, v.THING
     steps = sb.get("steps") or []
-    if not 5 <= len(steps) <= 11:
+    if is_linear(sb):
+        if not 9 <= len(steps) <= 13:
+            p.append(f"{len(steps)} steps; a linear explainer has 9-13 additive build steps including the finale")
+    elif not 5 <= len(steps) <= 11:
         p.append(f"{len(steps)} steps; a story has 5-11 (setup, fail/fix pairs, finale)")
-    ids = [s.get("id", "") for s in steps] + [h.get("id", "") for h in sb.get("hooks") or []] + ["rewind"]
+    ids = [s.get("id", "") for s in steps] + [h.get("id", "") for h in sb.get("hooks") or []]
+    if has_hero(sb):
+        ids.append("rewind")
     bad = [i for i in ids if not _ID.match(i or "")]
     if bad:
         p.append(f"ids must be snake_case 3-31 characters: {bad}")
@@ -90,10 +100,10 @@ def validate(sb: dict) -> list:
     if has_hero(sb):
         if steps and (steps[0].get("kind") != "setup" or steps[0].get("event") != calm):
             p.append(f"the first step must be kind 'setup' with event '{calm}' (the promise on a calm day)")
-    elif steps and steps[0].get("kind") not in ("setup", "fail") or \
-            steps and steps[0].get("kind") == "setup" and steps[0].get("event") != calm:
-        # an explainer may open on the crudest build itself ("If you pile sand ..., you have a levee")
-        p.append(f"the first step must be the first fail (the crudest build) or a 'setup' with event '{calm}'")
+    elif steps and (steps[0].get("kind") != "build" or steps[0].get("change") != v.FIRST_BUILD):
+        p.append(f"the first step must build '{v.FIRST_BUILD}' from the empty site")
+    if is_linear(sb) and any(s.get("kind") not in ("build", "finale") for s in steps):
+        p.append("a linear explainer uses only additive 'build' steps and one final 'finale'; no setup/fail/fix")
     if any(s.get("kind") == "setup" for s in steps[1:]):
         p.append("only the first step can be a setup")
     if steps and steps[-1].get("kind") != "finale":
@@ -124,6 +134,17 @@ def validate(sb: dict) -> list:
         missing = [n for n in ev.get("needs", []) if n not in built]
         if missing:
             p.append(f"{where}: event '{event}' needs {missing} built in this or an earlier step")
+        if is_linear(sb) and change not in ("none", v.FIRST_BUILD):
+            added = set(ch.get("adds", []))
+            linked = [name for name, candidate in v.EVENTS.items()
+                      if candidate["outcome"] == "hold" and added & set(candidate.get("needs", []))]
+            if not linked:
+                p.append(f"{where}: '{change}' has no holding event that can visibly demonstrate it; omit this "
+                         "change from the linear explainer")
+            elif event not in linked:
+                p.append(f"{where}: pair '{change}' with a working event that visibly uses what it adds: {linked}")
+        if kind == "build" and ev["outcome"] != "hold":
+            p.append(f"{where}: a linear build step must show the new component working, not a staged failure")
         if kind == "fail" and ev["outcome"] != "fail":
             p.append(f"{where}: a fail step needs a failing event, not '{event}'")
         if kind in ("fix", "finale") and ev["outcome"] != "hold":
@@ -139,16 +160,22 @@ def validate(sb: dict) -> list:
         label = s.get("label") or ""
         if len(label) > v.LABEL_MAX:
             p.append(f"{where}: label '{label}' is over {v.LABEL_MAX} characters")
-        if kind in ("fail", "fix") and not label.strip():
-            p.append(f"{where}: fail and fix steps name their idea in a short label")
+        if kind in ("build", "fail", "fix") and not label.strip():
+            p.append(f"{where}: build, fail and fix steps name their visible component in a short label")
     step_ids = {s.get("id"): s for s in steps}
     hooks = sb.get("hooks") or []
-    if not 1 <= len(hooks) <= 2:
-        p.append("give 1-2 hooks (a step replayed first, before the rewind)")
-    for h in hooks:
-        target = step_ids.get(h.get("step"))
-        if target is None or target.get("kind") not in ("fail", "finale"):
-            p.append(f"hook '{h.get('id')}' must replay a fail step or the finale")
+    if is_linear(sb):
+        if hooks:
+            p.append("a linear explainer has hooks: [] because the build starts immediately and never rewinds")
+        if not re.match(r"^How .+ Becomes? .+", str(sb.get("title") or ""), re.I):
+            p.append("a linear explainer title must use 'How a <start> Becomes a <finished thing>'")
+    else:
+        if not 1 <= len(hooks) <= 2:
+            p.append("give 1-2 hooks (a step replayed first, before the rewind)")
+        for h in hooks:
+            target = step_ids.get(h.get("step"))
+            if target is None or target.get("kind") not in ("fail", "finale"):
+                p.append(f"hook '{h.get('id')}' must replay a fail step or the finale")
     return p
 
 
@@ -175,8 +202,9 @@ def spec_source(sb: dict, set_id: str) -> str:
                             "must_see": must_see(s["event"]),
                             "extras": v.GAG_DOES.get(s["event"], "") if gag else "",
                             "seconds": v.SECONDS["hook"], "replays": s["id"]}
-    actions["rewind"] = {"kind": "rewind", "shows": "Freeze frame, record scratch, the story plays BACKWARDS (VHS look) "
-                                                    "to the calm day where it starts."}
+    if hero:
+        actions["rewind"] = {"kind": "rewind", "shows": "Freeze frame, record scratch, the story plays BACKWARDS "
+                                                        "(VHS look) to the calm day where it starts."}
     for s in sb["steps"]:
         ev = v.EVENTS[s["event"]]
         does = v.CHANGES[s["change"]]["does"] if hero else v.BUILT[s["change"]]
@@ -184,7 +212,8 @@ def spec_source(sb: dict, set_id: str) -> str:
         kind = {"setup": "story", "finale": "story"}.get(s["kind"], s["kind"])
         actions[s["id"]] = {"kind": kind, "shows": shows, "must_see": must_see(s["event"]),
                             "extras": v.GAG_DOES.get(s["event"], "") if gag else "",
-                            "seconds": v.SECONDS[s["kind"]], "label": (s.get("label") or "").upper()}
+                            "seconds": v.SECONDS.get(s["kind"], v.SECONDS.get("fix", (5, 9))),
+                            "label": (s.get("label") or "").upper()}
     facts = {f["name"]: f["fact"] for f in sb.get("model_facts") or []}
     for s in sb["steps"]:
         if s.get("label"):
@@ -206,7 +235,7 @@ for _a in ACTIONS.values():
     if "seconds" in _a:
         _a["seconds"] = tuple(_a["seconds"])
 
-beat_actions, min_seconds, validate = make_rules(ACTIONS, STORY_ORDER)
+beat_actions, min_seconds, validate = make_rules(ACTIONS, STORY_ORDER, hookless={not hero!r})
 '''
 
 
@@ -231,6 +260,28 @@ def reference_film(sb: dict, set_id: str) -> dict:
     hero = has_hero(sb)
     v = world_vocab(sb)
     lines = v.REFERENCE_LINES
+    if not hero:
+        beats = []
+        thing = str(v.THING).strip()
+
+        def short(text, words):
+            return " ".join(str(text).strip().rstrip(".").split()[:words])
+
+        for k, s in enumerate(sb["steps"]):
+            ev = v.EVENTS[s["event"]]
+            built = short(v.BUILT[s["change"]] if s["change"] != "none"
+                          else "the camera follows the working system", 8)
+            lesson = short(ev.get("teaches") or "the new stage is visible in section", 6)
+            if k == 0:
+                text = f"If you begin with an empty site, {built.lower()}. You have the start of a {thing}. {lesson}."
+            elif s["kind"] == "finale":
+                text = f"Now all the installed parts work together. Congratulations, you've built a {thing}."
+            else:
+                label = (s.get("label") or s["id"]).replace("_", " ").lower()
+                text = f"Next, {built.lower()}. This is the {label}. {lesson}."
+            beats.append({"action": s["id"], "text": text, "overlay": {"type": "none"}})
+        return {"title": sb["title"], "set": set_id, "format": "buildup", "voice": "energetic",
+                "captions": "word", "music": "synth", "beats": beats, "cta": None, "tail": 1.2}
     hook = sb["hooks"][0]
     beats = [{"action": hook["id"], "text": lines["hook_hero" if hero else "hook"], "overlay": {"type": "none"}},
              {"action": "rewind", "text": "Let's rewind to the start.", "overlay": {"type": "none"}}]
