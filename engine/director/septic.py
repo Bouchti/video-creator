@@ -28,7 +28,7 @@ TANK = dict(x0=-2.0, x1=1.6, z0=-2.3, z1=-0.5, depth=1.6, wall=0.12)
 LIQ_TOP, SCUM_T, SLUDGE_T = -1.0, 0.16, 0.34
 FLOOR = TANK["z0"] + TANK["wall"]
 INLET_X, OUTLET_X = -1.72, 1.32
-PIPE_R = 0.15
+PIPE_R = 0.2
 INLET = [(-8.4, 0.0, -0.42), (-2.3, 0.0, -0.78), (INLET_X, 0.0, -0.8)]
 OUTLET = [(OUTLET_X, 0.0, -1.0), (TANK["x1"] + 0.3, 0.0, -1.0), (5.0, 0.0, -1.06)]
 FIELD = dict(x0=5.4, x1=15.5, z0=-1.55, z1=-0.55, pipe_z=-0.92)
@@ -332,6 +332,10 @@ class SepticWorld:
             lib.box(f"lens{sx}", sx * 1.6 - 0.1, sx * 1.6 + 0.1, -0.03, 0.0, -0.06, 0.06, shades, self.shades,
                     bevel=0.02)
         lib.box("bridge", -0.03, 0.03, -0.03, 0.0, 0.01, 0.04, shades, self.shades)
+        lib.box("frown", -0.09, 0.09, -0.03, 0.0, -0.2, -0.17, shades, self.shades, bevel=0.01)
+        for sx in (-0.11, 0.11):
+            brow = lib.box(f"brow{sx}", sx - 0.08, sx + 0.08, -0.03, 0.0, 0.08, 0.11, shades, self.shades)
+            brow.rotation_euler = (0, math.radians(12 if sx < 0 else -12), 0)
         lib.box("glint", -0.17, -0.12, -0.035, -0.03, 0.01, 0.04, lib.flat("glint", (1, 1, 1), 0.1, emission=3.0),
                 self.shades)
         # static cavity: the hole stays where the tank was, whatever the tank does
@@ -421,7 +425,7 @@ class SepticWorld:
         return root, Face(root, radius, mouth, name)
 
     def _cast(self):
-        self.flushy, self.flushy_face = self._actor("flushy", 0.17, PALETTE["flushy"], mouth=True, seed=5, coat=0.8,
+        self.flushy, self.flushy_face = self._actor("flushy", 0.21, PALETTE["flushy"], mouth=True, seed=5, coat=0.8,
                                                     lumpy=0.05)
         self.heavy = [self._actor(f"heavy{i}", 0.12 + 0.02 * (i % 2), "#5E3414", seed=20 + i)[0] for i in range(4)]
         self.greasy = [self._actor(f"greasy{i}", 0.11 + 0.02 * (i % 2), PALETTE["greasy"], seed=30 + i, coat=1.0,
@@ -458,9 +462,10 @@ class SepticWorld:
             head.location.z = 0.2
             me.materials.append(glow)
             self.arrows.append(a)
-        dirt = lib.material("Ground048", 1.0, tint=(0.9, 0.75, 0.6))
-        self.chunks = [lib.blob(f"chunk{i}", self.rnd.uniform(0.1, 0.24), dirt, PARK, seed=i, lumpy=0.3, subdiv=2)
-                       for i in range(24)]
+        turf = lib.material("Grass006", 0.8, tint=(0.9, 1.05, 0.8))
+        stone = lib.material("Rock030", 1.2, tint=(0.95, 0.92, 0.88))
+        self.chunks = [lib.blob(f"chunk{i}", self.rnd.uniform(0.1, 0.22), turf if i % 3 else stone, PARK, seed=i,
+                                lumpy=0.3, subdiv=2) for i in range(24)]
         stink = lib.flat("stink", lib.hexrgb(PALETTE["stink"]), rough=0.5, emission=1.5)
         self.stink = [lib.tube(f"stink{i}", [(9.6 + i * 0.4 + 0.12 * math.sin(k * 1.3), 1.0, 0.1 + k * 0.2)
                                              for k in range(9)], 0.035, stink) for i in range(5)]
@@ -574,8 +579,9 @@ class SepticWorld:
         lib.key(self.lid, "rotation_euler", pop + 34, (math.radians(720), math.radians(25), 0))
         r = random.Random(seed)
         for c in self.chunks:     # dirt flies and STAYS as a ring around the crater
-            start = Vector((r.uniform(TANK["x0"], TANK["x1"]), r.uniform(0.0, 1.5), 0.0))
-            vel = Vector((r.uniform(-3, 3), r.uniform(-0.5, 2.5), r.uniform(4, 7)))
+            side = r.choice((-1, 1))
+            start = Vector((TANK["x0"] - 0.1 if side < 0 else TANK["x1"] + 0.1, r.uniform(0.2, 1.4), 0.02))
+            vel = Vector((side * r.uniform(0.8, 3.0), r.uniform(-0.3, 2.0), r.uniform(3.5, 6)))
             lib.key(c, "location", pop - 1, PARK, "CONSTANT")
             for k in range(0, 64, 3):     # until it LANDS (it hung in the air when this stopped at 1.1 s)
                 tt = k / 30
@@ -585,7 +591,7 @@ class SepticWorld:
                     lib.key(c, "location", pop + k, p, "LINEAR")
                     break
                 lib.key(c, "location", pop + k, p, "LINEAR")
-        self.cam.shake(pop, pop + 18, amp=0.14, seed=seed)
+        self.cam.shake(pop, pop + 18, amp=0.08, seed=seed)
         self.act("tank bursts", self.tank, pop - 6, pop + 12, 0.12)
         apex = Vector((-0.9, -0.6, 5.6))
         if launch:
@@ -610,14 +616,14 @@ class SepticWorld:
         apex = self.burst(f0, pop, f1, seed=2)
         lib.key(self.flushy, "location", f1, apex + Vector((0.3, 0, 0.9)))     # still flying when we rewind
         self.flushy_face.look(pop + 10, 0, 1)
-        self.act("Flushy launched", self.flushy, pop + 2, min(f1, pop + 30), 0.03)
+        self.act("Flushy launched", self.flushy, pop + 2, min(f1, pop + 30), 0.04)
         # 1) close on the trembling empty tank in the flooded ground
         self.cam.shot(f0, pop, dict(center=(-0.2, 0, -1.0), width=4.2, yaw=-12, pitch=7),
                       dict(center=(-0.2, 0, -0.8), width=3.9, yaw=-9, pitch=6))
         # 2) HOLD a medium-wide on the breach: crater, flying lid, Flushy shot out (the money shot)
         hold = min(f1 - 12, pop + 36)
-        self.cam.shot(pop + 1, hold, dict(center=(-0.3, 0, 1.0), width=6.8, yaw=-14, pitch=12),
-                      dict(center=(-0.3, 0, 1.4), width=6.4, yaw=-12, pitch=10))
+        self.cam.shot(pop + 1, hold, dict(center=(-0.3, 0, 1.8), width=7.6, yaw=-14, pitch=12),
+                      dict(center=(-0.3, 0, 2.2), width=7.2, yaw=-12, pitch=10))
         # 3) cut to Flushy in the sky
         self.cam.shot(hold + 1, f1, dict(center=apex + Vector((0.1, 0, 0.2)), width=2.4, yaw=-16, pitch=-6),
                       dict(center=apex + Vector((0.3, 0, 0.8)), width=2.2, yaw=-20, pitch=-8))
@@ -640,15 +646,15 @@ class SepticWorld:
         lib.key(self.flushy, "rotation_euler", arrive, (0, 0, 0))
         self.flushy_face.happy(go + 20)
         self.squash(self.flushy, arrive, 0.3)
-        self.act("Flushy drops in", self.flushy, go - 2, go + 14, 0.06)
-        self.act("Flushy slides", self.flushy, go + 14, arrive, 0.025)
+        self.act("Flushy drops in", self.flushy, go - 4, go + 14, 0.08)
+        self.act("Flushy slides", self.flushy, arrive - 22, arrive, 0.06)
         # 1) close on the drain: he drops in; 2) wide static on the whole slope: he zooms across;
         # 3) close at the tank inlet: he arrives
         self.cam.shot(f0, go + 13, dict(center=ride(p0) + Vector((0.3, 0, 0.3)), width=2.0, yaw=10, pitch=8),
                       dict(center=ride(p0) + Vector((0.3, 0, 0.2)), width=1.9, yaw=8, pitch=8))
-        mid = (p0 + p2) / 2
-        self.cam.shot(go + 14, arrive - 1, dict(center=mid + Vector((0, 0, 0.2)), width=7.2, yaw=4, pitch=8),
-                      dict(center=mid + Vector((0.4, 0, 0.15)), width=6.8, yaw=2, pitch=8))
+        stretch = p1 + Vector((-1.0, 0, 0.1))
+        self.cam.shot(go + 14, arrive - 1, dict(center=stretch, width=2.9, yaw=4, pitch=8),
+                      dict(center=stretch + Vector((0.2, 0, 0)), width=2.7, yaw=2, pitch=8))
         self.cam.shot(arrive, f1, dict(center=ride(p2) + Vector((-0.4, 0, 0.1)), width=2.2, yaw=6, pitch=7),
                       dict(center=ride(p2) + Vector((-0.3, 0, 0.05)), width=2.0, yaw=4, pitch=7))
 

@@ -364,17 +364,27 @@ def viewer_review(plan, timing, work, movie):
     from agents import ai_router
     from engine.director.worlds import WORLDS
     spec = WORLDS[plan["world"]]
+    # sample what MATTERS: the start, the peak of each registered action, the end (even shares missed
+    # every chomp, bounce and landing)
+    actions_path = os.path.join(work, "animatic", "actions.json")
+    actions = _load(actions_path) if os.path.isfile(actions_path) else []
     sheets = []
     for b in timing["beats"]:
         tiles = []
-        for share in (0.1, 0.37, 0.63, 0.9):
-            t = (b["f0"] + (b["f1"] - b["f0"]) * share - 1) / FPS
+        peaks = sorted({(a["f0"] + a["f1"]) // 2 for a in actions if b["f0"] < (a["f0"] + a["f1"]) // 2 < b["f1"]})
+        if len(peaks) > 3:
+            peaks = [peaks[0], peaks[len(peaks) // 2], peaks[-1]]
+        frames = [b["f0"] + (b["f1"] - b["f0"]) * 0.08] + peaks + [b["f0"] + (b["f1"] - b["f0"]) * 0.92]
+        while len(frames) < 4:
+            frames.insert(1, b["f0"] + (b["f1"] - b["f0"]) * (0.3 + 0.3 * (len(frames) - 2)))
+        for share in sorted(frames):
+            t = (share - 1) / FPS
             png = os.path.join(work, "review", f"{b['id']}_{share}.png")
             os.makedirs(os.path.dirname(png), exist_ok=True)
             _run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", movie, "-frames:v", "1", "-vf",
                   "scale=300:533", png])
             tiles.append(Image.open(png).convert("RGB"))
-        sheet = Image.new("RGB", (300 * 4 + 30, 533), "white")
+        sheet = Image.new("RGB", (310 * len(tiles), 533), "white")
         for i, im in enumerate(tiles):
             sheet.paste(im, (i * 310, 0))
         path = os.path.join(work, "review", f"{b['id']}.jpg")
@@ -383,7 +393,7 @@ def viewer_review(plan, timing, work, movie):
     intents = "\n".join(f"- {bid}: {spec['shots'][bid]['shows']} (gag: {spec['shots'][bid]['gag']})"
                         for bid, _ in sheets)
     system = ("You are a 16-year-old scrolling TikTok with the SOUND OFF. Each image is one beat of a short animated "
-              "film: 4 moments left to right. For each beat FIRST write what_happens: what you actually see, in one "
+              "film: its key moments left to right. For each beat FIRST write what_happens: what you actually see, in one "
               "sentence, without guessing. THEN read the intent. clear: would you get that idea from the picture "
               "alone? funny: 1 (not at all) to 5 (I'd send it to a friend). incoherent: anything physically wrong "
               "or contradictory (things popping in or out, objects passing through each other, a hole that "
