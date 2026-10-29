@@ -69,3 +69,36 @@ class VarietyFeedbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SceneVarietyTest(unittest.TestCase):
+    """The 2026-10-27 El Nino video: 14 of 22 shots on one shore, chained off each other's frames."""
+
+    def _labels(self, scenes):
+        return [(s, "storm") for s in scenes]
+
+    def test_one_place_cannot_hold_most_of_the_film(self):
+        texts = [f"Wide shot: grey surf {i}" if i % 2 else f"Close-up: wet planks {i}" for i in range(12)]
+        script = _script(texts)
+        for i, beat in enumerate(script["beats"]):
+            beat["visual"]["scene"] = "shore" if i < 8 else f"place {i}"
+        feedback = variety_feedback(script) or ""
+        self.assertIn("'shore' is the scene of 8 of 12 shots", feedback)
+        self.assertIn("in a row in 'shore'", feedback)
+
+    def test_a_take_is_at_most_three_shots_and_a_frame_seeds_one_shot(self):
+        from local_video.planner import MAX_TAKE, _take_length, continuation_source
+        labels = self._labels(["shore"] * 10)
+        sources = [continuation_source(labels, i) for i in range(10)]
+        self.assertLessEqual(max(_take_length(labels, i) for i in range(10)), MAX_TAKE)
+        used = [s for s in sources if s is not None]
+        self.assertEqual(len(used), len(set(used)))          # no frame opens two shots
+
+    def test_a_place_palette_never_reaches_another_place(self):
+        from local_video.planner import _continuity
+        script = {"location": "Beach shore: pale timber homes on sand. Desert city: low buildings and palms in rain.",
+                  "color_palette": "slate sea, pale timber homes, wet charcoal",
+                  "beats": [{"text": "a", "visual": {"scene": "Beach shore", "light": "storm"}},
+                            {"text": "b", "visual": {"scene": "Desert city", "light": "storm"}}]}
+        self.assertIn("timber homes", _continuity(script, "", "c", 0)["palette"])
+        self.assertNotIn("timber homes", _continuity(script, "", "c", 1)["palette"])

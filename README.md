@@ -31,6 +31,20 @@ Fill in at least:
 
 Quality review is fail-closed by default. The pipeline refuses to generate when required services, keys, credits, executables, or disk space are unavailable. It also refuses to accept clips or a final edit that cannot be reviewed. The `*_ALLOW_*` settings in `.env.example` are diagnostic overrides, not production defaults.
 
+### Asset libraries (downloaded at the start of every run)
+
+The CC0 libraries (Kenney, Quaternius, Poly Haven, ambientCG, ~45 GB) and the compositor's npm packages are
+not in git. `python main.py` and `python -m agents.director` fetch whatever is missing before they start
+(`agents/libraries.py`); a finished part leaves a stamp in `assets/cc0/.stamps/`, so later runs skip the check.
+On a fresh clone you can also fetch them up front and see what is installed:
+
+```powershell
+python -m agents.libraries            # one-time download (~30 min)
+python -m agents.libraries --status
+```
+
+`LIBRARIES_AUTO=0` skips the check on an offline machine.
+
 ## Run
 
 Activate the environment and let the AI choose a current topic:

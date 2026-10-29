@@ -273,9 +273,33 @@ def continuation_source(
             return not objects[prior] or bool(objects[prior] & objects[index])
         return objects[index] <= objects[prior]
 
-    return next((prior for prior in range(index - 1, -1, -1)
-                 if labels[prior] == labels[index] and same_cast(prior) and same_scale(prior)
-                 and same_objects(prior)), None)
+    prior = next((prior for prior in range(index - 1, -1, -1)
+                  if labels[prior] == labels[index] and same_cast(prior) and same_scale(prior)
+                  and same_objects(prior)), None)
+    if prior is None or _take_length(labels, prior, casts, scales, objects) >= MAX_TAKE:
+        return None
+    # A frame seeds ONE later shot: on the El Nino run shot 1's last frame opened shots 2, 3 and 7, so
+    # three shots began on the same picture. Any other shot of that place gets its own keyframe.
+    if any(continuation_source(labels, later, casts, scales, objects) == prior for later in range(prior + 1, index)):
+        return None
+    return prior
+
+
+# A continuous take (shots chained frame to frame) is at most this many shots. The 2026-10-27 El Nino
+# video chained 14 shore shots off each other's last frames: one composition for ~40 s while the
+# narration moved on to hurricanes, forecasters and a Kelvin wave. The next shot opens on a fresh keyframe.
+MAX_TAKE = 3
+
+
+def _take_length(labels, index, casts=None, scales=None, objects=None) -> int:
+    """How many shots the take ending at `index` already holds (1 = it opened fresh)."""
+    length = 1
+    while True:
+        source = continuation_source(labels, index, casts, scales, objects)
+        if source is None:
+            return length
+        length += 1
+        index = source
 
 
 def _words(text: str, size: int = 5) -> set[str]:
@@ -319,6 +343,9 @@ def _for_scene(text: str, script: dict[str, Any], beat_index: int, split: str = 
     if not scene or not text:
         return text
     other_labels = {beat_labels(script, i)[0] for i in range(len(beats))} - {scene, ""}
+    place = _place_vocab(script)
+    own_place = place.get(scene, set())
+    other_place = set().union(*(v for k, v in place.items() if k != scene)) - own_place if place else set()
     own = _words(scene)
     shared = set().union(*(_words(label) for label in other_labels)) if other_labels else set()
     others = shared - own
@@ -333,10 +360,24 @@ def _for_scene(text: str, script: dict[str, Any], beat_index: int, split: str = 
             if label in other_labels:
                 return False
         words = _words(part)
+        if words & other_place and not words & (own_place | own):
+            return False        # "pale timber homes" describes the shore: it must not reach the desert city
         return not words & others or bool(words & distinct)
 
     clauses = [part for part in re.split(split, text) if part.strip() and keep(part)]
     return (" " if split == _SENTENCES else ", ").join(part.strip() for part in clauses)
+
+
+def _place_vocab(script: dict[str, Any]) -> dict[str, set[str]]:
+    """Scene label -> the content words of its own location sentence ("Desert city boulevard: a wide street...")."""
+    beats = script.get("beats") if isinstance(script.get("beats"), list) else []
+    labels = {beat_labels(script, i)[0] for i in range(len(beats))} - {""}
+    vocab: dict[str, set[str]] = {}
+    for sentence in re.split(_SENTENCES, str(script.get("location") or "")):
+        head = re.match(r"\s*([^:.;]{2,60}):", sentence)
+        if head and head.group(1).strip().lower() in labels:
+            vocab.setdefault(head.group(1).strip().lower(), set()).update(_words(sentence))
+    return vocab
 
 
 # Whole sentences: a world description's commas belong to one place and must stay together.

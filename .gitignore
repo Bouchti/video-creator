@@ -54,3 +54,7 @@ unreal/VideoCreatorUE/Intermediate/
 unreal/VideoCreatorUE/Saved/
 unreal/VideoCreatorUE/Content/*
 !unreal/VideoCreatorUE/Content/Python/
+
+# Remotion compositor (npm install in compositor/)
+compositor/node_modules/
+compositor/out/

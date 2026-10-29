@@ -373,6 +373,11 @@ if __name__ == "__main__":
     if args.publish_live and not args.publish:
         parser.error("--publish-live requires at least one --publish PLATFORM")
 
+    # Every downloadable library (CC0 assets, the compositor's npm packages) is fetched before the run
+    # starts, so a fresh clone is ready to produce; later runs skip this in milliseconds.
+    from agents.libraries import ensure as ensure_libraries
+    ensure_libraries()
+
     if args.source in ("evolution", "cutaway", "explainer"):
         # The 3D pipelines run under the autopilot: script → voice → exact-timing low-res rehearsal
         # (every ~3 s window must pass) → Blender production render with free technical rechecks →

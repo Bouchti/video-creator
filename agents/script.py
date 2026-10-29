@@ -615,6 +615,9 @@ labels, logos, or written numbers.
    - Never more than three beats in a row with the same shot size, and never more than three in a
      row of the same subject. The main subject appears in at most half of the beats; the rest are
      its details, its surroundings, its effects and the stand-ins above.
+   - The `scene` label is the PLACE the camera is in, and it decides what the shot looks like. At
+     most 40% of beats share one scene label and never more than three in a row: a line about
+     forecasters, a storm far away, a satellite or a rainfall record gets its own scene.
 15. SAY IT ONCE, SHOW IT ONCE, MAKE IT LAND. A test video about one cannon shot showed the enemy
    fleet flying the other side's flag, two smoke bursts under "exactly one shot", and a cannonball
    already resting beside a tipped kettle under "the ball crashed into a soup kettle". So:

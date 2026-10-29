@@ -1290,7 +1290,9 @@ class KeyframeTests(unittest.TestCase):
         from local_video import keyframes
         with tempfile.TemporaryDirectory() as folder:
             project = self._project(folder)
-            self.assertEqual([0, 2], keyframes.fresh_openings(project))
+            # the cut to the rooftop opens fresh, and so does every 4th plaza shot: a take is at most
+            # MAX_TAKE shots, never 19 shots chained off one frame (the 2026-10-27 El Nino video)
+            self.assertEqual([0, 2, 4, 7, 10, 13, 16, 19], keyframes.fresh_openings(project))
             prompt = keyframes.keyframe_prompt(project.shots[0])
             self.assertIn("full-frame camera", prompt)
             self.assertNotIn("cinematic", prompt.lower())

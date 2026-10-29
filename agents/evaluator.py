@@ -242,6 +242,9 @@ def _named_subjects(text: str) -> set[str]:
     return names
 
 
+MAX_SCENE_SHARE = 0.4
+
+
 def variety_feedback(script: dict) -> str | None:
     """Free check that the shot list keeps changing, or None when it does.
 
@@ -267,6 +270,24 @@ def variety_feedback(script: dict) -> str | None:
             problems.append(
                 f"{name} is in {count} of {len(beats)} shots. Show it in at most half: give the other beats "
                 "close details, surroundings, effects, and illustrative stand-ins for what each line names.")
+    # The same PLACE is the same picture whatever the nouns: the El Nino video put 14 of 22 shots on
+    # "Long Beach peninsula shore" (lower-case subjects, so the name count above never saw it).
+    scenes = [str(visual.get("scene") or "").strip().lower() for visual in visuals]
+    if sum(bool(label) for label in scenes) >= len(beats) / 2:
+        label, count = Counter(label for label in scenes if label).most_common(1)[0]
+        if count > MAX_SCENE_SHARE * len(beats):
+            problems.append(
+                f"'{label}' is the scene of {count} of {len(beats)} shots. At most {int(MAX_SCENE_SHARE * 100)}% "
+                "of shots may share one scene: give each line's own subject its own scene label and setting "
+                "(the thing the line names, a filmable stand-in for it, a close detail somewhere else).")
+        run, longest, where = 1, 1, 0
+        for index in range(1, len(scenes)):
+            run = run + 1 if scenes[index] and scenes[index] == scenes[index - 1] else 1
+            if run > longest:
+                longest, where = run, index - run + 2
+        if longest > 3:
+            problems.append(f"beats {where}-{where + longest - 1} are {longest} shots in a row in "
+                            f"'{scenes[where - 1]}'; cut to another scene at least every three shots.")
     sizes = [framing_scale(text) or ("medium" if "medium" in text.lower() else None) for text in descriptions]
     close = sum(size == "close" for size in sizes)
     if close < max(2, len(beats) // 4):

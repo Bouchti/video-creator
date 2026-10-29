@@ -1,0 +1,77 @@
+{
+  "id": "septic_golden",
+  "world": "septic",
+  "title": "Flushy vs the septic tank",
+  "voice": "energetic",
+  "target_seconds": 62,
+  "caption": "Flushy got launched out of the ground by a 4-ton tank. Here's how. 💩🚀",
+  "hashtags": ["#septic", "#howitworks", "#animation", "#funny", "#engineering"],
+  "facts": [
+    "Precast concrete septic tanks of about 1,000 gallons weigh roughly four to five tons (manufacturer specs).",
+    "Heavy solids settle as sludge; oils and grease rise as scum (US EPA).",
+    "T-shaped outlets keep sludge and scum from leaving the tank (US EPA).",
+    "Effluent seeps through drainfield gravel into soil, where soil microbes remove harmful bacteria and viruses (US EPA).",
+    "Wipes do not break down like toilet paper and build up in septic tanks (US EPA, wastewater utilities).",
+    "Pumping a tank while surrounding soil is saturated removes the liquid weight and can let groundwater float it (UF/IFAS Extension)."
+  ],
+  "beats": [
+    {
+      "id": "hook",
+      "text": "Meet Flushy. A four-ton tank just launched him out of the ground.",
+      "hook_text": "LAUNCHED BY A TANK?!",
+      "emphasis": ["Flushy", "four-ton", "launched"]
+    },
+    {
+      "id": "follow",
+      "text": "Rewind. One flush earlier, Flushy is sliding down the pipe to his new home.",
+      "rewind": true,
+      "emphasis": ["Rewind", "sliding"]
+    },
+    {
+      "id": "sort",
+      "chapter": "The sorting hat... tank",
+      "text": "Welcome to the septic tank, where everyone gets sorted by weight. Heavy guys sink into the sludge. Greasy guys float up into the scum.",
+      "labels": [
+        {"text": "Sludge", "anchor": "sludge", "at": "sludge"},
+        {"text": "Scum", "anchor": "scum", "at": "scum"}
+      ],
+      "emphasis": ["sorted", "sink", "float"]
+    },
+    {
+      "id": "baffle",
+      "text": "The exit has a bouncer: this T-pipe only lets the water in the middle out. Grease? Not tonight.",
+      "labels": [{"text": "The bouncer", "anchor": "tee", "at": "T-pipe"}],
+      "callouts": [{"kind": "stamp", "text": "Not tonight", "tone": "bad", "at": "tonight"}],
+      "emphasis": ["bouncer", "Grease"]
+    },
+    {
+      "id": "field",
+      "chapter": "The yard eats germs",
+      "text": "Outside, the water seeps through gravel, and billions of tiny soil microbes eat the germs. Free sewage treatment, right under your grass.",
+      "labels": [{"text": "Microbes", "anchor": "soil", "at": "microbes"}],
+      "emphasis": ["microbes", "Free"]
+    },
+    {
+      "id": "die",
+      "chapter": "Then: wipes",
+      "text": "Then someone flushes wipes. Wipes don't break down. The gang grows, gunk escapes into the gravel, and the lawn becomes a stinky swamp.",
+      "labels": [{"text": "Wipes", "anchor": "scum", "at": "wipes"}],
+      "callouts": [{"kind": "stamp", "text": "Swamp", "tone": "bad", "at": "swamp"}],
+      "emphasis": ["wipes", "stinky", "swamp"]
+    },
+    {
+      "id": "float",
+      "chapter": "The launch",
+      "text": "So someone pumps the tank empty. During a flood. Empty, it's basically a concrete boat, and the rising groundwater shoves it straight up.",
+      "labels": [{"text": "Flood water", "anchor": "groundwater", "at": "flood"}],
+      "callouts": [{"kind": "stamp", "text": "Concrete boat", "tone": "bad", "at": "boat"}],
+      "emphasis": ["empty", "flood", "boat", "shoves"]
+    },
+    {
+      "id": "land",
+      "text": "Flushy lands. In daylight. Ta-da. Next time: what your shower drain is hiding.",
+      "end_card": "NEXT: THE SHOWER DRAIN",
+      "emphasis": ["Ta-da", "shower"]
+    }
+  ]
+}
