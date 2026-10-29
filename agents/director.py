@@ -206,6 +206,7 @@ def stage_timing(plan, voice, total_seconds, work):
         heard = transcribe_with_whisper(voice)
         words = script_word_timings(plan["beats"], heard, total_seconds)
         _save(words_path, words)
+    words = strictly_increasing(words)
     total = int(round(total_seconds * FPS))
     beats, i = [], 0
     for b in plan["beats"]:
@@ -224,6 +225,16 @@ def stage_timing(plan, voice, total_seconds, work):
     timing = {"fps": FPS, "total": total, "beats": [{kk: b[kk] for kk in ("id", "f0", "f1", "cues")} for b in beats]}
     _save(path, timing)
     return timing, words
+
+
+def strictly_increasing(words, gap=0.02):
+    """Every word starts after the previous one (Whisper can give two words the same start time)."""
+    out, last = [], -1.0
+    for w in words:
+        start = max(float(w["start"]), last + gap)
+        out.append(dict(w, start=round(start, 3), end=round(max(float(w["end"]), start + gap), 3)))
+        last = start
+    return out
 
 
 # ------------------------------------------------------------------ 3. render

@@ -145,5 +145,15 @@ class FrameQATest(unittest.TestCase):
         self.assertGreater(frame_qa.highlights(Image.fromarray(full).convert("RGB")), frame_qa.HIGHLIGHT_MIN)
 
 
+class WordTimingTest(unittest.TestCase):
+    def test_two_words_never_share_a_start(self):
+        words = [{"text": "the", "start": 26.8, "end": 26.85}, {"text": "water", "start": 26.8, "end": 27.1},
+                 {"text": "seeps", "start": 27.1, "end": 27.5}]
+        out = director.strictly_increasing(words)
+        starts = [w["start"] for w in out]
+        self.assertEqual(starts, sorted(set(starts)))
+        self.assertTrue(all(w["end"] > w["start"] for w in out))
+
+
 if __name__ == "__main__":
     unittest.main()
