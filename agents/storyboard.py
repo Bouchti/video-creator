@@ -15,7 +15,7 @@ import json
 import os
 import re
 
-from config.paths import PROJECT_ROOT
+from config.paths import PROJECT_ROOT, slug
 from engine.kit import vocab
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
@@ -301,7 +301,7 @@ def reference_film(sb: dict, set_id: str) -> dict:
 
 
 def set_id_for(sb: dict) -> str:
-    base = re.sub(r"[^a-z0-9]+", "_", (sb.get("title") or sb.get("subject") or "story").lower()).strip("_")
+    base = slug(sb.get("title") or sb.get("subject") or "story", None)
     return ("kit_" + base)[:40].rstrip("_") + ("_story" if has_hero(sb) else "_explainer")
 
 

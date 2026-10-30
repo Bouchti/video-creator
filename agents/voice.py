@@ -40,8 +40,6 @@ def elevenlabs_keys() -> list[tuple[str, str]]:
     return result
 
 
-_elevenlabs_keys = elevenlabs_keys
-
 
 def _rotation_start(size: int) -> int:
     try:
@@ -83,7 +81,9 @@ def _credits_left(key: str):
     return status["remaining"] if status["valid"] else None
 
 
-def _tts_with_rotation(url: str, payload: dict, characters: int):
+def elevenlabs_post(url: str, payload: dict, characters: int = 0, timeout: int = 60):
+    """POST to ElevenLabs with the first configured key that has `characters` credits left, starting from the
+    key that worked last time; a 429 is retried once and an unusable key moves on to the next one."""
     keys = elevenlabs_keys()
     if not keys:
         raise RuntimeError("No ElevenLabs key configured (ELEVENLABS_API_KEY, ELEVENLABS_API_KEY_2, ...)")
@@ -101,7 +101,7 @@ def _tts_with_rotation(url: str, payload: dict, characters: int):
             continue
         headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": key}
         for attempt in range(2):
-            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            response = requests.post(url, json=payload, headers=headers, timeout=timeout)
             if response.status_code == 429 and attempt == 0:
                 time.sleep(5)
                 continue
@@ -261,7 +261,7 @@ def _elevenlabs_voiceover(spoken_script: str, voice: str) -> str:
             "speed": float(os.getenv("VOICE_SPEED", "0.92")),
         },
     }
-    response = _tts_with_rotation(
+    response = elevenlabs_post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}", payload, len(spoken_script),
     )
     path = os.path.join(get_temp_dir(), f"voiceover_{datetime.now():%Y%m%d_%H%M%S_%f}.mp3")

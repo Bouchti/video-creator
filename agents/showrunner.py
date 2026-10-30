@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 from agents import llm
 from agents.llm import BudgetExceeded, UsageLimit
-from config.paths import get_env_path, get_output_dir
+from config.paths import get_env_path, get_output_dir, slug
 from engine import sets
 
 load_dotenv(get_env_path())
@@ -231,7 +231,7 @@ def _wishlist():
 
 def _new_story_set_id(subject):
     words = re.sub(r"\b(max|builds?|makes?|creates?|a|an|the|his|her)\b", " ", subject.lower())
-    stem = re.sub(r"[^a-z0-9]+", "_", words).strip("_")[:28] or "new_max_project"
+    stem = slug(words, 28) or "new_max_project"
     base = stem + "_story"
     candidate, n = base, 2
     while os.path.exists(os.path.join(os.path.dirname(__file__), "..", "engine", "sets", candidate + ".py")):
@@ -966,10 +966,6 @@ def to_film(script, topic, facts, review=None):
     if buildup.enabled(topic["set"]):                  # starts on the first build step: no hook, no question
         film.update(buildup.film_extras())
     return film
-
-
-def slug(text):
-    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48]
 
 
 def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on_topic=None):

@@ -169,7 +169,8 @@ PLAN_SCHEMA = {
 
 def new_set_id(subject: str) -> str:
     words = re.sub(r"\b(how|why|a|an|the|is|are|built|works?|inside|of)\b", " ", subject.lower())
-    stem = re.sub(r"[^a-z0-9]+", "_", words).strip("_")[:26] or "new_cutaway"
+    from config.paths import slug
+    stem = slug(words, 26) or "new_cutaway"
     candidate, n = stem + "_explainer", 2
     here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine", "sets")
     while os.path.exists(os.path.join(here, candidate + ".py")):

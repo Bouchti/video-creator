@@ -25,7 +25,7 @@ import uuid
 
 import requests
 
-from config.paths import PROJECT_ROOT
+from config.paths import PROJECT_ROOT, slug
 
 log = logging.getLogger("pipeline")
 API = "https://www.blenderkit.com/api/v1"
@@ -192,8 +192,7 @@ def download(a):
         f = files.get(res)
         if not f:
             continue
-        slug = re.sub(r"[^a-z0-9]+", "_", (a.get("name") or base).lower()).strip("_")[:50]
-        path = os.path.join(folder, f"{slug}_{res}.blend")
+        path = os.path.join(folder, f"{slug(a.get('name') or base, 50)}_{res}.blend")
         if os.path.isfile(path):
             return path
         d = requests.get(f["downloadUrl"], params={"scene_uuid": str(uuid.uuid4())}, headers=_headers(), timeout=60)

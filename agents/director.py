@@ -775,7 +775,7 @@ def make(topic, research, angle=None, grounding=None):
     _save(os.path.join(work, "plan.json"), plan)
     final = produce(plan)
     track = music_track(plan)
-    plan["credits"] = [track["credit"]] if track else []     # main.py writes them into the post notes
+    plan["credits"] = [track["credit"]] if track else []     # agents/post_text.py prints them for the description
     return final, plan
 
 

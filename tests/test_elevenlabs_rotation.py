@@ -26,7 +26,7 @@ class RotationTests(unittest.TestCase):
         self.state.stop()
 
     def test_keys_in_order_skip_blank(self):
-        self.assertEqual([n for n, _ in h._elevenlabs_keys()],
+        self.assertEqual([n for n, _ in h.elevenlabs_keys()],
                          ["ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY_2", "ELEVENLABS_API_KEY_3"])
 
     def test_quota_error_falls_through_and_sticks(self):
@@ -39,10 +39,10 @@ class RotationTests(unittest.TestCase):
             return _Resp(200)
 
         with patch.object(h, "_credits_left", return_value=None), patch.object(h.requests, "post", post):
-            h._tts_with_rotation("u", {}, 100)
+            h.elevenlabs_post("u", {}, 100)
             self.assertEqual(calls, ["k1", "k2"])
             calls.clear()
-            h._tts_with_rotation("u", {}, 100)          # next run starts on the key that worked
+            h.elevenlabs_post("u", {}, 100)          # next run starts on the key that worked
             self.assertEqual(calls, ["k2"])
 
     def test_skips_key_without_enough_credits(self):
@@ -54,7 +54,7 @@ class RotationTests(unittest.TestCase):
 
         left = {"k1": 50, "k2": None, "k3": 5000}
         with patch.object(h, "_credits_left", side_effect=lambda k: left[k]), patch.object(h.requests, "post", post):
-            h._tts_with_rotation("u", {}, 1000)
+            h.elevenlabs_post("u", {}, 1000)
         self.assertEqual(calls, ["k2"])
 
     def test_wraps_around(self):
@@ -66,14 +66,14 @@ class RotationTests(unittest.TestCase):
             return _Resp(401, "quota_exceeded") if headers["xi-api-key"] == "k3" else _Resp(200)
 
         with patch.object(h, "_credits_left", return_value=None), patch.object(h.requests, "post", post):
-            h._tts_with_rotation("u", {}, 10)
+            h.elevenlabs_post("u", {}, 10)
         self.assertEqual(calls, ["k3", "k1"])
 
     def test_all_exhausted_raises(self):
         with patch.object(h, "_credits_left", return_value=None), \
                 patch.object(h.requests, "post", lambda *a, **k: _Resp(401, "quota_exceeded")):
             with self.assertRaises(Exception) as ctx:
-                h._tts_with_rotation("u", {}, 10)
+                h.elevenlabs_post("u", {}, 10)
         self.assertIn("All ElevenLabs keys", str(ctx.exception))
         self.assertNotIn("k1", str(ctx.exception).replace("ELEVENLABS", ""))   # never leak key values
 

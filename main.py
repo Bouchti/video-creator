@@ -57,27 +57,6 @@ DEFAULT_SOURCE = "local-ai"
 
 OUTPUT_DIR = get_output_dir()
 
-def write_post_notes(video_path: str, script: dict, credits: list) -> str:
-    """Write title/description/hashtags + photo credits next to the video.
-
-    CC BY / BY-SA photos require attribution — paste the credits into the post
-    description (or pinned comment) when publishing.
-    """
-    notes_path = os.path.splitext(video_path)[0] + ".txt"
-    lines = [script.get("video_title", ""), "", script.get("description", ""), "",
-             " ".join(script.get("hashtags", []))]
-    if credits:
-        lines += ["", "Photo credits (Wikimedia Commons):"] + [f"- {c}" for c in credits]
-    sources = script.get("research_sources") or []
-    if sources:
-        lines += ["", "Research sources:"] + [
-            f"- {source.get('title', 'Source')}: {source.get('url')}"
-            for source in sources if source.get("url")
-        ]
-    with open(notes_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    return notes_path
-
 
 def run_pipeline(
     topic: str = None,
@@ -276,11 +255,7 @@ def run_pipeline(
         output_path = str(final_path)
     # The video exists from here on; nothing below may turn a finished render into a failed run.
     credits = script.get("credits") or []
-    notes_path = post_text_path = None
-    try:
-        notes_path = write_post_notes(output_path, script, credits)
-    except Exception as e:
-        log.error(f"Writing post notes failed: {e}", exc_info=True)
+    post_text_path = None
     try:
         from agents.post_text import write as write_post_text
         post_text_path = write_post_text(script, output_path)
@@ -334,7 +309,6 @@ def run_pipeline(
             "word_count": len(script["spoken_script"].split()),
             "credits": credits,
         },
-        "notes_path": notes_path,
         "post_text_path": post_text_path,
         "publishing": publishing,
         "quality_warnings": quality_warnings,
@@ -433,7 +407,6 @@ if __name__ == "__main__":
         print(f"  Source: {result['source']}")
         print(f"  Video:  {result['video_path']}")
         print(f"  Title:  {result['title']}")
-        print(f"  Notes:  {result['notes_path']}")
         print(f"  Posts:  {result['post_text_path']}")
         for package in result.get("publishing", []):
             print(f"  Publish ({package['platform']}): {package['status']}")

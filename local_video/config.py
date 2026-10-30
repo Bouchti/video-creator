@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +11,7 @@ from typing import Iterable
 import requests
 from dotenv import load_dotenv
 
-from config.paths import PROJECT_ROOT, get_comfy_workflow_path, get_env_path
+from config.paths import PROJECT_ROOT, get_comfy_workflow_path, get_env_path, slug
 from agents.media import FFMPEG, FFPROBE
 
 load_dotenv(get_env_path())
@@ -57,8 +56,7 @@ def env_float(name: str, default: float, minimum: float = 0.0) -> float:
 
 
 def slugify(value: str, limit: int = 48) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:limit].strip("-")
-    return slug or "video-project"
+    return slug(value, limit, "-").strip("-") or "video-project"
 
 
 def resolve_within(root: str | Path, relative: str | Path) -> Path:

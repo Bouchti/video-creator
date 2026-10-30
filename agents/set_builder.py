@@ -38,7 +38,7 @@ import subprocess
 import sys
 import tempfile
 
-from config.paths import PROJECT_ROOT
+from config.paths import PROJECT_ROOT, slug
 
 log = logging.getLogger("pipeline")
 
@@ -1462,7 +1462,7 @@ def register(set_id, collection="EVOLUTION"):
 def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = False,
               explainer: bool = False, hook_action: str = None, assets: bool = False) -> dict:
     suffix = "_explainer" if explainer else "_story" if story else "_evolution"
-    set_id = set_id or re.sub(r"[^a-z0-9]+", "_", subject.lower()).strip("_")[:28] + suffix
+    set_id = set_id or slug(subject, 28) + suffix
     files = _files(set_id)
     work = os.path.join(PROJECT_ROOT, "output", "sets", set_id)
     os.makedirs(work, exist_ok=True)

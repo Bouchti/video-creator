@@ -20,6 +20,7 @@ import os
 import re
 
 from agents import llm
+from config.paths import slug
 from agents import showrunner as sr
 from engine import sets
 
@@ -237,7 +238,7 @@ def run(angle=None, set_id=None, render=True, preview=False):
     script, review = develop(topic, facts)
     film = to_film(script, topic, facts, review)
     os.makedirs(sr.FILMS_DIR, exist_ok=True)
-    name = f"{datetime.date.today():%Y%m%d}_{sr.slug(script['title'])}"
+    name = f"{datetime.date.today():%Y%m%d}_{slug(script['title'])}"
     path = os.path.join(sr.FILMS_DIR, f"{name}.json")
     json.dump(film, open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
     log.info(f"[evolution] script saved: {path}")

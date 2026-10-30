@@ -95,11 +95,6 @@ def path(name):
     return os.path.join(LIB_DIR, f"{name}.mp3")
 
 
-def _keys():
-    from agents.voice import _elevenlabs_keys
-    return _elevenlabs_keys()
-
-
 def generate(name, force=False):
     """Generate one library sound with ElevenLabs (rotating through the configured keys). A name outside
     LIBRARY is generated from its own words ('rocket_launch' -> 'rocket launch, sound effect')."""
@@ -111,17 +106,14 @@ def generate(name, force=False):
     body = {"text": prompt, "prompt_influence": 0.5}
     if secs:
         body["duration_seconds"] = max(0.5, min(22.0, secs))
-    errors = []
-    for slot, key in _keys():
-        r = requests.post("https://api.elevenlabs.io/v1/sound-generation", headers={"xi-api-key": key},
-                          json=body, timeout=120)
-        if r.status_code == 200 and r.content:
-            with open(out, "wb") as f:
-                f.write(r.content)
-            log.info(f"  sfx library: generated '{name}' ({slot})")
-            return out
-        errors.append(f"{slot}: {r.status_code}")
-    raise RuntimeError(f"could not generate sound '{name}': {errors}")
+    from agents.voice import elevenlabs_post
+    r = elevenlabs_post("https://api.elevenlabs.io/v1/sound-generation", body, timeout=120)
+    if not r.content:
+        raise RuntimeError(f"could not generate sound '{name}': ElevenLabs returned no audio")
+    with open(out, "wb") as f:
+        f.write(r.content)
+    log.info(f"  sfx library: generated '{name}'")
+    return out
 
 
 def ensure(names=None):

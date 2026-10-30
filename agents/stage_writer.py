@@ -524,8 +524,8 @@ def _clean(plan):
     plan["world"] = "stage"
     plan.setdefault("voice", "energetic")
     plan.setdefault("target_seconds", 62)
-    slug = re.sub(r"[^a-z0-9]+", "_", plan["title"].lower()).strip("_")[:40]
-    plan["id"] = f"stage_{slug}"
+    from config.paths import slug
+    plan["id"] = f"stage_{slug(plan['title'], 40)}"
     return plan
 
 
