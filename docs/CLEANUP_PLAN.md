@@ -1,8 +1,36 @@
 # Cleanup plan
 
-Status: proposal, 2026-10-30. Nothing has been changed yet. Sources: an import graph of every module,
-AST duplicate detection, and four read-only reviews (agents LLM side, agents media side, engine/,
-local_video + unreal + compositor + tests), with the key claims re-checked by grep.
+Status (2026-10-30): phases 1 and 2 are done on branch `cleanup/safe-phases` (5 commits, 92 files,
+-3,754 / +1,295 lines, 585 tests passing). Sources: an import graph of every module, AST duplicate
+detection, and four read-only reviews (agents LLM side, agents media side, engine/, local_video + unreal +
+compositor + tests), with the key claims re-checked by grep.
+
+**Done.**
+- Phase 1: every "whole files" and "symbols" item below, except the ones listed under "Left as is".
+- Phase 2:
+  - items 1 (agents/llm.py), 2 (media helpers), 3 (read_pcm/write_wav, in agents/media.py), 5 (ElevenLabs),
+    6 (gpu_lock), 7 (tool paths + slug), 9 (post text) and 10 (shared project helpers);
+  - studio-free director: not started (see section 4, last paragraph).
+- Bugs from section 8:
+  - fixed: #2 (bare ffprobe) and #3 (vision bypassed the budget and fallback);
+  - fixed, found during the work: the closing-question check in showrunner held literal backspace
+    characters instead of `\b` and never matched.
+
+**Left as is, needs a decision:**
+- **Diagram POC:** kept; the other session committed it as "x-ray diagrams".
+- **Probes:** `cutaway_probe` / `cutaway_hybrid`, waiting on whether the experiment continues.
+- **`septic_yard` kit world and its `kitw_*` reference sets:** a `kit_world` resume can continue them,
+  so they go with the kit-route decision.
+- **User-Agent strings:** some asset sites need a browser UA.
+
+**Not done yet:**
+- **Phase 2:**
+  - 4: one mixer (changes the sound; needs a loudness comparison);
+  - 8: download helper;
+  - 11: env helpers;
+  - 12: vision-review cache.
+- **Phases 3-5.**
+- **Bugs 1, 4, 5, 6 and 7.**
 
 ## 1. The picture in numbers
 
