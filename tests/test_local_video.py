@@ -419,7 +419,7 @@ class NarrationFitTests(unittest.TestCase):
             config, project = self._project(folder)
             backend = FakeBackend(config, "minimax", [])
             runner = QueueRunner(config, backends={"minimax": backend, "wan": backend})
-            with patch.object(QueueRunner, "_narration", side_effect=RuntimeError("ElevenLabs quota")):
+            with patch("local_video.queue.ensure_narration", side_effect=RuntimeError("ElevenLabs quota")):
                 result = runner.run(project)
             self.assertEqual("failed", result.state)
             self.assertIn("ElevenLabs quota", result.error)

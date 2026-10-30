@@ -17,10 +17,9 @@ from typing import Any, Callable
 
 from agents.audio_fx import pick_music
 from agents.media import get_duration
-from agents.voice import generate_voiceover
 from config.paths import PROJECT_ROOT
 
-from .assembly import assemble_project
+from .assembly import assemble_project, ensure_narration
 from .backends import BackendAdapter, GenerationResult, MiniMaxAdapter, _remove_generated_audio, build_backends
 from .freevideo import ensure_minimax
 from .keyframes import prepare_keyframes, usable_keyframe
@@ -843,18 +842,6 @@ class QueueRunner:
             + self._recovery_hint(manifest, degraded)
         )
 
-    def _narration(self, manifest: ProjectManifest) -> Path | None:
-        if not manifest.narration_enabled or not str(manifest.script.get("spoken_script") or "").strip():
-            return None
-        target = Path(manifest.project_dir) / "audio" / "narration.mp3"
-        if target.is_file():
-            return target
-        source, duration = generate_voiceover(manifest.script["spoken_script"], voice=manifest.voice)
-        shutil.move(source, target)
-        manifest.record("narration_created", duration=duration, path=str(target.relative_to(manifest.project_dir)))
-        manifest.save()
-        return target
-
     @staticmethod
     def _upgrade_prompts(manifest: ProjectManifest) -> None:
         """Give a project planned before prompts followed H3's layout the new prompt on resume.
@@ -1016,7 +1003,7 @@ class QueueRunner:
             manifest.set_state(ProjectState.QUEUED, resumed=completed_shots(manifest) > 0)
             manifest.save()
             try:
-                narration = self._narration(manifest)
+                narration = ensure_narration(manifest)
                 if narration:
                     self._fit_to_narration(manifest, narration)
             except Exception as exc:
@@ -1076,7 +1063,7 @@ class QueueRunner:
                 manifest.set_state(ProjectState.ASSEMBLING)
                 manifest.save()
                 self._emit(manifest)
-                narration = self._narration(manifest)
+                narration = ensure_narration(manifest)
                 manifest.set_state(ProjectState.RENDERING)
                 manifest.save()
                 self._emit(manifest)

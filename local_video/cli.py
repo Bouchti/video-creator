@@ -13,19 +13,14 @@ from .project import (
     adopt_reviewed_clip, create_project, load_project, project_status, refresh_project_from_shot, replan_project,
     reset_shot, set_control_state, set_reference_image,
 )
+from .models import caption_settings
 from .queue import QueueBusyError, QueueRunner
 
 
 def _caption_config(value: str, word_highlight: bool = True) -> dict:
     if value == "off":
-        return {"enabled": False, "burn_in": False, "export_srt": False, "word_highlight": False}
-    return {
-        "enabled": True,
-        "burn_in": value in {"burned", "both"},
-        "export_srt": value in {"srt", "both"},
-        "word_highlight": word_highlight,
-        "safe_position": "lower-middle",
-    }
+        return caption_settings(False, False, False, word_highlight=False)
+    return caption_settings(True, value in {"burned", "both"}, value in {"srt", "both"}, word_highlight)
 
 
 def _print_plan(manifest) -> None:

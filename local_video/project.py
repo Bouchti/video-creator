@@ -11,16 +11,23 @@ from .config import (
     AUDIO_EXTENSIONS, BACKENDS, IMAGE_EXTENSIONS, PipelineConfig, resolve_within,
     slugify, validate_input_file,
 )
-from .models import ProjectManifest, ProjectState, estimated_remaining_seconds
+from .models import ProjectManifest, ProjectState, caption_settings, estimated_remaining_seconds
 from .planner import build_visual_screenplay, plan_shots, validate_duration
 
 
 DEFAULT_STYLE = "cinematic realism, tactile detail, restrained teal and amber grade, motivated natural light"
 
 
-def _project_id(concept: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{slugify(concept)}"
+def new_project_dir(root: Path, concept: str, folders) -> Path:
+    """A fresh `<UTC stamp>-<slug>` project folder under `root` (suffixed -2, -3... if taken), with `folders`."""
+    identity = f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{slugify(concept)}"
+    project_dir, suffix = root / identity, 2
+    while project_dir.exists():
+        project_dir = root / f"{identity}-{suffix}"
+        suffix += 1
+    for folder in folders:
+        (project_dir / folder).mkdir(parents=True, exist_ok=True)
+    return project_dir
 
 
 def _script_from_narration(concept: str, narration: str, duration: int, visual_style: str) -> dict[str, Any]:
@@ -94,14 +101,8 @@ def create_project(
     backend = preferred_backend.lower().replace("h3", "minimax").replace("wan 2.2", "wan")
     if backend not in BACKENDS:
         raise ValueError("preferred_backend must be auto, minimax, or wan")
-    identity = _project_id(concept)
-    project_dir = config.output_root / identity
-    suffix = 2
-    while project_dir.exists():
-        project_dir = config.output_root / f"{identity}-{suffix}"
-        suffix += 1
-    for folder in ("shots", "rejected", "superseded", "input", "audio", "render", "logs"):
-        (project_dir / folder).mkdir(parents=True, exist_ok=True)
+    project_dir = new_project_dir(config.output_root, concept,
+                                  ("shots", "rejected", "superseded", "input", "audio", "render", "logs"))
     manifest = ProjectManifest(
         id=project_dir.name,
         concept=concept.strip(),
@@ -113,13 +114,7 @@ def create_project(
         voice=voice,
         music=music,
         ambience=ambience,
-        captions=captions or {
-            "enabled": narration_enabled,
-            "burn_in": True,
-            "export_srt": True,
-            "word_highlight": True,
-            "safe_position": "lower-middle",
-        },
+        captions=captions or caption_settings(narration_enabled),
         settings={
             "retry_limit": config.retry_limit,
             "fallback_failures": config.fallback_failures,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -13,10 +14,25 @@ from agents.audio_fx import build_fx_track
 from agents.beats import script_word_timings
 from agents.captions import words_to_ass
 from agents.transcription import transcribe_with_whisper, words_to_srt
+from agents.voice import generate_voiceover
 
 from .config import MAX_CLIP_STRETCH, MAX_TRANSITION_SECONDS, PipelineConfig, resolve_within
 from .models import ProjectManifest
 from .upscale import upscale_clips
+
+
+def ensure_narration(manifest: ProjectManifest) -> Path | None:
+    """The project's narration (audio/narration.mp3), voiced once and reused on resume; None without one."""
+    if not manifest.narration_enabled or not str(manifest.script.get("spoken_script") or "").strip():
+        return None
+    target = Path(manifest.project_dir) / "audio" / "narration.mp3"
+    if target.is_file():
+        return target
+    source, duration = generate_voiceover(manifest.script["spoken_script"], voice=manifest.voice)
+    shutil.move(source, target)
+    manifest.record("narration_created", duration=duration, path=str(target.relative_to(manifest.project_dir)))
+    manifest.save()
+    return target
 
 
 def _run(command: list[str], timeout: int, label: str) -> None:
