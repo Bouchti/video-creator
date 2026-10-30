@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from config.paths import get_env_path, get_output_dir
-from agents import ai_router
+from agents import llm
 
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
@@ -387,7 +387,7 @@ Then rewrite the topic using only kept specifics, with the single most striking 
 nothing the evidence does not state, and never hedge an unsupported claim into vagueness to keep it:
 drop it outright. Set usable=false only when so little survives that no short video could be built
 from it — not merely because the topic came out shorter than it went in."""
-    result = ai_router.ask(
+    result = llm.ask(
         "You are a fact-checking editor. You reconcile a proposed topic with the evidence that will "
         "be used to judge the finished script, and you never let an unsourced specific survive.",
         prompt, GROUNDED_TOPIC_TOOL["input_schema"], effort="medium")
@@ -485,7 +485,7 @@ Submit your selection as the structured output. The topic should be a specific f
         retry = ("\n\nREJECTED BY THE VIDEO RENDERER (do not choose these or close variants):\n- "
                  + "\n- ".join(rejected)) if rejected else ""
         system = LEADER_SYSTEM_PROMPT if profile else MECHANISM_LEADER_PROMPT
-        selection = ai_router.ask(system, base_prompt + retry, TOPIC_TOOL["input_schema"])
+        selection = llm.ask(system, base_prompt + retry, TOPIC_TOOL["input_schema"])
         if not isinstance(selection, dict):
             raise ValueError("Leader Agent returned no topic selection")
         if source == "director":
@@ -540,7 +540,7 @@ def novelty_problem(topic: str, need_demo: bool = True):
     """(problem or None, % of viewers who already know it). A strict, separate judge: the picker rates its own
     picks too kindly ("a pressure cooker cooks faster" went through; everyone knows that). need_demo: the why
     must be showable with whole objects (the director stage); a 3D cutaway set can show inside parts."""
-    from agents import ai_router
+    from agents import llm
     system = ("You judge short-video topics for a family science-comedy channel. Be strict and honest: you are "
               "paid for rejecting boring picks.")
     prompt = (f"TOPIC: {topic}\n\nEstimate what percent of a general TikTok / YouTube Shorts audience (teens and "
@@ -556,7 +556,7 @@ def novelty_problem(topic: str, need_demo: bool = True):
               "object's inner parts to move, a cutaway, or invisible things (molecules, forces, signals). "
               "verdict: one line.")
     try:
-        r = ai_router.ask(system, prompt, NOVELTY_SCHEMA, effort="low")
+        r = llm.ask(system, prompt, NOVELTY_SCHEMA, effort="low")
     except Exception as exc:  # noqa: BLE001  (the judge is advice: never blocks the run)
         log.warning("  Novelty check unavailable (%s)", str(exc)[:80])
         return None, 0

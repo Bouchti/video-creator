@@ -43,6 +43,7 @@ import sys
 import time
 import traceback
 
+from agents import llm
 from config.paths import PROJECT_ROOT, get_output_dir
 
 log = logging.getLogger("pipeline")
@@ -102,7 +103,7 @@ class Run:
         if path and os.path.exists(path):
             self.path = path
             self.data = json.load(open(path, encoding="utf-8"))
-            from agents.showrunner import carry_tokens
+            from agents.llm import carry_tokens
             carry_tokens(self.data.get("claude_tokens"))   # the budget covers the whole run, across resumes
         else:
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -124,7 +125,7 @@ class Run:
         self.save()
 
     def save(self):
-        from agents.showrunner import tokens_used
+        from agents.llm import tokens_used
         self.data["claude_tokens"] = tokens_used()
         tmp = self.path + ".tmp"
         json.dump(self.data, open(tmp, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
@@ -135,14 +136,13 @@ class Run:
 
 def _wait_for_claude(exc, run, stage):
     """Wait only for a known, near-term subscription reset; never sleep on a guess."""
-    reset = getattr(exc, "reset", None)
-    if reset is None:
+    from agents.llm import reset_wait
+    wait, max_wait = reset_wait(exc)
+    if wait is None:
         run.event(stage, "all configured AI backends are unavailable; stopped safely",
                   detail="no reset time was supplied; resume later")
         raise GiveUp("Codex models and the Claude fallback are currently unavailable; no reset time "
                      "was supplied, so the run was stopped instead of sleeping blindly. Resume it later.") from exc
-    wait = (reset - datetime.datetime.now()).total_seconds() + 90
-    max_wait = float(os.getenv("SHOWRUNNER_MAX_WAIT", "65")) * 60
     if wait > max_wait:
         run.event(stage, "AI reset is beyond the automatic wait limit; stopped safely",
                   detail=f"reset in {wait / 60:.0f} min; limit {max_wait / 60:.0f} min")
@@ -152,14 +152,9 @@ def _wait_for_claude(exc, run, stage):
     time.sleep(max(60, wait))
 
 
-def _is_usage_limit(exc):
-    from agents.showrunner import UsageLimit
-    return isinstance(exc, UsageLimit) or ("limit" in str(exc).lower() and "reset" in str(exc).lower())
-
-
 def _is_budget(exc):
     """A spent token budget is not a transient failure: retrying only spends more."""
-    from agents.showrunner import BudgetExceeded
+    from agents.llm import BudgetExceeded
     return isinstance(exc, BudgetExceeded)
 
 
@@ -331,7 +326,7 @@ def stage_script(run, source, angle, set_id):
                 # A set repair that changed nothing would get the same inputs again on a retry: stop instead.
                 raise GiveUp(f"the set repair made no changes; retrying would repeat the same paid turn: "
                              f"{exc}") from exc
-            if _is_usage_limit(exc):
+            if llm.is_usage_limit(exc):
                 _wait_for_claude(exc, run, "script")
                 continue
             if isinstance(exc, (TypeError, AttributeError, KeyError, IndexError)):
@@ -479,7 +474,7 @@ def stage_render(run, film_json):
                 except Exception as fx:                   # noqa: BLE001
                     if _is_budget(fx):
                         raise GiveUp(str(fx)) from fx
-                    if _is_usage_limit(fx):
+                    if llm.is_usage_limit(fx):
                         _wait_for_claude(fx, run, "render")
                     else:
                         run.event("render", "code fix failed", detail=str(fx)[:200])
@@ -503,7 +498,7 @@ def stage_render(run, film_json):
         except Exception as exc:                          # noqa: BLE001
             if _is_budget(exc):
                 return _give_up(run, film_json, set_id, exc)
-            if _is_usage_limit(exc):
+            if llm.is_usage_limit(exc):
                 _wait_for_claude(exc, run, "render")
             elif _voice_error(exc):
                 run.event("render", "voice / network error; retrying in 2 min", detail=str(exc)[:200])

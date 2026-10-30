@@ -60,11 +60,11 @@ class RecipeTests(unittest.TestCase):
     def test_ai_plans_the_actions_and_keywords_stand_in_without_a_backend(self):
         from unreal_video.runner import plan_actions
         recipe = build_recipe(_script(), 30)
-        with patch("unreal_video.runner.ai_router.ask", return_value={"actions": ["pump_up", "store"]}):
+        with patch("unreal_video.runner.llm.ask", return_value={"actions": ["pump_up", "store"]}):
             plan_actions(recipe, _script())
         self.assertEqual([s["action"] for s in recipe["shots"]], ["pump_up", "finale"])   # the last is the payoff
         recipe = build_recipe(_script(), 30)
-        with patch("unreal_video.runner.ai_router.ask", side_effect=RuntimeError("no backend")):
+        with patch("unreal_video.runner.llm.ask", side_effect=RuntimeError("no backend")):
             plan_actions(recipe, _script())
         self.assertEqual([s["action"] for s in recipe["shots"]], ["finale", "finale"])   # cold open, payoff
 

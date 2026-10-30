@@ -19,6 +19,7 @@ import logging
 import os
 import re
 
+from agents import llm
 from agents import showrunner as sr
 from engine import sets
 
@@ -99,7 +100,7 @@ every bridge looks different, the hidden fixes nobody notices, the famous failur
 rule...), a working title, the opening line (second person, at most {OPEN_MAX_WORDS} words), the
 payoff, and honest 1-10 scores for curiosity, visual_fit, novelty and shareability. Set `best` to
 the index of the strongest."""
-    out = sr._call(EVO_STYLE, prompt, ANGLE_SCHEMA, effort="medium")
+    out = llm.ask(EVO_STYLE, prompt, ANGLE_SCHEMA, effort="medium")
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
     best["set"] = set_id
@@ -148,7 +149,7 @@ Write the improved script."""
             prompt += ("\nTONE EXAMPLE: a reference script for this same set. Match its rhythm, do NOT reuse "
                        f"its lines; beat it.\n{example}\n")
         prompt += "\nWrite the script. Every beat must earn its place."
-    return sr._call(EVO_STYLE, prompt, sr.SCRIPT_SCHEMA, effort="high")
+    return llm.ask(EVO_STYLE, prompt, sr.SCRIPT_SCHEMA, effort="high")
 
 
 def critique(script, topic, facts, hard_problems):
@@ -172,7 +173,7 @@ Automatic checks found: {hard_problems or 'nothing'}
 
 List concrete problems and line edits (quote the line, give the better line). verdict = "ship"
 only if every score is {sr.PASS_SCORE}+ and there are no factual errors or rule breaks."""
-    return sr._call(EVO_STYLE, prompt, CRITIQUE_SCHEMA, effort="medium")
+    return llm.ask(EVO_STYLE, prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
 def hard_checks(script, set_id):
@@ -226,7 +227,7 @@ def to_film(script, topic, facts, review=None):
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),
-                     "model": sr.CODEX_MODEL if sr.active_backend() == "codex" else sr.CLI_MODEL}}
+                     "model": llm.CODEX_MODEL if llm.active_backend() == "codex" else llm.CLI_MODEL}}
 
 
 def run(angle=None, set_id=None, render=True, preview=False):

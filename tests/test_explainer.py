@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from agents import autopilot as ap
+from agents import llm
 from agents import storyboard as sbm
 from agents import explainer
 from agents import set_builder as sb
@@ -66,10 +67,10 @@ class UsageTests(unittest.TestCase):
 class ChooseAndWriteTests(unittest.TestCase):
     def test_angle_is_matched_to_a_set_or_needs_a_new_one(self):
         with patch.object(explainer, "unused_sets", return_value=["pool"]), \
-                patch.object(sr, "_call", return_value={"set": "pool", "reason": "same subject"}):
+                patch.object(llm, "ask", return_value={"set": "pool", "reason": "same subject"}):
             self.assertEqual(explainer.choose_set("why pools have a floor valve"), "pool")
         with patch.object(explainer, "unused_sets", return_value=["pool"]), \
-                patch.object(sr, "_call", return_value={"set": "none", "reason": "different subject"}):
+                patch.object(llm, "ask", return_value={"set": "none", "reason": "different subject"}):
             self.assertIsNone(explainer.choose_set("how a septic tank works"))
 
     def test_no_angle_lets_the_showrunner_choose_and_nothing_left_means_build(self):
@@ -106,7 +107,7 @@ class ChooseAndWriteTests(unittest.TestCase):
     def test_plan_normalises_the_hook_and_names_an_explainer_set(self):
         plan = {k: "x" for k in explainer.PLAN_SCHEMA["properties"]}
         plan.update(subject="Septic tank", hook_action="Overflow Hook", trend_source_url="https://e.test")
-        with patch.object(sr, "_call", return_value=plan):
+        with patch.object(llm, "ask", return_value=plan):
             out = explainer.plan_new_set()
         self.assertEqual(out["hook_action"], "overflow_hook")
         self.assertTrue(out["set_id"].endswith("_explainer"))
@@ -114,7 +115,7 @@ class ChooseAndWriteTests(unittest.TestCase):
     def test_autonomous_plan_needs_a_trend_source(self):
         plan = {k: "x" for k in explainer.PLAN_SCHEMA["properties"]}
         plan.update(trend_source_url="")
-        with patch.object(sr, "_call", return_value=plan):
+        with patch.object(llm, "ask", return_value=plan):
             with self.assertRaises(explainer.NoUnusedExplainerSets):
                 explainer.plan_new_set()
             self.assertTrue(explainer.plan_new_set("how a septic tank works")["set_id"])

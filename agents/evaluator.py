@@ -1,11 +1,10 @@
 import json
-import os
 import logging
 import re
 from collections import Counter
 from dotenv import load_dotenv
 from config.paths import get_env_path
-from agents import ai_router
+from agents import llm
 from agents.beats import validate_beats
 
 load_dotenv(get_env_path())
@@ -176,7 +175,7 @@ Be lenient on cinematic style. Submit your verdict as the structured output."""
     system = (UNREAL_EVALUATOR_PROMPT if source == "unreal" else
               LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT if source == "local-ai" and content_mode == "documentary"
               else EVALUATOR_PROMPT)
-    result = ai_router.ask(system, prompt, VERDICT_TOOL["input_schema"], effort="medium")
+    result = llm.ask(system, prompt, VERDICT_TOOL["input_schema"], effort="medium")
     if not isinstance(result, dict) or result.get("verdict") not in {"PASS", "FAIL"}:
         raise ValueError("Evaluator response must contain verdict PASS or FAIL")
     issues = [i for i in (result.get("issues") or []) if isinstance(i, dict) and i.get("fix")]

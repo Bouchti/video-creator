@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from agents import autopilot as ap
+from agents import llm
 from agents import scene_validator as sv
 import engine.make_film as mf
 
@@ -365,17 +366,17 @@ if __name__ == "__main__":
 class BudgetAcrossResumeTests(_Env):
     def test_a_resumed_run_keeps_counting_its_earlier_spend(self):
         from agents import showrunner
-        with patch.dict(showrunner.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 2_500_000,
+        with patch.dict(llm.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 2_500_000,
                                                   "cache_creation_input_tokens": 0, "output_tokens": 0}):
             self.run.event("set", "a costly turn")
             self.assertEqual(json.load(open(self.run.path, encoding="utf-8"))["claude_tokens"], 2_500_000)
         try:
-            with patch.dict(showrunner.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 0,
+            with patch.dict(llm.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 0,
                                                       "cache_creation_input_tokens": 0, "output_tokens": 0}), \
-                    patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "2000000"}),                     patch.object(showrunner, "BACKEND", "subscription"),                     patch.object(showrunner, "_ACTIVE_BACKEND", [None]):
+                    patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "2000000"}),                     patch.object(llm, "BACKEND", "subscription"),                     patch.object(llm, "_ACTIVE_BACKEND", [None]):
                 ap.Run(self.run.path)                    # a new process resumes the run
-                self.assertEqual(showrunner.tokens_used(), 2_500_000)
-                with self.assertRaises(showrunner.BudgetExceeded):
-                    showrunner.check_budget("next call")
+                self.assertEqual(llm.tokens_used(), 2_500_000)
+                with self.assertRaises(llm.BudgetExceeded):
+                    llm.check_budget("next call")
         finally:
-            showrunner.carry_tokens(0)
+            llm.carry_tokens(0)

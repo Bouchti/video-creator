@@ -373,8 +373,8 @@ def restage_hook(plan, why="", call=None):
     b = copy.deepcopy(plan["beats"][0])
     props = {p["id"] for p in plan.get("props", [])}
     try:
-        from agents import ai_router
-        call = call or (lambda s, p, sc: ai_router.ask(s, p, sc, effort="high"))
+        from agents import llm
+        call = call or (lambda s, p, sc: llm.ask(s, p, sc, effort="high"))
         beat_schema = schema()["properties"]["beats"]["items"]
         prompt = (f"THE FIRST BEAT OF THIS FILM DOES NOT STOP THE SCROLL. A sound-off viewer said: {why}\n\n"
                   f"Re-stage it: keep the text EXACTLY (\"{b['text']}\") and id {b['id']}; change only shot, cast, "
@@ -424,8 +424,8 @@ def resize(plan, target_words, call=None):
     import copy
     now = sum(len(_words(b["text"])) for b in plan["beats"])
     try:
-        from agents import ai_router
-        call = call or (lambda s, p, sc: ai_router.ask(s, p, sc, effort="medium"))
+        from agents import llm
+        call = call or (lambda s, p, sc: llm.ask(s, p, sc, effort="medium"))
         verb = "LENGTHEN" if target_words > now else "SHORTEN"
         prompt = (f"{verb} this narration from {now} to about {target_words} words in total, beat by beat (keep "
                   "the share of each beat). Keep the meaning, the jokes, the plain words, the cold open <= 12 words, "
@@ -458,8 +458,8 @@ def replace_props(plan, missing, call=None):
     """New searches for the props no 3D model was found for (they were filmed as plain coloured shapes the
     narration still called "a spinning top"). Ids stay, so the beats are untouched. Never fails: the old plan
     comes back when the call does."""
-    from agents import ai_router
-    call = call or (lambda s, p, sc: ai_router.ask(s, p, sc, effort="medium"))
+    from agents import llm
+    call = call or (lambda s, p, sc: llm.ask(s, p, sc, effort="medium"))
     story = "\n".join(f"[{b['id']}] {b['text']}" for b in plan.get("beats", []))
     lines = "\n".join(f"- {p['id']}: '{p['query']}' ({p.get('size_m')} m)" for p in plan.get("props", [])
                       if p["id"] in missing)
@@ -579,8 +579,8 @@ def clarity(plan, call=None, missing=()):
     """A curious 12-year-old reads the film (each beat: what is said + what is REALLY on screen) BEFORE the voice
     is recorded, while changing words is free. Returns the judge's report, or None if it could not run."""
     try:
-        from agents import ai_router
-        call = call or (lambda s, p, sc: ai_router.ask(s, p, sc, effort="medium"))
+        from agents import llm
+        call = call or (lambda s, p, sc: llm.ask(s, p, sc, effort="medium"))
         film = "\n".join(f"[{b['id']}] SAID: {b['text']}\n      ON SCREEN: {screen(b, plan, missing)}"
                          for b in plan["beats"])
         system = ("You are a curious, easily bored 12-year-old watching a 60-second funny science short on your "
@@ -617,8 +617,8 @@ def clarity_problems(report):
 
 
 def write(topic, facts, angle=None, call=None, judge=None):
-    from agents import ai_router
-    call = call or (lambda s, p, sc: ai_router.ask(s, p, sc, effort="high"))
+    from agents import llm
+    call = call or (lambda s, p, sc: llm.ask(s, p, sc, effort="high"))
     plan, problems = None, None
     for _ in range(2):
         plan = _clean(call(RULES, prompt(topic, facts, angle, problems, plan), schema()))

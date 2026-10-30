@@ -56,12 +56,12 @@ SCHEMA = {
 
 
 def _ask_claude(film):
-    from agents import showrunner as sr
+    from agents import llm
     script = "\n".join(f"- [{b.get('action')}] {b['text']}" for b in film["beats"])
     meta = film.get("meta", {})
     prompt = (f"{RULES}\n\nTITLE: {film.get('title', '')}\nCLOSING QUESTION: {film.get('cta') or ''}\n\n"
               f"SCRIPT (in order):\n{script}\n\nFACT SHEET:\n{meta.get('facts', '')[:4000]}")
-    return sr._call("You write social media posts for a premium educational TikTok/YouTube channel.", prompt,
+    return llm.ask("You write social media posts for a premium educational TikTok/YouTube channel.", prompt,
                     SCHEMA, effort="low")
 
 

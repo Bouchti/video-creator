@@ -41,15 +41,14 @@ import json
 import logging
 import os
 import re
-import shutil
-import subprocess
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from PIL import Image
+
+from agents import llm
 
 log = logging.getLogger("pipeline")
 
@@ -272,86 +271,6 @@ def _jpeg(path, width=REVIEW_W):
     return buf.getvalue()
 
 
-def _backend():
-    from agents.showrunner import active_backend
-    explicit = (os.getenv("SCENE_REVIEW_BACKEND") or "").strip().lower()
-    active = active_backend()
-    # A process-wide usage-limit fallback moves review work too.
-    return active if not explicit or active != explicit else explicit
-
-
-def _review_cli(prompt, images, schema=REVIEW_SCHEMA):
-    """claude -p on the Claude subscription: the images are copied into a temp dir and read with
-    the Read tool (API credentials stripped, like the showrunner's subscription backend)."""
-    exe = shutil.which("claude")
-    if not exe:
-        raise RuntimeError("Claude Code CLI not found")
-    from agents.showrunner import (UsageLimit, _API_ENV, CLI_MODEL, _capped_effort,
-                                   _record_claude_usage, check_budget)
-    check_budget("scene review")
-    env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
-    with tempfile.TemporaryDirectory() as tmp:
-        names = []
-        for k, (label, p) in enumerate(images):
-            dst = os.path.join(tmp, f"{k + 1}_{os.path.basename(p)}")
-            shutil.copyfile(p, dst)
-            names.append(f"- {os.path.basename(dst)}: {label}")
-        full = (prompt + "\n\nRead these image files (in the current directory) with the Read tool, then return "
-                "the review:\n" + "\n".join(names))
-        cmd = [exe, "-p", "--output-format", "json", "--model", os.getenv("SCENE_REVIEW_CLI_MODEL", CLI_MODEL),
-               "--effort", _capped_effort(os.getenv("SCENE_REVIEW_EFFORT") or "low"),
-               "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
-               "--tools", "Read", "--allowedTools", "Read", "--json-schema", json.dumps(schema)]
-        r = subprocess.run(cmd, input=full, capture_output=True, text=True, encoding="utf-8", cwd=tmp, env=env,
-                           timeout=600)
-    try:
-        data = json.loads(r.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}") from exc
-    result_text = str(data.get("result") or "")
-    if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
-        raise UsageLimit(result_text[:500])
-    if data.get("is_error") or data.get("subtype") != "success":
-        raise RuntimeError(f"claude -p: {result_text[:200]}")
-    _record_claude_usage(data, "scene review")
-    out = data.get("structured_output")
-    return out if out is not None else json.loads(data["result"])
-
-
-def _review_codex(prompt, images, schema=REVIEW_SCHEMA):
-    """Review images through the logged-in Codex subscription."""
-    from agents import codex_cli
-    from agents.showrunner import UsageLimit, codex_unavailable
-
-    labels = "\n".join(f"Image {i + 1}: {label}" for i, (label, _) in enumerate(images))
-    full = prompt + "\n\nAttached images, in order:\n" + labels
-    model = os.getenv("SCENE_REVIEW_CODEX_MODEL") or os.getenv("SHOWRUNNER_CODEX_MODEL") or "gpt-5.6-sol"
-    try:
-        out, _ = codex_cli.run(full, schema=schema, effort=os.getenv("SCENE_REVIEW_EFFORT") or "low",
-                               images=[p for _, p in images], model=model,
-                               timeout=900, effort_cap_env="SCENE_REVIEW_CODEX_EFFORT_CAP")
-        return out
-    except RuntimeError as exc:
-        if codex_unavailable(exc):
-            raise UsageLimit(str(exc)[:500]) from exc
-        raise
-
-
-def _review_dispatch(prompt, images, schema=REVIEW_SCHEMA):
-    """Use the active reviewer and switch the process after a subscription usage limit."""
-    from agents.showrunner import UsageLimit, activate_fallback, active_backend
-    backend = _backend()
-    try:
-        return (_review_codex(prompt, images, schema) if backend == "codex" else
-                _review_cli(prompt, images, schema))
-    except UsageLimit as exc:
-        if activate_fallback(str(exc), failed_backend=backend):
-            fallback = active_backend()
-            return (_review_codex(prompt, images, schema) if fallback == "codex" else
-                    _review_cli(prompt, images, schema))
-        raise
-
-
 BATCH_REVIEW_SCHEMA = {
     "type": "object",
     "properties": {"reviews": {"type": "array", "items": {
@@ -377,7 +296,7 @@ def review_batch(items: list, subject: str) -> dict:
     prompt = ("Review every beat below independently. Return exactly one review per requested window, in the "
               "same order. Do not omit a window. Use adjacent beats' end/start frames to judge continuity.\n\n"
               + "\n\n--- NEXT BEAT ---\n\n".join(blocks))
-    values = _review_dispatch(prompt, images, BATCH_REVIEW_SCHEMA)
+    values = llm.ask(None, prompt, BATCH_REVIEW_SCHEMA, images=images, label="scene review")
     by_window = {int(v["window"]): {**judge(v), "skipped": False} for v in values.get("reviews", [])}
     expected = {int(w["window"]) for w, _ in items}
     if set(by_window) != expected:
@@ -415,12 +334,11 @@ def review_images(w: dict, images: list, subject: str, previous: str = None) -> 
     prompt = _instructions(w, subject, previous)
     imgs = ([("previous window end frame", previous)] if previous else []) + images
     try:
-        values = _review_dispatch(prompt, imgs)
+        values = llm.ask(None, prompt, REVIEW_SCHEMA, images=imgs, label="scene review")
     except Exception as exc:                         # noqa: BLE001
-        from agents.showrunner import UsageLimit
         text = str(exc).lower()
-        if isinstance(exc, UsageLimit) or ("limit" in text and any(x in text for x in ("reset", "rate", "usage"))):
-            raise UsageLimit(str(exc)[:500]) from exc
+        if isinstance(exc, llm.UsageLimit) or ("limit" in text and any(x in text for x in ("reset", "rate", "usage"))):
+            raise llm.UsageLimit(str(exc)[:500]) from exc
         log.warning(f"[scenes] vision review unavailable for window {w['window']} ({str(exc)[:120]}); "
                     "technical QC only")
         return {"valid": _env_flag("SCENE_ALLOW_QC_SKIP", "0"), "skipped": True,
@@ -698,13 +616,11 @@ class SceneWatcher:
                                            "reason": f"validator error: {exc}"})
 
     def _remember_usage_limit(self, exc):
-        from agents.showrunner import UsageLimit
-        text = str(exc).lower()
-        if not (isinstance(exc, UsageLimit) or ("limit" in text and "reset" in text)):
+        if not llm.is_usage_limit(exc):
             return False
         with self._lock:
             if self._fatal_error is None:
-                self._fatal_error = exc if isinstance(exc, UsageLimit) else UsageLimit(str(exc))
+                self._fatal_error = exc if isinstance(exc, llm.UsageLimit) else llm.UsageLimit(str(exc))
         # A temporary reviewer quota is not a reason to throw away render time. Stop submitting
         # more reviews, let Blender finish writing frames, then surface the limit from finish().
         # Autopilot will wait for the reset and resume with those frames intact.

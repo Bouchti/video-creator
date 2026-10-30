@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from agents import claude_cli
+from agents import llm
 from agents.voice import credit_status, elevenlabs_keys
 
 from .config import PipelineConfig
@@ -58,7 +58,7 @@ def run_preflight(
         problems.append(f"Only {checks['free_disk_gb']} GB free; {minimum_gb:g} GB is required")
 
     if require_visual_qc and os.getenv("LOCAL_VIDEO_ALLOW_QC_SKIP", "0") != "1":
-        checks["visual_qc_claude_cli"] = claude_cli.available()
+        checks["visual_qc_claude_cli"] = llm.claude_available()
         if not checks["visual_qc_claude_cli"]:
             problems.append("Claude Code (`claude -p`, subscription login) is required for fail-closed visual QC")
 

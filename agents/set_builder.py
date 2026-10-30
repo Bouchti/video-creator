@@ -72,14 +72,14 @@ def _claude_building_allowed():
     """Set building is the costliest AI work in the pipeline (an agent re-reads its whole context on
     every step: one design used ~12M tokens). When Codex is the configured backend, running out of
     Codex quota must NOT silently move that work onto the Claude subscription."""
-    from agents.showrunner import BACKEND
+    from agents.llm import BACKEND
     return BACKEND != "codex" or os.getenv("SET_BUILDER_CLAUDE_FALLBACK", "0") == "1"
 
 
 def _call_token_cap():
     """Hard ceiling for ONE Claude set-builder call: SET_BUILDER_CALL_TOKENS (default 3M), and never more
     than what is left of the run's CLAUDE_TOKEN_BUDGET."""
-    from agents.showrunner import token_budget, tokens_used
+    from agents.llm import token_budget, tokens_used
     try:
         cap = int(os.getenv("SET_BUILDER_CALL_TOKENS") or 3_000_000)
     except ValueError:
@@ -150,9 +150,8 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
     agent otherwise patches its 1,000-line file with dozens of one-line edits after measuring, each one
     re-sending its whole context (24 edits cost ~1.4M tokens; one rewrite ~15k).
     """
-    from agents.showrunner import (UsageLimit, _API_ENV, _capped_effort, _record_claude_usage,
-                                   activate_fallback, active_backend, check_budget, codex_unavailable,
-                                   primary_reset)
+    from agents.llm import (UsageLimit, activate_fallback, active_backend, check_budget, claude_cmd,
+                            codex_unavailable, is_usage_limit, primary_reset, record_usage, subscription_env)
     check_budget("set builder")          # the costliest call in the pipeline: never start one over budget
     backend = active_backend()
     story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
@@ -246,10 +245,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 limit.reset = reset       # lets the autopilot wait for a near reset instead of stopping blind
                 raise limit
             check_budget("set builder")      # again: the check above ran while the backend was still Codex
-            exe = shutil.which("claude")
-            if not exe:
-                raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
-            env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
+            env = subscription_env()
             tools = ["Read", "Glob", "Grep", "Write"] + (["Edit"] if allow_edit else [])
             permitted = list(tools)
             if measure_cmd:                       # one exact command: everything else needs approval = denied
@@ -258,10 +254,8 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                 env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")   # venv python
                 env.setdefault("BASH_DEFAULT_TIMEOUT_MS", "900000")       # a measurement takes ~3 minutes
                 env.setdefault("BASH_MAX_TIMEOUT_MS", "900000")
-            cmd = [exe, "-p", "--output-format", "stream-json", "--verbose", "--model", BUILD_MODEL, "--effort",
-                   _capped_effort(effort, "SET_BUILDER_CLAUDE_EFFORT_CAP"),
-                   "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
-                   "--permission-mode", "acceptEdits", "--tools", *tools, "--allowedTools", *permitted]
+            cmd = claude_cmd(BUILD_MODEL, effort, tools, allowed=permitted, stream=True,
+                             effort_cap_env="SET_BUILDER_CLAUDE_EFFORT_CAP") + ["--permission-mode", "acceptEdits"]
             log.info(f"[set_builder] Claude ({BUILD_MODEL}) is working on the set (usually 15-40 minutes); "
                      "its steps follow")
             cap = _call_token_cap()
@@ -269,13 +263,13 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             if cap < least:
                 # a turn cut off this early writes nothing (one stopped at 390k "changed nothing"): stop
                 # cleanly with the budget unspent instead
-                from agents.showrunner import BudgetExceeded
+                from agents.llm import BudgetExceeded
                 raise BudgetExceeded(f"only {cap:,} tokens are left of CLAUDE_TOKEN_BUDGET / SET_BUILDER_CALL_TOKENS, "
                                      f"less than a useful set-builder turn ({least:,}); raise the budget and resume")
             data, tail, spent, stopped = _run_claude_streaming(cmd, prompt + rules, workspace, env, timeout, cap)
             if stopped:
-                from agents.showrunner import BudgetExceeded
-                _record_claude_usage({"usage": spent}, "set builder (stopped at its token cap)")
+                from agents.llm import BudgetExceeded
+                record_usage({"usage": spent}, "set builder (stopped at its token cap)")
                 missing = [r for r in allowed if not os.path.isfile(os.path.join(workspace, os.path.normpath(r)))]
                 if missing:
                     raise BudgetExceeded(f"the set-builder agent was stopped at its token cap ({cap:,} tokens, "
@@ -288,7 +282,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             if data is None:
                 raise RuntimeError(f"claude -p failed: {tail[-400:]}")
             result_text = str(data.get("result") or "")
-            if data.get("is_error") and "limit" in result_text.lower() and "reset" in result_text.lower():
+            if data.get("is_error") and is_usage_limit(result_text):
                 limit = UsageLimit(result_text[:300])
                 if activate_fallback(str(limit), failed_backend=backend):
                     return claude_agent(prompt, allowed, effort=effort, timeout=timeout, allow_edit=allow_edit,
@@ -297,7 +291,7 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             if data.get("is_error"):
                 raise RuntimeError(f"claude -p error: {result_text[:300]}")
             if not stopped:                       # a stopped agent's usage was recorded above
-                _record_claude_usage(data, "set builder")
+                record_usage(data, "set builder")
             out = result_text.strip()
 
         for relative in allowed:
@@ -603,7 +597,8 @@ def backfill_extras(set_id) -> bool:
     the builder's own code, in one structured call. The writer only knows what the spec says is on screen:
     with the duck gag cut from "shows" (the reviewer requires everything there), every duck joke was graded
     an unsupported inside joke and the script's fun score could not recover. Returns True when written."""
-    from agents.showrunner import BudgetExceeded, UsageLimit, _call
+    from agents import llm
+    from agents.llm import BudgetExceeded, UsageLimit
     spec_path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}_spec.py")
     spec_src = open(spec_path, encoding="utf-8").read()
     builder = open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
@@ -623,7 +618,7 @@ BUILDER (engine/sets/{set_id}.py):
 {builder}
 ```"""
     try:
-        values = _call("You describe what a 3D set's code shows on screen in each story action.", prompt,
+        values = llm.ask("You describe what a 3D set's code shows on screen in each story action.", prompt,
                        _EXTRAS_SCHEMA, effort="low")
         found = {v["action"]: v["extras"].strip() for v in values.get("actions", []) if v.get("extras", "").strip()}
         new = insert_action_key(spec_src, "extras", found)
@@ -641,7 +636,7 @@ def backfill_must_see(set_id) -> bool:
     """A set written without must_see gets it from ONE structured call over its own source (the scene
     objects it creates) instead of an agentic turn: an agent spent 900k tokens exploring the engine
     for this. Returns True when the spec now passes the must_see check."""
-    from agents.showrunner import _call
+    from agents import llm
     spec_path = os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}_spec.py")
     spec_src = open(spec_path, encoding="utf-8").read()
     builder = open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
@@ -660,13 +655,13 @@ BUILDER (engine/sets/{set_id}.py):
 {builder}
 ```"""
     try:
-        values = _call("You map a 3D set's story actions to the names of the scene objects that show them.",
+        values = llm.ask("You map a 3D set's story actions to the names of the scene objects that show them.",
                        prompt, _MUST_SEE_SCHEMA, effort="low")
         found = {v["action"]: [x for x in v["must_see"] if x][:4] for v in values.get("actions", [])
                  if v.get("must_see")}
         new = insert_must_see(spec_src, found)
     except Exception as exc:                          # noqa: BLE001  the agent path still handles it
-        from agents.showrunner import BudgetExceeded, UsageLimit
+        from agents.llm import BudgetExceeded, UsageLimit
         if isinstance(exc, (BudgetExceeded, UsageLimit)):
             raise
         log.warning(f"[set_builder] must_see backfill failed ({str(exc)[:200]}); leaving it to the agent")
@@ -1669,7 +1664,7 @@ def build_kit_set(plan: dict) -> dict:
             review = [{"beat": r["beat"], "action": r["action"], "problems": r.get("fatal_problems") or []}
                       for r in review_preview(set_id, work) if not r.get("valid")]
         except Exception as exc:                          # noqa: BLE001  advisory: never blocks the video
-            from agents.showrunner import BudgetExceeded, UsageLimit
+            from agents.llm import BudgetExceeded, UsageLimit
             if isinstance(exc, (BudgetExceeded, UsageLimit)) or not hand_built:
                 raise
             log.warning(f"[kit] advisory vision check unavailable: {exc}")

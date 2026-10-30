@@ -38,7 +38,7 @@ class ChannelTopicTests(unittest.TestCase):
 
     def test_the_picker_is_given_the_channel_and_told_news_is_off_brand(self):
         seen = {}
-        with patch.object(leader.ai_router, "ask", side_effect=lambda system, prompt, schema, **k:
+        with patch.object(leader.llm, "ask", side_effect=lambda system, prompt, schema, **k:
                           seen.update(system=system, prompt=prompt) or {"topic": "Wojtek the bear"}):
             leader.pick_topic([], [], source="local-ai")
         self.assertIn("Untold Footnotes", seen["prompt"])

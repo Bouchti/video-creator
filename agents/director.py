@@ -570,7 +570,7 @@ def viewer_review(plan, timing, work, movie):
     """A sound-off, text-off first-time viewer: per beat, a strip of 4 frames. It says what it sees BEFORE it
     reads the intent, then: clear?, funny 1-5, anything physically incoherent, the single biggest problem."""
     from PIL import Image
-    from agents import ai_router
+    from agents import llm
     from engine.director.worlds import WORLDS
     spec = WORLDS.get(plan["world"]) or {"shots": {b["id"]: {"shows": b.get("shows", b["text"]), "gag": b["text"]}
                                                    for b in plan["beats"]}}
@@ -627,7 +627,7 @@ def viewer_review(plan, timing, work, movie):
               "12-year-old would now know, in one sentence ('' if nothing); confusing = every moment where the words "
               "and the pictures do not explain it simply, or do not match.")
     said = "\n".join(f"- {b['id']}: {b['text']}" for b in plan["beats"])
-    return ai_router.ask(system, f"INTENT (read after describing):\n{intents}\n\nNARRATION (for learned / confusing):\n"
+    return llm.ask(system, f"INTENT (read after describing):\n{intents}\n\nNARRATION (for learned / confusing):\n"
                          f"{said}", VIEWER_SCHEMA, images=sheets)
 
 

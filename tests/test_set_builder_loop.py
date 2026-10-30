@@ -216,7 +216,7 @@ class MustSeeBackfillTests(FreezeTests):
         spec_path = os.path.join(self.root, "engine", "sets", "demo_story_spec.py")
         open(spec_path, "w", encoding="utf-8").write(SPEC)
         answer = {"actions": [{"action": "hook", "must_see": ["jet"]}, {"action": "one", "must_see": ["levee"]}]}
-        with patch("agents.showrunner._call", return_value=answer) as call, \
+        with patch("agents.llm.ask", return_value=answer) as call, \
                 patch.object(sb, "claude_agent", side_effect=AssertionError("no agent turn")):
             self.assertTrue(sb.backfill_must_see("demo_story"))
         self.assertEqual(call.call_args.kwargs["effort"], "low")
@@ -228,7 +228,7 @@ class ExtrasBackfillTests(FreezeTests):
         spec_path = os.path.join(self.root, "engine", "sets", "demo_story_spec.py")
         open(spec_path, "w", encoding="utf-8").write(SPEC)
         answer = {"actions": [{"action": "one", "extras": "the duck surfs the leak"}, {"action": "hook", "extras": ""}]}
-        with patch("agents.showrunner._call", return_value=answer), \
+        with patch("agents.llm.ask", return_value=answer), \
                 patch.object(sb, "claude_agent", side_effect=AssertionError("no agent turn")):
             self.assertTrue(sb.backfill_extras("demo_story"))
         ns = {}

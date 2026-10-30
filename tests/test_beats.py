@@ -206,7 +206,7 @@ class VisionTests(unittest.TestCase):
 
     def test_rank_returns_valid_unique_indices(self):
         with tempfile.TemporaryDirectory() as tmp, \
-                patch("agents.claude_cli.ask", return_value={"matches": [2, 0, 2, 9, "x"]}) as ask:
+                patch("agents.llm.ask", return_value={"matches": [2, 0, 2, 9, "x"]}) as ask:
             self.assertEqual([2, 0], vision.rank_images("desc", "line", self._images(tmp, 3)))
         self.assertEqual(3, len(ask.call_args.kwargs["images"]))
 

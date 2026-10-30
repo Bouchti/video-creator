@@ -9,73 +9,73 @@ import os
 import unittest
 from unittest.mock import patch
 
-from agents import autopilot, set_builder, showrunner
+from agents import autopilot, llm, set_builder
 
 
 class TokenBudgetTests(unittest.TestCase):
     def setUp(self):
-        self._saved = dict(showrunner.CLAUDE_USAGE)
+        self._saved = dict(llm.CLAUDE_USAGE)
 
     def tearDown(self):
-        showrunner.CLAUDE_USAGE.clear()
-        showrunner.CLAUDE_USAGE.update(self._saved)
+        llm.CLAUDE_USAGE.clear()
+        llm.CLAUDE_USAGE.update(self._saved)
 
     def _spend(self, tokens):
-        showrunner.CLAUDE_USAGE.update(calls=3, input_tokens=tokens, cache_read_input_tokens=0,
+        llm.CLAUDE_USAGE.update(calls=3, input_tokens=tokens, cache_read_input_tokens=0,
                                        cache_creation_input_tokens=0, output_tokens=0)
 
     def test_tokens_used_sums_every_billed_category(self):
-        showrunner.CLAUDE_USAGE.update(calls=1, input_tokens=1, cache_read_input_tokens=10,
+        llm.CLAUDE_USAGE.update(calls=1, input_tokens=1, cache_read_input_tokens=10,
                                        cache_creation_input_tokens=100, output_tokens=1000)
-        self.assertEqual(showrunner.tokens_used(), 1111)
+        self.assertEqual(llm.tokens_used(), 1111)
 
     def test_an_unset_or_zero_budget_never_blocks(self):
         self._spend(10 ** 9)
         for value in ("0", "", "not-a-number"):
             with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": value}):
-                self.assertEqual(showrunner.token_budget(), 0)
-                showrunner.check_budget("showrunner")              # must not raise
+                self.assertEqual(llm.token_budget(), 0)
+                llm.check_budget("showrunner")              # must not raise
 
     def test_under_budget_passes(self):
         self._spend(10_000)
         with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1000000"}), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", ["subscription"]):
-            showrunner.check_budget("scene review")                # must not raise
+                patch.object(llm, "_ACTIVE_BACKEND", ["subscription"]):
+            llm.check_budget("scene review")                # must not raise
 
     def test_a_spent_budget_refuses_the_next_call(self):
         self._spend(1_500_000)
         with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1000000"}), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", ["subscription"]):
-            with self.assertRaises(showrunner.BudgetExceeded) as caught:
-                showrunner.check_budget("set builder")
+                patch.object(llm, "_ACTIVE_BACKEND", ["subscription"]):
+            with self.assertRaises(llm.BudgetExceeded) as caught:
+                llm.check_budget("set builder")
         self.assertIn("set builder", str(caught.exception))
         self.assertIn("1,500,000", str(caught.exception))
 
     def test_the_codex_backend_is_not_limited_by_the_claude_budget(self):
         self._spend(10 ** 9)
         with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1000"}), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", ["codex"]):
-            showrunner.check_budget("set builder")                 # Codex has its own quota
+                patch.object(llm, "_ACTIVE_BACKEND", ["codex"]):
+            llm.check_budget("set builder")                 # Codex has its own quota
 
     def test_the_set_builder_agent_refuses_to_start_over_budget(self):
         """The costliest call in the pipeline must not even copy the repo once the budget is gone."""
         self._spend(10 ** 9)
         with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1000"}), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", ["subscription"]):
-            with self.assertRaises(showrunner.BudgetExceeded):
+                patch.object(llm, "_ACTIVE_BACKEND", ["subscription"]):
+            with self.assertRaises(llm.BudgetExceeded):
                 set_builder.claude_agent("fix the set", ["engine/sets/does_not_matter.py"])
 
     def test_autopilot_treats_a_spent_budget_as_a_stop_not_a_retry(self):
-        self.assertTrue(autopilot._is_budget(showrunner.BudgetExceeded("spent")))
+        self.assertTrue(autopilot._is_budget(llm.BudgetExceeded("spent")))
         self.assertFalse(autopilot._is_budget(RuntimeError("Blender died")))
-        self.assertFalse(autopilot._is_budget(showrunner.UsageLimit("limit resets 3am")))
+        self.assertFalse(autopilot._is_budget(llm.UsageLimit("limit resets 3am")))
 
     def test_a_spent_budget_is_not_mistaken_for_a_usage_limit_reset(self):
-        """_is_usage_limit must not match the budget message, or the autopilot would sleep on it."""
-        spent = showrunner.BudgetExceeded(
+        """is_usage_limit must not match the budget message, or the autopilot would sleep on it."""
+        spent = llm.BudgetExceeded(
             "CLAUDE_TOKEN_BUDGET reached before the set builder call: 1,500,000 of 1,000,000 tokens "
             "used by 12 call(s).")
-        self.assertFalse(autopilot._is_usage_limit(spent))
+        self.assertFalse(llm.is_usage_limit(spent))
 
 
 class BatchedRepairTests(unittest.TestCase):

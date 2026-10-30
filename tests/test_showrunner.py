@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from engine.sets import spec
 from agents import showrunner
+from agents import llm
 
 # These tests exercise the classic hook + rewind rules with the pool set. Explainer sets now default
 # to the build-up format (tests/test_buildup.py); EXPLAINER_FORMAT=hook keeps the classic path.
@@ -103,7 +104,7 @@ class TopicSelectionTests(unittest.TestCase):
     def test_all_consumed_stops_before_any_ai_call(self):
         history = [{"set": set_id} for set_id in showrunner.sets.AVAILABLE]
         with patch.object(showrunner, "_history", return_value=history), \
-                patch.object(showrunner, "_call", side_effect=AssertionError("AI must not run")):
+                patch.object(llm, "ask", side_effect=AssertionError("AI must not run")):
             with self.assertRaisesRegex(showrunner.NoUnusedStorySets, "already been used"):
                 showrunner.pick_topic()
 
@@ -175,7 +176,7 @@ class RuleRepairTests(unittest.TestCase):
         trimmed["beats"][3]["text"] = " ".join(["word"] * 12)
         problems = showrunner.hard_checks(over, "pool")
         self.assertTrue(any("total narration" in p for p in problems))
-        with patch.object(showrunner, "_call", return_value=trimmed) as call:
+        with patch.object(llm, "ask", return_value=trimmed) as call:
             script, left = showrunner.repair_rules(over, "pool", problems)
         self.assertEqual(left, [])
         self.assertIs(script, trimmed)
@@ -186,7 +187,7 @@ class RuleRepairTests(unittest.TestCase):
         over["beats"][3]["text"] += " extra extra extra"
         worse = {"title": "t", "beats": _beats(GOOD[:3], words=40)}
         problems = showrunner.hard_checks(over, "pool")
-        with patch.object(showrunner, "_call", return_value=worse):
+        with patch.object(llm, "ask", return_value=worse):
             script, left = showrunner.repair_rules(over, "pool", problems)
         self.assertIs(script, over)
         self.assertEqual(left, problems)

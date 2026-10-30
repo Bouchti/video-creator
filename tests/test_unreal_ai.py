@@ -8,7 +8,7 @@ class UnrealTopicTests(unittest.TestCase):
     def test_topic_selection_receives_unreal_renderability_rules(self):
         chosen = {"topic": "How a water tower maintains pressure", "angle": "story_behind",
                   "tone": "educational", "rationale": "Visible mechanism"}
-        with patch("agents.ai_router.ask", return_value=chosen) as ask:
+        with patch("agents.llm.ask", return_value=chosen) as ask:
             self.assertEqual(leader.pick_topic([{"title": "water tower"}], [], source="unreal"), chosen)
         prompt = ask.call_args.args[1]
         self.assertIn("UNREAL RENDERABILITY", prompt)
@@ -17,7 +17,7 @@ class UnrealTopicTests(unittest.TestCase):
     def test_local_ai_topic_rules_reject_chart_only_discoveries(self):
         chosen = {"topic": "How a geyser erupts", "angle": "story_behind",
                   "tone": "educational", "rationale": "Visible physical stages"}
-        with patch("agents.ai_router.ask", return_value=chosen) as ask:
+        with patch("agents.llm.ask", return_value=chosen) as ask:
             leader.pick_topic([{"title": "geyser"}], [], source="local-ai")
         prompt = ask.call_args.args[1]
         self.assertIn("invisible data", prompt)
@@ -28,7 +28,7 @@ class UnrealTopicTests(unittest.TestCase):
                   "tone": "shocking", "rationale": "Visual"}
         safe = {"topic": "Sunflowers turn as they grow toward morning light", "angle": "story_behind",
                 "tone": "educational", "rationale": "Visible physical process"}
-        with patch("agents.ai_router.ask", side_effect=[unsafe, safe]) as ask:
+        with patch("agents.llm.ask", side_effect=[unsafe, safe]) as ask:
             chosen = leader.pick_topic([{"title": "meerkats"}, {"title": "sunflowers"}], [],
                                        source="local-ai")
         self.assertEqual(chosen, safe)
@@ -123,7 +123,7 @@ class UnrealTopicTests(unittest.TestCase):
                "tone": "shocking", "rationale": "Visual"}
         good = {"topic": "The bridge that outlived nine centuries of floods", "angle": "story_behind",
                 "tone": "educational", "rationale": "Visible structure"}
-        with patch("agents.ai_router.ask", side_effect=[bad, good]) as ask:
+        with patch("agents.llm.ask", side_effect=[bad, good]) as ask:
             chosen = leader.pick_topic([{"title": "reef"}, {"title": "bridge"}], [], source="local-ai")
         self.assertEqual(chosen, good)
         self.assertEqual(ask.call_count, 2)
@@ -132,7 +132,7 @@ class UnrealTopicTests(unittest.TestCase):
     def test_the_gate_only_applies_to_the_local_ai_renderer(self):
         reef = {"topic": "Lost rivers under the reef", "angle": "story_behind",
                 "tone": "shocking", "rationale": "Visual"}
-        with patch("agents.ai_router.ask", return_value=reef) as ask:
+        with patch("agents.llm.ask", return_value=reef) as ask:
             self.assertEqual(leader.pick_topic([{"title": "reef"}], [], source="pexels"), reef)
         self.assertEqual(ask.call_count, 1)              # stock footage can show a real reef
 
@@ -140,7 +140,7 @@ class UnrealTopicTests(unittest.TestCase):
         """Cheaper than learning it from three rejection retries."""
         chosen = {"topic": "How a medieval bridge survived nine centuries of floods",
                   "angle": "story_behind", "tone": "educational", "rationale": "Visible structure"}
-        with patch("agents.ai_router.ask", return_value=chosen) as ask:
+        with patch("agents.llm.ask", return_value=chosen) as ask:
             leader.pick_topic([{"title": "bridge"}], [], source="local-ai")
         prompt = ask.call_args.args[1]
         self.assertIn("ordinary air and daylight", prompt)
@@ -281,7 +281,7 @@ class TopicGroundingTests(unittest.TestCase):
         self.assertEqual(3, pick.call_count)
 
     def test_grounding_refuses_an_empty_rewrite(self):
-        with patch.object(leader.ai_router, "ask", return_value={"topic": "  ", "usable": True}):
+        with patch.object(leader.llm, "ask", return_value={"topic": "  ", "usable": True}):
             with self.assertRaises(RuntimeError):
                 leader.ground_topic("a topic", self.RESEARCH)
 
@@ -292,7 +292,7 @@ class TopicGroundingTests(unittest.TestCase):
             seen["prompt"], seen["schema"] = prompt, schema
             return {"topic": "t", "kept": [], "dropped": [], "usable": True}
 
-        with patch.object(leader.ai_router, "ask", side_effect=capture):
+        with patch.object(leader.llm, "ask", side_effect=capture):
             leader.ground_topic("A volcano 300 m tall", self.RESEARCH)
         self.assertIn("SEARCH THE EVIDENCE TEXT", seen["prompt"])
         self.assertIn("Do not drop a claim you have not looked for", seen["prompt"])
@@ -321,7 +321,7 @@ class TopicIsNotEvidenceTests(unittest.TestCase):
             seen["prompt"] = prompt
             return {}
 
-        with patch("agents.script.ai_router.ask", side_effect=capture):
+        with patch("agents.script.llm.ask", side_effect=capture):
             try:
                 script.generate_script(self.TOPIC, "epic", target_seconds=65, mode="local-ai",
                                        research=self.RESEARCH, content_mode=content_mode, **kwargs)
@@ -408,7 +408,7 @@ class UnrealScriptTests(unittest.TestCase):
 
     def test_unreal_evaluator_does_not_require_human_drama(self):
         result = {"verdict": "PASS", "feedback": "", "issues": []}
-        with patch("agents.ai_router.ask", return_value=result) as ask:
+        with patch("agents.llm.ask", return_value=result) as ask:
             evaluator.evaluate_script({"spoken_script": "Water enters a pump."}, source="unreal")
         self.assertIs(ask.call_args.args[0], evaluator.UNREAL_EVALUATOR_PROMPT)
 

@@ -7,7 +7,7 @@ from agents import leader
 def _judge(known, impressive=8, wow="Ice is slippery because of a liquid-like surface layer.", first="a sled flies off",
            why="The ice top is wet like a puddle. A wet floor makes you slide.",
            demo="a skate slides on an ice block, then sticks on a dry one; an arrow shows the slide"):
-    return mock.patch("agents.ai_router.ask", return_value={"known_percent": known, "impressive": impressive, "impressive_why": "x", "wow": wow, "first_second": first,
+    return mock.patch("agents.llm.ask", return_value={"known_percent": known, "impressive": impressive, "impressive_why": "x", "wow": wow, "first_second": first,
                                                            "simple_why": why, "demo": demo, "verdict": "x"})
 
 
@@ -47,7 +47,7 @@ class NoveltyTest(unittest.TestCase):
         self.assertIn("not impressive enough (5/10", problem)
 
     def test_judge_failure_never_blocks(self):
-        with mock.patch("agents.ai_router.ask", side_effect=RuntimeError("offline")):
+        with mock.patch("agents.llm.ask", side_effect=RuntimeError("offline")):
             self.assertEqual(leader.novelty_problem("anything"), (None, 0))
 
 

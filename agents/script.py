@@ -2,7 +2,7 @@ import json
 import logging
 from dotenv import load_dotenv
 from config.paths import get_env_path
-from agents import ai_router
+from agents import llm
 from agents.beats import DIAGRAM_TEMPLATES, OVERLAY_TYPES, narration_from_beats, repair_beats
 
 # Script modes: "footage" (stock footage, real photos and diagrams: the --source pexels path), "local-ai"
@@ -742,7 +742,7 @@ Write ONE continuous story as beats. {limits}
 {visual_hint}
 Submit it as the structured output."""
 
-    script = ai_router.ask(system_prompt(mode, content_mode), prompt, tool["input_schema"], effort="high")
+    script = llm.ask(system_prompt(mode, content_mode), prompt, tool["input_schema"], effort="high")
     if not isinstance(script, dict):
         raise ValueError("Claude did not return a video script")
     beats = get_beat_list(script)

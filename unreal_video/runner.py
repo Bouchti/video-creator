@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from agents import ai_router
+from agents import llm
 from agents.beats import _norm_words, script_word_timings
 from agents.media import get_duration
 from agents.transcription import transcribe_with_whisper
@@ -44,7 +44,7 @@ def plan_actions(recipe: dict[str, Any], script: dict[str, Any]) -> None:
               f"action); the second line usually 'establish'; the last line must be 'finale'; vary the "
               f"shots, and apart from the cold open never show a step before the narration reaches it.\n\n{lines}")
     try:
-        result = ai_router.ask("You plan shots for an engineering explainer video.", prompt, schema, effort="low")
+        result = llm.ask("You plan shots for an engineering explainer video.", prompt, schema, effort="low")
         actions = result.get("actions") if isinstance(result, dict) else None
     except Exception:                                     # noqa: BLE001 (no backend: keyword choice stands)
         actions = None
@@ -99,7 +99,7 @@ class UnrealPipeline:
         checks["ffmpeg"] = bool(shutil.which(self.config.ffmpeg) or Path(self.config.ffmpeg).is_file())
         checks["ffprobe"] = bool(shutil.which(self.config.ffprobe) or Path(self.config.ffprobe).is_file())
         checks["free_disk_gb"] = round(shutil.disk_usage(manifest.project_dir).free / 1024 ** 3, 2)
-        checks["visual_qc_backend"] = ai_router.available()
+        checks["visual_qc_backend"] = llm.available()
         if not self.config.editor:
             problems.append("Unreal Engine 5 was not found; install UE 5.8 or set UNREAL_EDITOR_CMD")
         if not checks["project"]:

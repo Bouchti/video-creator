@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agents import claude_cli
+from agents import llm
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ("agents", "local_video", "engine", "config")
@@ -20,7 +20,7 @@ class NoDirectApiTests(unittest.TestCase):
         for path in files:
             if API_PATTERNS.search(path.read_text(encoding="utf-8", errors="replace")):
                 offenders.append(str(path.relative_to(ROOT)))
-        self.assertEqual([], offenders, "Claude must only be reached through agents/claude_cli.py (subscription)")
+        self.assertEqual([], offenders, "Claude must only be reached through agents/llm.py (subscription)")
 
     def test_anthropic_sdk_is_not_a_dependency(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower().split()
@@ -42,16 +42,17 @@ class ClaudeCliTests(unittest.TestCase):
             seen.update(cmd=cmd, prompt=input, env=env, files=sorted(os.listdir(cwd)))
             return _Completed(payload)
 
-        with patch.object(claude_cli, "executable", return_value="claude"), \
-                patch.object(claude_cli.subprocess, "run", side_effect=fake_run), \
+        with patch.object(llm.shutil, "which", return_value="claude"), \
+                patch.object(llm, "_ACTIVE_BACKEND", ["subscription"]), \
+                patch.object(llm.subprocess, "run", side_effect=fake_run), \
                 patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-should-never-be-used",
                                         "ANTHROPIC_BASE_URL": "https://example.invalid"}):
-            result = claude_cli.ask("system", "prompt", **kwargs)
+            result = llm.ask("system", "prompt", **kwargs)
         return result, seen
 
     def test_api_credentials_never_reach_claude_code(self):
         _, seen = self._run({"subtype": "success", "result": "hello"})
-        for name in claude_cli.API_ENV:
+        for name in llm.API_ENV:
             self.assertNotIn(name, seen["env"])
         self.assertIn("-p", seen["cmd"])
 
@@ -73,7 +74,7 @@ class ClaudeCliTests(unittest.TestCase):
         self.assertEqual("Read", tools)
 
     def test_errors_are_raised(self):
-        with self.assertRaises(claude_cli.ClaudeError):
+        with self.assertRaises(RuntimeError):
             self._run({"subtype": "error_max_turns", "is_error": True, "result": "limit"})
 
 

@@ -20,7 +20,7 @@ from config.paths import PROJECT_ROOT  # noqa: E402
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-from agents import ai_router, audio_fx, diagram_writer, director  # noqa: E402
+from agents import llm, audio_fx, diagram_writer, director  # noqa: E402
 
 KEPT = os.path.join(PROJECT_ROOT, "output", "kept", "20261030_bike_v1", "work")
 WORK = os.path.join(PROJECT_ROOT, "output", "poc", "xray")
@@ -56,7 +56,7 @@ def write_script(facts):
               "b4 payoff (footage payoff; the key fact in one sentence a kid could repeat, then a tiny joke; "
               "diagram.use false). hook_text: <= 4 words, shocked question for the screen. The diagrams must make "
               "the why OBVIOUS without the sound.")
-    return ai_router.ask(system, prompt, SCRIPT_SCHEMA, effort="high")
+    return llm.ask(system, prompt, SCRIPT_SCHEMA, effort="high")
 
 
 def footage_clip(beats, timing, out):

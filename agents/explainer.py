@@ -90,7 +90,8 @@ MATCH_SCHEMA = {"type": "object", "properties": {"set": {"type": "string"}, "rea
 
 def match_set(angle: str, candidates: list):
     """The candidate set whose 3D model can honestly film this angle, or None."""
-    from agents.showrunner import STYLE, _call
+    from agents import llm
+    from agents.showrunner import STYLE
     if not candidates:
         return None
     prompt = f"""A producer wants a 3D cutaway explainer video about:
@@ -102,7 +103,7 @@ Registered 3D sets (each can only film its own subject):
 Return `set` = the id of the ONE set whose subject this video is genuinely about, or "none" if the
 video needs a different subject (a pool set cannot film a septic tank, a bridge or a dam). Give a
 one-line reason."""
-    out = _call(STYLE, prompt, MATCH_SCHEMA, effort="low")
+    out = llm.ask(STYLE, prompt, MATCH_SCHEMA, effort="low")
     choice = str(out.get("set", "")).strip()
     log.info(f"[explainer] angle → set: {choice or 'none'} ({out.get('reason', '')})")
     return choice if choice in candidates else None
@@ -178,7 +179,8 @@ def new_set_id(subject: str) -> str:
 
 def plan_new_set(angle=None) -> dict:
     """Research a subject no registered set covers and write the brief the set builder works from."""
-    from agents.showrunner import _call, _history, _wishlist
+    from agents import llm
+    from agents.showrunner import _history, _wishlist
     from agents.buildup import STYLE
     published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
     wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in _wishlist()[-30:]) or "- none"
@@ -223,8 +225,7 @@ Return:
   newly available function. Explain constraints while the correct part goes in; never show a failure
   or redo. End on the finished working result with a little life (people for scale, water, lights), plus
   real dimensions, model numbers and short 3D component labels. No logos, brands or downloaded assets."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
-    plan = _call(STYLE, prompt, PLAN_SCHEMA, effort="medium", tools=tools)
+    plan = llm.ask(STYLE, prompt, PLAN_SCHEMA, effort="medium", web=True)
     if not angle and not str(plan.get("trend_source_url", "")).startswith(("http://", "https://")):
         raise NoUnusedExplainerSets("fresh topic research returned no verifiable trend source; no set was built")
     plan["hook_action"] = re.sub(r"[^a-z0-9_]+", "_", str(plan.get("hook_action") or "prepare_site").lower()).strip("_")

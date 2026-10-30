@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agents import codex_cli, scene_validator as sv, set_builder, showrunner
+from agents import codex_cli, llm, scene_validator as sv, set_builder
 
 
 class CodexCliTests(unittest.TestCase):
@@ -83,7 +83,7 @@ class CodexCliTests(unittest.TestCase):
                 codex_cli.run("build")
         self.assertIn("stream disconnected", str(ctx.exception))
         self.assertNotIn("frame rate limit", str(ctx.exception))
-        self.assertFalse(showrunner.codex_unavailable(ctx.exception))
+        self.assertFalse(llm.codex_unavailable(ctx.exception))
 
     def test_explicit_cwd_is_sent_to_codex_as_the_sandbox_root(self):
         seen = {}
@@ -125,53 +125,53 @@ class CodexCliTests(unittest.TestCase):
         self.assertFalse(any("windows.sandbox" in a for a in read))
 
     def test_showrunner_dispatches_to_codex(self):
-        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
-                patch.object(showrunner, "_call_codex", return_value={"x": 1}) as call:
-            self.assertEqual(showrunner._call_once("s", "p", {"type": "object"}), {"x": 1})
+        with patch.object(llm, "BACKEND", "codex"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
+                patch.object(llm, "_call_codex", return_value={"x": 1}) as call:
+            self.assertEqual(llm._call_once("s", "p", {"type": "object"}), {"x": 1})
         call.assert_called_once()
 
     def test_usage_limit_switches_remaining_calls_to_claude_subscription(self):
-        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "codex"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
-                patch.object(showrunner, "_call_codex", side_effect=showrunner.UsageLimit("usage limit")) as codex, \
-                patch.object(showrunner, "_call_cli", return_value={"ok": True}) as claude:
-            self.assertEqual(showrunner._call("s", "p", {"type": "object"}), {"ok": True})
-            self.assertEqual(showrunner.active_backend(), "subscription")
-            self.assertEqual(showrunner._call_once("s2", "p2"), {"ok": True})
+                patch.object(llm, "_call_codex", side_effect=llm.UsageLimit("usage limit")) as codex, \
+                patch.object(llm, "_call_cli", return_value={"ok": True}) as claude:
+            self.assertEqual(llm.ask("s", "p", {"type": "object"}), {"ok": True})
+            self.assertEqual(llm.active_backend(), "subscription")
+            self.assertEqual(llm._call_once("s2", "p2"), {"ok": True})
         self.assertEqual(codex.call_count, 1)
         self.assertEqual(claude.call_count, 2)
 
     def test_model_capacity_switches_immediately_to_claude_subscription(self):
         capacity = RuntimeError("Selected model is at capacity. Please try a different model.")
-        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "codex"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
                 patch.object(codex_cli, "run", side_effect=capacity), \
-                patch.object(showrunner, "_call_cli", return_value={"ok": True}) as claude:
-            self.assertEqual(showrunner._call("s", "p", {"type": "object"}), {"ok": True})
-            self.assertEqual(showrunner.active_backend(), "subscription")
+                patch.object(llm, "_call_cli", return_value={"ok": True}) as claude:
+            self.assertEqual(llm.ask("s", "p", {"type": "object"}), {"ok": True})
+            self.assertEqual(llm.active_backend(), "subscription")
         claude.assert_called_once()
 
     def test_claude_usage_limit_switches_remaining_calls_to_codex(self):
-        with patch.object(showrunner, "BACKEND", "subscription"), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "subscription"), \
+                patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "codex"}), \
-                patch.object(showrunner, "_call_cli", side_effect=showrunner.UsageLimit("limit resets 1:50pm")) as claude, \
-                patch.object(showrunner, "_call_codex", return_value={"ok": True}) as codex:
-            self.assertEqual(showrunner._call("s", "p", {"type": "object"}), {"ok": True})
-            self.assertEqual(showrunner.active_backend(), "codex")
-            self.assertEqual(showrunner._call_once("s2", "p2"), {"ok": True})
+                patch.object(llm, "_call_cli", side_effect=llm.UsageLimit("limit resets 1:50pm")) as claude, \
+                patch.object(llm, "_call_codex", return_value={"ok": True}) as codex:
+            self.assertEqual(llm.ask("s", "p", {"type": "object"}), {"ok": True})
+            self.assertEqual(llm.active_backend(), "codex")
+            self.assertEqual(llm._call_once("s2", "p2"), {"ok": True})
         self.assertEqual(claude.call_count, 1)
         self.assertEqual(codex.call_count, 2)
 
     def test_runtime_primary_override_never_uses_the_same_backend_as_its_fallback(self):
-        with patch.object(showrunner, "BACKEND", "subscription"), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "subscription"), \
+                patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
-                patch.object(showrunner, "_call_cli",
-                             side_effect=showrunner.UsageLimit("limit resets 1:50pm")) as claude, \
-                patch.object(showrunner, "_call_codex", return_value={"ok": True}) as codex:
-            self.assertEqual(showrunner._call("s", "p"), {"ok": True})
-            self.assertEqual(showrunner.active_backend(), "codex")
+                patch.object(llm, "_call_cli",
+                             side_effect=llm.UsageLimit("limit resets 1:50pm")) as claude, \
+                patch.object(llm, "_call_codex", return_value={"ok": True}) as codex:
+            self.assertEqual(llm.ask("s", "p"), {"ok": True})
+            self.assertEqual(llm.active_backend(), "codex")
         claude.assert_called_once()
         codex.assert_called_once()
 
@@ -182,8 +182,8 @@ class CodexVisionTests(unittest.TestCase):
                 "fatal_problems": [], "problems": [], "fix": ""}
         windows = [({"window": n, "beat": n, "action": "a", "part": "whole", "t0": 0, "t1": 1,
                      "shows": "thing", "text": "words"}, [("start", f"{n}.jpg")]) for n in (1, 2)]
-        with patch.object(sv, "_backend", return_value="codex"), \
-                patch.object(sv, "_review_codex", return_value={"reviews": [
+        with patch.object(llm, "_ACTIVE_BACKEND", ["codex"]), \
+                patch.object(llm, "_call_codex", return_value={"reviews": [
                 {"window": 1, **good}, {"window": 2, **good}]}) as review:
             result = sv.review_batch(windows, "subject")
         self.assertEqual(set(result), {1, 2})
@@ -195,8 +195,8 @@ class CodexVisionTests(unittest.TestCase):
                 "fatal_problems": [], "problems": [], "fix": ""}
         windows = [({"window": 1, "beat": 1, "action": "a", "part": "whole", "t0": 0, "t1": 1,
                      "shows": "thing", "text": "words"}, [("start", "1.jpg")])]
-        with patch.object(sv, "_backend", return_value="subscription"), \
-                patch.object(sv, "_review_cli", return_value={"reviews": [
+        with patch.object(llm, "_ACTIVE_BACKEND", ["subscription"]), \
+                patch.object(llm, "_call_cli", return_value={"reviews": [
                     {"window": 1, **good}]}) as review:
             result = sv.review_batch(windows, "subject")
         self.assertTrue(result[1]["valid"])
@@ -207,11 +207,11 @@ class CodexVisionTests(unittest.TestCase):
                 "fatal_problems": [], "problems": [], "fix": ""}
         windows = [({"window": 1, "beat": 1, "action": "a", "part": "whole", "t0": 0, "t1": 1,
                      "shows": "thing", "text": "words"}, [("start", "1.jpg")])]
-        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "codex"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "subscription",
                                         "SCENE_REVIEW_BACKEND": ""}), \
-                patch.object(sv, "_review_codex", side_effect=showrunner.UsageLimit("usage limit")), \
-                patch.object(sv, "_review_cli", return_value={"reviews": [{"window": 1, **good}]}) as claude:
+                patch.object(llm, "_call_codex", side_effect=llm.UsageLimit("usage limit")), \
+                patch.object(llm, "_call_cli", return_value={"reviews": [{"window": 1, **good}]}) as claude:
             result = sv.review_batch(windows, "subject")
         self.assertTrue(result[1]["valid"])
         claude.assert_called_once()
@@ -219,12 +219,12 @@ class CodexVisionTests(unittest.TestCase):
     def test_claude_vision_limit_falls_back_to_codex(self):
         schema_result = {"visual_match": 8, "readability": 8, "image_quality": 8, "continuity": 8,
                          "fatal_problems": [], "problems": [], "fix": ""}
-        with patch.object(showrunner, "BACKEND", "subscription"), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "subscription"), \
+                patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SHOWRUNNER_FALLBACK_BACKEND": "codex",
                                         "SCENE_REVIEW_BACKEND": ""}), \
-                patch.object(sv, "_review_cli", side_effect=showrunner.UsageLimit("limit resets 1:50pm")), \
-                patch.object(sv, "_review_codex", return_value=schema_result) as codex:
+                patch.object(llm, "_call_cli", side_effect=llm.UsageLimit("limit resets 1:50pm")), \
+                patch.object(llm, "_call_codex", return_value=schema_result) as codex:
             result = sv.review_images({"window": 1, "beat": 1, "action": "a", "part": "whole",
                                        "t0": 0, "t1": 1, "shows": "thing", "text": "words"},
                                       [("start", "1.jpg")], "subject")
@@ -234,13 +234,13 @@ class CodexVisionTests(unittest.TestCase):
 
 class ClaudeParityTests(unittest.TestCase):
     def test_effort_is_capped_and_usage_is_accumulated(self):
-        self.assertEqual(showrunner._capped_effort("high"), "medium")
-        before = dict(showrunner.CLAUDE_USAGE)
+        self.assertEqual(llm.capped_effort("high"), "medium")
+        before = dict(llm.CLAUDE_USAGE)
         data = {"usage": {"input_tokens": 100, "cache_read_input_tokens": 80,
                           "cache_creation_input_tokens": 10, "output_tokens": 5}}
-        showrunner._record_claude_usage(data, "test")
-        self.assertEqual(showrunner.CLAUDE_USAGE["calls"], before["calls"] + 1)
-        self.assertEqual(showrunner.CLAUDE_USAGE["cache_read_input_tokens"],
+        llm.record_usage(data, "test")
+        self.assertEqual(llm.CLAUDE_USAGE["calls"], before["calls"] + 1)
+        self.assertEqual(llm.CLAUDE_USAGE["cache_read_input_tokens"],
                          before["cache_read_input_tokens"] + 80)
 
 
@@ -262,8 +262,8 @@ class IsolatedBuilderTests(unittest.TestCase):
                 fh.write("agent changed this")
             return "done", {}
 
-        with patch.object(set_builder, "PROJECT_ROOT", root), patch.object(showrunner, "BACKEND", "codex"), \
-                patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(set_builder, "PROJECT_ROOT", root), patch.object(llm, "BACKEND", "codex"), \
+                patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch("agents.codex_cli.run", side_effect=fake_agent):
             set_builder.claude_agent("work", ["engine/sets/new.py"])
         self.assertEqual(open(allowed, encoding="utf-8").read(), "new")

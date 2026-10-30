@@ -10,8 +10,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from agents import ai_router
-from config.paths import CLAUDE_MODEL, get_env_path
+from agents import llm
+from config.paths import get_env_path
 
 log = logging.getLogger("pipeline")
 load_dotenv(get_env_path())
@@ -72,7 +72,7 @@ FINAL_REVIEW_TOOL = {
 
 def review_enabled() -> bool:
     value = os.getenv("LOCAL_VIDEO_VISION_QC", "1").strip().lower()
-    return value not in {"0", "false", "no", "off"} and ai_router.available()
+    return value not in {"0", "false", "no", "off"} and llm.available()
 
 
 def _sample_frames(path: str | Path, ratios=(0.05, 0.5, 0.95)) -> list[bytes]:
@@ -234,9 +234,9 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
                 still = Path(tmp) / f"{index}.jpg"
                 still.write_bytes(data)
                 images.append((label, still))
-            values = ai_router.ask(
+            values = llm.ask(
                 "You are a film editor reviewing generated video clips.", prompt, REVIEW_TOOL["input_schema"],
-                model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=images,
+                images=images,
             )
         if not isinstance(values, dict):
             raise ValueError("vision reviewer returned no structured result")
@@ -302,10 +302,9 @@ def review_final_video(path: str | Path, manifest: Any) -> dict[str, Any]:
                 still = Path(tmp) / f"final_{index:02d}.jpg"
                 still.write_bytes(frame)
                 images.append((f"Chronological final-video frame {index} of {len(frames)}", still))
-            values = ai_router.ask(
+            values = llm.ask(
                 "You are a film editor reviewing a finished short video.", prompt,
-                FINAL_REVIEW_TOOL["input_schema"], model=os.getenv("VISION_MODEL") or CLAUDE_MODEL,
-                images=images,
+                FINAL_REVIEW_TOOL["input_schema"], images=images,
             )
         if not isinstance(values, dict):
             raise ValueError("final reviewer returned no structured result")

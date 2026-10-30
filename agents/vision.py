@@ -1,9 +1,9 @@
 """
 Vision check: before a stock clip or photo is used, Claude looks at the candidate
 thumbnails and keeps only those that genuinely show what the beat describes.
-One small request per beat (several thumbnails at once), on the Claude subscription.
+One small request per beat (several thumbnails at once), on the active AI backend (agents/llm.py).
 
-Disable with VISION_CHECK=0. Model defaults to the pipeline's CLAUDE_MODEL;
+Disable with VISION_CHECK=0. On Claude the model defaults to the pipeline's CLAUDE_MODEL;
 override with VISION_MODEL.
 """
 import os
@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from config.paths import get_env_path, CLAUDE_MODEL
-from agents import claude_cli
+from agents import llm
 
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
@@ -42,7 +42,7 @@ RANK_TOOL = {
 
 def vision_enabled() -> bool:
     flag = os.getenv("VISION_CHECK", "1").strip().lower()
-    return flag not in ("0", "false", "no", "off") and claude_cli.available()
+    return flag not in ("0", "false", "no", "off") and llm.available()
 
 
 def _thumbnail(path: str, target: str) -> None:
@@ -75,9 +75,9 @@ def rank_images(description: str, narration: str, image_paths: list):
             "Submit their numbers (the N in 'Image N') best first as the structured output "
             "(empty list if none fit).")
         try:
-            result = claude_cli.ask("You check stock images for a video editor.", prompt,
-                                    RANK_TOOL["input_schema"], model=VISION_MODEL, images=images)
-        except claude_cli.ClaudeError as e:
+            result = llm.ask("You check stock images for a video editor.", prompt,
+                             RANK_TOOL["input_schema"], model=VISION_MODEL, images=images, label="vision")
+        except RuntimeError as e:
             log.warning(f"    Vision check unavailable ({str(e)[:80]}); using search order")
             return None
 

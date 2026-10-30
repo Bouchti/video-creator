@@ -147,8 +147,8 @@ def plan_kit_explainer(published: str = "- none", angle: str = None, call=None, 
 
 
 def _plan(published, call, hero, angle=None, world=vocab.WORLD) -> dict:
-    from agents import showrunner as sr
-    call = call or sr._call
+    from agents import llm, showrunner as sr
+    call = call or llm.ask
     news = vocab.for_world(world).NEWS
     if hero:
         task = "design the next Max video in the world below."
@@ -180,13 +180,12 @@ Return:
 - trend_signal and the exact trend_source_url (http...) from your research
 - fact_sheet: 8-12 bullets (max 250 words), each with a source domain, true to the research
 - storyboard: the full storyboard in the schema; model_facts carry the facts the ladder teaches."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}]
     if hero:
         style = sr.STORY_STYLE
     else:
         from agents import buildup
         style = buildup.STYLE
-    plan = call(style, prompt, plan_schema(world, hero=hero), effort="medium", tools=tools)
+    plan = call(style, prompt, plan_schema(world, hero=hero), effort="medium", web=True)
     sb = plan["storyboard"]
     if not hero:
         sb["hero"] = False                # not in the planner's schema: the route decides it, never the model

@@ -96,8 +96,8 @@ MATCH_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["w
 
 def world_for(topic: str, call=None):
     """The registered world that can honestly film `topic`, or None when it needs a new world."""
-    from agents import showrunner as sr
-    call = call or sr._call
+    from agents import llm
+    call = call or llm.ask
     worlds = vocab.worlds()
     briefs = "\n".join(f"- {w}: {vocab.for_world(w).FITS}" for w in worlds)
     out = call("You match a video topic to the 3D world that can film it.", f"""A video is planned about:
@@ -136,8 +136,8 @@ def pick_world(history=None) -> str:
 def plan_world(topic: str, call=None) -> dict:
     """Research the topic and design its world as data. Raises WorldNotBuilt if the design breaks the rules
     even after one cheap correction."""
-    from agents import showrunner as sr
-    call = call or sr._call
+    from agents import llm, showrunner as sr
+    call = call or llm.ask
     taken = ", ".join(vocab.worlds())
     prompt = f"""Design a new pre-built 3D WORLD for cutaway videos about: {topic}
 
@@ -179,8 +179,7 @@ Return:
   * ids snake_case, 3-31 characters, unique, descriptive (promise, fail_pit, fix_tank, finale);
   * hooks: 1-2, each {{"id": "<name>_hook", "step": "<a fail step id or the finale id>"}}.
 No brands, logos or text in the world."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}]
-    design = call(sr.STYLE, prompt, WORLD_SCHEMA, effort="medium", tools=tools)
+    design = call(sr.STYLE, prompt, WORLD_SCHEMA, effort="medium", web=True)
     problems = validate_design(design)
     for _ in range(2):                      # cheap structured corrections; the researched design is kept
         if not problems:
@@ -394,7 +393,7 @@ LOOK_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["ob
 def check_objects(d: dict, work: str, look_fatal: bool = True) -> dict:
     """{object_name: [issue, ...]} for the objects that fail: measured in Blender, then one vision look.
     With look_fatal=False the look's notes are only logged (the measured checks decide)."""
-    from agents import ai_router
+    from agents import llm
     from engine.make_film import BLENDER, _run_blender
     out = os.path.join(work, "objects")
     os.makedirs(out, exist_ok=True)
@@ -412,7 +411,7 @@ def check_objects(d: dict, work: str, look_fatal: bool = True) -> dict:
     if stills and os.getenv("KIT_WORLD_LOOK", "1") == "1":
         what = "\n".join(f"- {o['name']}: {o['what']} ({o['look']})" for o in d["objects"])
         try:
-            look = ai_router.ask("You check 3D models for an explainer channel.",
+            look = llm.ask("You check 3D models for an explainer channel.",
                                  f"Each image is one 3D object built for a cutaway diorama, rendered ALONE with a "
                                  f"quick low-quality preview (no scene around it, no final lighting):\n{what}\n\n"
                                  "For each image, say whether a viewer would recognise it as what it is meant to be. "
@@ -427,7 +426,7 @@ def check_objects(d: dict, work: str, look_fatal: bool = True) -> dict:
                     else:
                         log.info(f"[kit world] look note (advisory) {row['name']}: {note[6:200]}")
         except Exception as exc:                          # noqa: BLE001  the look is the only advisory part
-            from agents.showrunner import BudgetExceeded, UsageLimit
+            from agents.llm import BudgetExceeded, UsageLimit
             if isinstance(exc, (BudgetExceeded, UsageLimit)):
                 raise
             log.warning(f"[kit world] object look check unavailable: {exc}")

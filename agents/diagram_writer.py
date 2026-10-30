@@ -1,5 +1,5 @@
 """
-Explanation diagrams written by the AI (Claude or Codex, through agents/ai_router): one small React/SVG
+Explanation diagrams written by the AI (Claude or Codex, through agents/llm): one small React/SVG
 component per why-step, built ONLY from the house design library (compositor/src/diagram/kit.tsx), then
 CHECKED the way a viewer would: typecheck -> 3 rendered stills -> a vision review against what the step must
 show -> at most DIAGRAM_ROUNDS-1 fixes -> else the ready-made chain diagram (never blocks a film).
@@ -163,8 +163,8 @@ def stills(spec, out_dir):
 
 
 def review(spec, pngs, call=None):
-    from agents import ai_router
-    call = call or ai_router.ask
+    from agents import llm
+    call = call or llm.ask
     system = ("You review one animated explanation diagram from a phone science short, as a curious 12-year-old "
               "AND a strict art director. The images are 3 moments of the animation, in order.")
     prompt = (f"WHAT IT MUST SHOW: {spec['must_see']}\nNARRATION AT THAT MOMENT: {spec.get('narration', '')}\n\n"
@@ -188,9 +188,9 @@ def write(spec, call=None, judge=None, out_dir=None, look=None):
     """Write, check and review one diagram. Returns {"id", "status": accepted|fallback, "rounds", "score",
     "problems"}. The best-scoring version is kept when none passes; below KEEP the candidate is deleted and the
     film shows the ready-made chain of spec["steps"]. Fix rounds SEE their own stills (`look`: an image call)."""
-    from agents import ai_router
-    call = call or (lambda s, p, sc: ai_router.ask(s, p, sc, effort="high"))
-    look = look or (lambda s, p, sc, images: ai_router.ask(s, p, sc, images=images))
+    from agents import llm
+    call = call or (lambda s, p, sc: llm.ask(s, p, sc, effort="high"))
+    look = look or (lambda s, p, sc, images: llm.ask(s, p, sc, images=images))
     spec = dict(spec, id=_safe_id(spec["id"]))
     path = os.path.join(GENERATED, f"{spec['id']}.tsx")
     out_dir = out_dir or os.path.join(PROJECT_ROOT, "output", "diagrams", spec["id"])

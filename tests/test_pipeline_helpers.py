@@ -25,13 +25,13 @@ class EditorHelperTests(unittest.TestCase):
 
 class EvaluatorTests(unittest.TestCase):
     def test_local_ai_documentary_uses_object_led_review(self):
-        with patch("agents.ai_router.ask", return_value={"verdict": "PASS", "issues": []}) as ask:
+        with patch("agents.llm.ask", return_value={"verdict": "PASS", "issues": []}) as ask:
             evaluator.evaluate_script({"spoken_script": "A sample enters the chamber.",
                                        "content_mode": "documentary"}, source="local-ai")
         self.assertIs(ask.call_args.args[0], evaluator.LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT)
 
     def test_evaluate_script_accepts_structured_verdict(self):
-        with patch("agents.ai_router.ask", return_value={"verdict": "PASS"}) as ask:
+        with patch("agents.llm.ask", return_value={"verdict": "PASS"}) as ask:
             result = evaluator.evaluate_script({"spoken_script": "test"})
 
         self.assertEqual("PASS", result["verdict"])
@@ -40,7 +40,7 @@ class EvaluatorTests(unittest.TestCase):
     def test_all_issues_become_one_revision_brief(self):
         issues = [{"beat": 1, "severity": "blocking", "fix": "Correct the year to 1943."},
                   {"beat": 20, "severity": "minor", "fix": "Add service medals to the veterans."}]
-        with patch("agents.ai_router.ask", return_value={"verdict": "FAIL", "issues": issues}):
+        with patch("agents.llm.ask", return_value={"verdict": "FAIL", "issues": issues}):
             result = evaluator.evaluate_script({"spoken_script": "test"})
         self.assertIn("Beat 1 [blocking]", result["feedback"])
         self.assertIn("Beat 20 [minor]", result["feedback"])
@@ -71,7 +71,7 @@ class EvaluatorTests(unittest.TestCase):
         self.assertIn("Cut at least 20", evaluator.length_feedback(170, 100, 150, 10))
 
     def test_evaluate_script_rejects_unknown_verdict(self):
-        with patch("agents.ai_router.ask", return_value={"verdict": "MAYBE"}):
+        with patch("agents.llm.ask", return_value={"verdict": "MAYBE"}):
             with self.assertRaisesRegex(ValueError, "PASS or FAIL"):
                 evaluator.evaluate_script({"spoken_script": "test"})
 

@@ -21,10 +21,11 @@ import json
 import logging
 import os
 import re
-import threading
 
 from dotenv import load_dotenv
 
+from agents import llm
+from agents.llm import BudgetExceeded, UsageLimit
 from config.paths import get_env_path, get_output_dir
 from engine import sets
 
@@ -142,289 +143,6 @@ def _style(set_id):
     if buildup.enabled(set_id):
         return buildup.STYLE
     return STORY_STYLE if getattr(sets.spec(set_id), "HERO", None) else STYLE
-
-
-# ------------------- low-level call -------------------
-#
-# Three backends:
-#   subscription (default): Claude Code's headless mode (`claude -p`) on Claude Pro/Max.
-#   codex: Codex CLI headless mode on the logged-in ChatGPT plan (the default fallback).
-
-BACKEND = os.getenv("SHOWRUNNER_BACKEND", "subscription").strip().lower()
-CLI_MODEL = os.getenv("SHOWRUNNER_CLI_MODEL", "opus")
-CODEX_MODEL = os.getenv("SHOWRUNNER_CODEX_MODEL", "gpt-5.6-sol")
-_API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
-_notional = [0.0]
-CLAUDE_USAGE = {"calls": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 0, "output_tokens": 0}
-_ACTIVE_BACKEND = [None]
-_PRIMARY_RESET = [None]                # when the primary backend's usage limit lifts (from its error text)
-_BACKEND_LOCK = threading.Lock()
-
-
-def active_backend():
-    """Backend currently serving this process; changes once after a usage limit."""
-    return _ACTIVE_BACKEND[0] or BACKEND
-
-
-def activate_fallback(reason="Primary backend usage limit reached", failed_backend=None):
-    """Switch this process to the configured fallback. Returns True if switched."""
-    fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
-    if fallback == "claude":
-        fallback = "subscription"
-    current = active_backend()
-    # A command-line/process override can change the primary without changing `.env`. For example,
-    # SHOWRUNNER_BACKEND=subscription with an `.env` written for codex -> subscription used to make
-    # the fallback point straight back at the exhausted primary. An explicitly blank value still
-    # disables fallback; a same-as-primary value means use the other installed subscription model.
-    if fallback == current and current in ("codex", "subscription"):
-        fallback = "codex" if current == "subscription" else "subscription"
-    # Another worker may already have switched the process while this request was in flight.
-    if failed_backend and current != failed_backend:
-        return current == fallback
-    if fallback not in ("codex", "subscription") or current == fallback:
-        return False
-    with _BACKEND_LOCK:
-        if active_backend() != current:
-            return True
-        _ACTIVE_BACKEND[0] = fallback
-        _PRIMARY_RESET[0] = parse_reset(str(reason))
-        log.warning("[showrunner] %s; switching all remaining AI work to %s", str(reason)[:180], fallback)
-    return True
-
-
-def primary_reset():
-    """When the backend this process fell back from becomes available again (None = unknown)."""
-    return _PRIMARY_RESET[0]
-
-
-def _capped_effort(requested, env_name="SHOWRUNNER_CLAUDE_EFFORT_CAP", default="medium"):
-    """Cap subscription reasoning so a stray high-effort call cannot consume the session."""
-    order = ("low", "medium", "high", "max")
-    requested = requested if requested in order else default
-    cap = (os.getenv(env_name) or default).strip().lower()
-    if cap not in order:
-        cap = default
-    return order[min(order.index(requested), order.index(cap))]
-
-
-def _record_claude_usage(data, label="claude"):
-    """Collect Claude CLI usage across showrunner, vision and set-builder calls."""
-    usage = data.get("usage") or {}
-    if not usage and isinstance(data.get("modelUsage"), dict):
-        rows = list(data["modelUsage"].values())
-        usage = {
-            "input_tokens": sum(int(r.get("inputTokens") or 0) for r in rows),
-            "cache_read_input_tokens": sum(int(r.get("cacheReadInputTokens") or 0) for r in rows),
-            "cache_creation_input_tokens": sum(int(r.get("cacheCreationInputTokens") or 0) for r in rows),
-            "output_tokens": sum(int(r.get("outputTokens") or 0) for r in rows),
-        }
-    CLAUDE_USAGE["calls"] += 1
-    for key in CLAUDE_USAGE:
-        if key != "calls":
-            CLAUDE_USAGE[key] += int(usage.get(key) or 0)
-    # Always log, even when the CLI reported nothing: a silent expensive call (the set-builder agent
-    # turns are the costliest in the pipeline) is how a subscription gets spent unnoticed.
-    log.info("[claude] %s usage: %s input (%s cache-read, %s cache-write), %s output%s", label,
-             f"{int(usage.get('input_tokens') or 0):,}",
-             f"{int(usage.get('cache_read_input_tokens') or 0):,}",
-             f"{int(usage.get('cache_creation_input_tokens') or 0):,}",
-             f"{int(usage.get('output_tokens') or 0):,}",
-             "" if usage else "  (NOT REPORTED by the CLI; this call is unmetered)")
-    budget = token_budget()
-    if budget:
-        log.info("[claude] budget: %s / %s tokens used this run (%.0f%%)",
-                 f"{tokens_used():,}", f"{budget:,}", 100.0 * tokens_used() / budget)
-
-
-def claude_usage_summary():
-    u = CLAUDE_USAGE
-    return (f"{u['calls']} call(s), {u['input_tokens']:,} input tokens "
-            f"({u['cache_read_input_tokens']:,} cache-read, "
-            f"{u['cache_creation_input_tokens']:,} cache-write), {u['output_tokens']:,} output tokens")
-
-
-class BudgetExceeded(RuntimeError):
-    """The CLAUDE_TOKEN_BUDGET for this process is spent; retrying cannot help."""
-
-
-def token_budget() -> int:
-    """Token ceiling for one process. 0 / unset = no ceiling."""
-    try:
-        return max(0, int(os.getenv("CLAUDE_TOKEN_BUDGET") or 0))
-    except ValueError:
-        return 0
-
-
-_CARRIED = [0]                         # tokens an interrupted run already spent before this process resumed it
-
-
-def carry_tokens(n):
-    """Count tokens spent by earlier processes of the same run (autopilot --resume) against the budget,
-    so stopping and resuming a run never hands it a fresh CLAUDE_TOKEN_BUDGET."""
-    _CARRIED[0] = max(0, int(n or 0))
-
-
-def tokens_used() -> int:
-    u = CLAUDE_USAGE
-    return (_CARRIED[0] + u["input_tokens"] + u["cache_read_input_tokens"]
-            + u["cache_creation_input_tokens"] + u["output_tokens"])
-
-
-def check_budget(label="claude"):
-    """Refuse a new Claude call once the run's budget is spent. Checked before the call so work is
-    never abandoned half-done, and only for the Claude subscription (Codex has its own quota)."""
-    budget = token_budget()
-    if budget and active_backend() != "codex" and tokens_used() >= budget:
-        raise BudgetExceeded(
-            f"CLAUDE_TOKEN_BUDGET reached before the {label} call: {tokens_used():,} of {budget:,} "
-            f"tokens used by {CLAUDE_USAGE['calls']} call(s). Raise CLAUDE_TOKEN_BUDGET, switch "
-            f"SHOWRUNNER_BACKEND to codex, or resume the run later.")
-
-
-def _call_once(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    backend = active_backend()
-    if backend == "codex":
-        return _call_codex(system, prompt, schema, effort, web=bool(tools))
-    return _call_cli(system, prompt, schema, effort, web=bool(tools))
-
-
-class UsageLimit(RuntimeError):
-    """A subscription backend hit its session/usage limit."""
-
-    def __init__(self, msg):
-        super().__init__(msg)
-        self.reset = parse_reset(msg)
-
-
-def parse_reset(msg):
-    """When a usage limit lifts, from Claude ("resets 3pm") or Codex ("try again at 9:41 AM",
-    "try again at Oct 29th, 2026 9:41 AM", "try again in 2 days 3 hours 5 minutes"). None if unknown."""
-    import datetime as _dt
-    import re as _re
-    now = _dt.datetime.now()
-    m = _re.search(r"try again in\s+((?:\d+\s*(?:days?|hours?|hrs?|minutes?|mins?)[\s,and]*)+)", msg, _re.I)
-    if m:
-        delta = _dt.timedelta()
-        for n, unit in _re.findall(r"(\d+)\s*(day|hour|hr|min)", m.group(1), _re.I):
-            delta += {"day": _dt.timedelta(days=int(n)), "hour": _dt.timedelta(hours=int(n)),
-                      "hr": _dt.timedelta(hours=int(n)), "min": _dt.timedelta(minutes=int(n))}[unit.lower()]
-        return now + delta if delta else None
-    m = _re.search(r"(?:resets|try again at)\s+(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+)?"
-                   r"([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)", msg, _re.I)
-    if not m:
-        return None
-    h, mi = int(m.group(4)) % 12 + (12 if m.group(6).lower() == "pm" else 0), int(m.group(5) or 0)
-    if m.group(1):
-        try:
-            day = _dt.datetime.strptime(f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y")
-            return day.replace(hour=h, minute=mi)
-        except ValueError:
-            pass
-    t = now.replace(hour=h, minute=mi, second=0, microsecond=0)
-    return t if t > now else t + _dt.timedelta(days=1)
-
-
-def codex_unavailable(exc):
-    """True when a Codex subscription call should immediately move to the fallback.
-
-    Codex reports both quota exhaustion and transient model saturation as ordinary CLI
-    failures. Neither can be repaired by repeating the same expensive pipeline stage.
-    """
-    text = str(exc).lower()
-    limited = "limit" in text and any(
-        word in text for word in ("reset", "rate", "usage", "quota", "plan")
-    )
-    saturated = any(phrase in text for phrase in (
-        "model is at capacity", "model at capacity", "selected model is at capacity",
-        "server is overloaded", "service is overloaded", "temporarily unavailable",
-        "try a different model",
-    ))
-    return limited or saturated
-
-
-def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    """Call the selected backend; on a usage limit, wait up to SHOWRUNNER_MAX_WAIT
-    minutes) and retries once, so an unattended run finishes instead of dying."""
-    import time as _t
-    backend = active_backend()
-    try:
-        return _call_once(system, prompt, schema, effort, tools, max_tokens)
-    except UsageLimit as e:
-        if activate_fallback(str(e), failed_backend=backend):
-            try:
-                return _call_once(system, prompt, schema, effort, tools, max_tokens)
-            except UsageLimit as fallback_error:
-                e = fallback_error
-        wait = (e.reset - __import__("datetime").datetime.now()).total_seconds() + 60 if e.reset else None
-        max_wait = float(os.getenv("SHOWRUNNER_MAX_WAIT", "65")) * 60
-        if wait is None or wait > max_wait:
-            raise
-        log.warning(f"[showrunner] subscription usage limit hit; waiting {wait / 60:.0f} min for the reset")
-        _t.sleep(max(0, wait))
-        return _call_once(system, prompt, schema, effort, tools, max_tokens)
-
-
-def _call_cli(system, prompt, schema=None, effort="high", web=False):
-    """One call through Claude Code headless mode, authenticated with the claude.ai login.
-    API credentials are stripped from its environment (your .env holds an API key: if it leaked
-    through, Claude Code would bill the API instead of the subscription). Runs in an empty temp
-    dir with no project settings, no MCP servers and no tools except web search when asked."""
-    import shutil
-    import subprocess
-    import tempfile
-
-    check_budget("showrunner")
-    exe = shutil.which("claude")
-    if not exe:
-        raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
-    env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
-    tools = ["WebSearch", "WebFetch"] if web else [""]
-    with tempfile.TemporaryDirectory() as tmp:
-        sys_file = os.path.join(tmp, "system.txt")
-        with open(sys_file, "w", encoding="utf-8") as f:
-            f.write(system)
-        cmd = [exe, "-p", "--output-format", "json", "--model", CLI_MODEL, "--effort",
-               _capped_effort(effort),
-               "--system-prompt-file", sys_file, "--no-session-persistence", "--strict-mcp-config",
-               "--setting-sources", "", "--tools", *tools]
-        if web:
-            cmd += ["--allowedTools", "WebSearch", "WebFetch"]
-        if schema is not None:
-            cmd += ["--json-schema", json.dumps(schema)]
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                           cwd=tmp, env=env, timeout=1800)
-    try:
-        data = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
-    result_text = str(data.get("result") or "")
-    if data.get("is_error") and ("limit" in result_text.lower() and "reset" in result_text.lower()):
-        raise UsageLimit(result_text[:200])
-    if data.get("is_error") or data.get("subtype") != "success":
-        raise RuntimeError(f"claude -p error ({data.get('subtype')}): {str(data.get('result'))[:300]}")
-    _notional[0] += float(data.get("total_cost_usd") or 0)
-    _record_claude_usage(data, "showrunner")
-    if schema is not None:
-        out = data.get("structured_output")
-        return out if out is not None else json.loads(data["result"])
-    return data["result"].strip()
-
-
-def _call_codex(system, prompt, schema=None, effort="high", web=False):
-    """One isolated Codex CLI turn authenticated by the user's ChatGPT login."""
-    from agents import codex_cli
-
-    full = ("Follow the role and constraints below. Do the task directly; do not inspect or edit local files.\n\n"
-            f"ROLE AND RULES:\n{system}\n\nTASK:\n{prompt}")
-    try:
-        out, _ = codex_cli.run(full, schema=schema, effort=effort, web=web, model=CODEX_MODEL)
-        return out
-    except RuntimeError as exc:
-        if codex_unavailable(exc):
-            raise UsageLimit(str(exc)[:500]) from exc
-        raise
 
 
 def _obj(props, required=None):
@@ -561,14 +279,13 @@ fence, a shelf) is NOT enough, even with a good lesson.
 
 Do not choose a subject merely because it appears in the old wishlist. It needs a credible current
 signal and must be different from every used subject."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
     # the novelty gate: the viewer must LEARN something (a subject everyone knows was a wasted set build);
     # up to NEW_SET_PICKS picks, each told why the previous ones failed; the least-known one is used anyway
     from agents.leader import LAST_NOVELTY, novelty_problem
     tried, rejected = [], []
     for _ in range(int(os.getenv("NEW_SET_PICKS", "3"))):
         retry = ("\n\nREJECTED (do not choose these or close variants):\n- " + "\n- ".join(rejected)) if rejected else ""
-        plan = _call(STORY_STYLE, prompt + retry, NEW_STORY_SCHEMA, effort="medium", tools=tools)
+        plan = llm.ask(STORY_STYLE, prompt + retry, NEW_STORY_SCHEMA, effort="medium", web=True)
         problem, known = novelty_problem(f"{plan.get('subject', '')}: {plan.get('hook_line', '')} "
                                          f"{plan.get('payoff', '')}", need_demo=False)
         tried.append((int(LAST_NOVELTY.get("impressive") or 0), -known, plan))
@@ -678,8 +395,7 @@ viewer nothing. The hook line must make sense on its own to someone who has seen
     from agents import buildup
     if any(buildup.enabled(s_) for s_ in set_ids):
         prompt += buildup.TOPIC_NOTE
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
-    out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium", tools=tools)
+    out = llm.ask(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium", web=True)
     _save_wishlist(out.get("wishlist", []))
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
@@ -750,16 +466,15 @@ Search the web and return a compact FACT SHEET (plain text, max ~250 words): 8-1
 with concrete numbers about this subject, each with its source domain in brackets; correct any of
 the model facts that are wrong. Start with a verdict on the example hook (TRUE / NEEDS REWORDING). Prefer engineering, trade and government
 sources. Include 2-3 surprising details that would delight a viewer."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
     try:
-        facts = _call("You are a meticulous fact-checker for an engineering explainer channel.", prompt,
-                      tools=tools, effort="medium")
+        facts = llm.ask("You are a meticulous fact-checker for an engineering explainer channel.", prompt,
+                        web=True, effort="medium")
     except UsageLimit:
         raise
     except RuntimeError as e:  # web search unavailable / failed
         log.warning(f"[showrunner] web search failed ({str(e)[:100]}); using model knowledge")
-        facts = _call("You are a meticulous fact-checker for an engineering explainer channel.",
-                      prompt.replace("Search the web and return", "From reliable knowledge, return"), effort="medium")
+        facts = llm.ask("You are a meticulous fact-checker for an engineering explainer channel.",
+                        prompt.replace("Search the web and return", "From reliable knowledge, return"), effort="medium")
     log.info(f"[showrunner] fact sheet: {len(facts.split())} words")
     return facts
 
@@ -872,7 +587,7 @@ Write the improved script."""
             prompt += ("\nTONE EXAMPLE: another writer's script for this same set. Do NOT reuse its jokes, lines "
                        f"or hook; beat it.\n{example}\n")
         prompt += "\nWrite the script. Make the hook impossible to scroll past and every beat earn its place."
-    return _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort=effort)
+    return llm.ask(_style(set_id), prompt, SCRIPT_SCHEMA, effort=effort)
 
 
 def _hook_idea(topic):
@@ -920,7 +635,7 @@ FACT SHEET (for reference only):
 
 SCRIPT:
 {json.dumps(script, ensure_ascii=False, indent=1)}"""
-    out = _call(_style(topic["set"]), prompt, SCRIPT_SCHEMA, effort="low")
+    out = llm.ask(_style(topic["set"]), prompt, SCRIPT_SCHEMA, effort="low")
     if [b["actions"] for b in out["beats"]] != [b["actions"] for b in script["beats"]]:
         return script                                   # polish must not restructure
     return out
@@ -961,7 +676,7 @@ only if every score is {PASS_SCORE}+ and there are no factual errors or rule bre
     from agents import buildup
     if buildup.enabled(topic["set"]):
         prompt += buildup.CRITIQUE_NOTE
-    return _call(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
+    return llm.ask(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
 def closing_question(text):
@@ -1166,7 +881,7 @@ Return the same script with the SMALLEST edits that fix every rule above: keep e
 its overlay and every line that is not involved exactly as it is. When a word budget is exceeded, cut
 a few filler words so the total lands well inside the limit (not on the boundary)."""
         try:
-            fixed = _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort="low")
+            fixed = llm.ask(_style(set_id), prompt, SCRIPT_SCHEMA, effort="low")
         except (UsageLimit, BudgetExceeded):
             raise
         except Exception as exc:                         # noqa: BLE001  the unrepaired script still fails loudly
@@ -1237,7 +952,7 @@ def to_film(script, topic, facts, review=None):
         elif ov.get("type") == "label" and ov.get("text"):
             beat["overlay"] = {"type": "label", "text": ov["text"]}
         beats.append(beat)
-    backend = active_backend()
+    backend = llm.active_backend()
     film = {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
             "music": "synth", "beats": beats, "cta": closing_question(beats[-1]["text"]) if beats else None,
             # story sets end on a reunion: hold the payoff after the last word so it can land
@@ -1245,7 +960,7 @@ def to_film(script, topic, facts, review=None):
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),
-                     "model": CODEX_MODEL if backend == "codex" else CLI_MODEL}}
+                     "model": llm.CODEX_MODEL if backend == "codex" else llm.CLI_MODEL}}
     from agents import buildup
     if buildup.enabled(topic["set"]):                  # starts on the first build step: no hook, no question
         film.update(buildup.film_extras())
@@ -1259,8 +974,8 @@ def slug(text):
 def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on_topic=None):
     import time
     t0 = time.time()
-    backend = active_backend()
-    detail = f"codex exec, model {CODEX_MODEL}" if backend == "codex" else f"claude -p, model {CLI_MODEL}"
+    backend = llm.active_backend()
+    detail = f"codex exec, model {llm.CODEX_MODEL}" if backend == "codex" else f"claude -p, model {llm.CLI_MODEL}"
     fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
     log.info(f"[showrunner] backend: {backend} ({detail}), quality: {QUALITY}"
              + (f", fallback: {fallback}" if fallback else ""))
@@ -1290,9 +1005,8 @@ def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on
     from agents.codex_cli import TOTAL_USAGE, usage_summary
     if TOTAL_USAGE["calls"]:
         log.info(f"[showrunner] Codex subscription usage this process: {usage_summary()}")
-    if CLAUDE_USAGE["calls"]:
-        log.info(f"[showrunner] Claude subscription usage this process: {claude_usage_summary()} "
-                 f"(API-equivalent reported by CLI: ~${_notional[0]:.2f})")
+    if llm.CLAUDE_USAGE["calls"]:
+        log.info(f"[showrunner] Claude subscription usage this process: {llm.usage_summary()}")
     for b in film["beats"]:
         log.info(f"   [{b['id']:>24}] {b['text']}")
     hist = _history()

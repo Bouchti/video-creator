@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from agents import set_builder as sb
-from agents import showrunner
+from agents import llm
 
 FAKE_AGENT = r'''
 import json, sys, time
@@ -45,23 +45,23 @@ class CostTests(unittest.TestCase):
 
     def test_the_call_cap_never_exceeds_what_is_left_of_the_run_budget(self):
         with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1500000", "SET_BUILDER_CALL_TOKENS": "3000000"}), \
-                patch.object(showrunner, "tokens_used", return_value=1_200_000):
+                patch.object(llm, "tokens_used", return_value=1_200_000):
             self.assertEqual(sb._call_token_cap(), 300_000)
 
     def test_codex_out_of_quota_stops_instead_of_using_claude(self):
         files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
-        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "codex"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"SET_BUILDER_CLAUDE_FALLBACK": "0",
                                         "SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
                 patch("agents.codex_cli.run", side_effect=RuntimeError(
                     "codex exec failed (exit 1): You've hit your usage limit. Visit settings/usage to purchase "
                     "more credits or try again at 9:00")), \
                 patch.object(sb, "_run_claude_streaming") as claude:
-            with self.assertRaises(showrunner.UsageLimit) as ctx:
+            with self.assertRaises(llm.UsageLimit) as ctx:
                 sb.claude_agent("design", files)
             # Inside the patches: once they unwind, active_backend() falls back to the real
             # SHOWRUNNER_BACKEND from .env and this would assert the developer's config instead.
-            self.assertEqual(showrunner.active_backend(), "codex")      # nothing else was switched either
+            self.assertEqual(llm.active_backend(), "codex")      # nothing else was switched either
         claude.assert_not_called()
         self.assertIn("SET_BUILDER_CLAUDE_FALLBACK", str(ctx.exception))
 
@@ -77,9 +77,9 @@ class CostTests(unittest.TestCase):
     def test_agent_stopped_at_its_cap_keeps_the_files_it_wrote(self):
         files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
         with tempfile.TemporaryDirectory() as root, patch.object(sb, "PROJECT_ROOT", root), \
-                patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.object(llm, "BACKEND", "subscription"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "0"}), \
-                patch("shutil.which", return_value="claude"), patch.object(showrunner, "_record_claude_usage"), \
+                patch("shutil.which", return_value="claude"), patch.object(llm, "record_usage"), \
                 patch.object(sb, "_run_claude_streaming", side_effect=self._stopped_agent(files, 3)):
             out = sb.claude_agent("design", files)
             self.assertIn("token cap", out)
@@ -96,9 +96,9 @@ class CostTests(unittest.TestCase):
             return self._stopped_agent(files, 3)(cmd, stdin_text, workspace, env, timeout, cap_tokens)
 
         with tempfile.TemporaryDirectory() as root, patch.object(sb, "PROJECT_ROOT", root), \
-                patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.object(llm, "BACKEND", "subscription"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "0"}), \
-                patch("shutil.which", return_value="claude"), patch.object(showrunner, "_record_claude_usage"), \
+                patch("shutil.which", return_value="claude"), patch.object(llm, "record_usage"), \
                 patch.object(sb, "_run_claude_streaming", side_effect=fake):
             sb.claude_agent("design", files, allow_edit=False)
             self.assertNotIn("Edit", seen["tools"])
@@ -109,25 +109,25 @@ class CostTests(unittest.TestCase):
     def test_agent_stopped_before_writing_every_file_is_a_budget_stop(self):
         files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
         with tempfile.TemporaryDirectory() as root, patch.object(sb, "PROJECT_ROOT", root), \
-                patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+                patch.object(llm, "BACKEND", "subscription"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "0"}), \
-                patch("shutil.which", return_value="claude"), patch.object(showrunner, "_record_claude_usage"), \
+                patch("shutil.which", return_value="claude"), patch.object(llm, "record_usage"), \
                 patch.object(sb, "_run_claude_streaming", side_effect=self._stopped_agent(files, 1)):
-            with self.assertRaises(showrunner.BudgetExceeded):
+            with self.assertRaises(llm.BudgetExceeded):
                 sb.claude_agent("design", files)
             self.assertFalse(os.path.exists(os.path.join(root, files[0])))
 
     def test_blocked_build_after_an_earlier_fallback_still_knows_the_codex_reset(self):
         files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
-        with patch.object(showrunner, "BACKEND", "codex"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
-                patch.object(showrunner, "_PRIMARY_RESET", [None]), \
+        with patch.object(llm, "BACKEND", "codex"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
+                patch.object(llm, "_PRIMARY_RESET", [None]), \
                 patch.dict(os.environ, {"SET_BUILDER_CLAUDE_FALLBACK": "0",
                                         "SHOWRUNNER_FALLBACK_BACKEND": "subscription"}), \
                 patch.object(sb, "_run_claude_streaming") as claude:
             # the showrunner hit the Codex limit first (a long message: the reset is at its very end)
-            showrunner.activate_fallback("codex exec failed (exit 1): You've hit your usage limit. " + "x" * 300
+            llm.activate_fallback("codex exec failed (exit 1): You've hit your usage limit. " + "x" * 300
                                          + " or try again at Nov 2nd, 2026 10:48 AM.", failed_backend="codex")
-            with self.assertRaises(showrunner.UsageLimit) as ctx:
+            with self.assertRaises(llm.UsageLimit) as ctx:
                 sb.claude_agent("design", files)
         claude.assert_not_called()
         self.assertEqual((ctx.exception.reset.month, ctx.exception.reset.day), (11, 2))
@@ -138,14 +138,14 @@ class ResetParsingTests(unittest.TestCase):
     def test_codex_and_claude_reset_wording(self):
         import datetime as dt
         now = dt.datetime.now()
-        r = showrunner.parse_reset("You've hit your usage limit. ... purchase more credits or try again in 2 hours 30 minutes.")
+        r = llm.parse_reset("You've hit your usage limit. ... purchase more credits or try again in 2 hours 30 minutes.")
         self.assertAlmostEqual((r - now).total_seconds(), 9000, delta=5)
-        r = showrunner.parse_reset("try again at Oct 29th, 2026 9:41 AM.")
+        r = llm.parse_reset("try again at Oct 29th, 2026 9:41 AM.")
         self.assertEqual((r.year, r.month, r.day, r.hour, r.minute), (2026, 10, 29, 9, 41))
-        r = showrunner.parse_reset("usage limit reached; resets 3pm")
+        r = llm.parse_reset("usage limit reached; resets 3pm")
         self.assertEqual((r.hour, r.minute), (15, 0))
-        self.assertIsNone(showrunner.parse_reset("codex exec failed (exit 1): stream disconnected"))
-        self.assertIsNotNone(showrunner.UsageLimit("Codex is out of quota (... try again at 9:41 PM)").reset)
+        self.assertIsNone(llm.parse_reset("codex exec failed (exit 1): stream disconnected"))
+        self.assertIsNotNone(llm.UsageLimit("Codex is out of quota (... try again at 9:41 PM)").reset)
 
 class PromptSizeTests(unittest.TestCase):
     """Every step of an agent re-sends its whole context: the prompt must carry a compact API reference,
@@ -171,10 +171,10 @@ if __name__ == "__main__":
 
 class MinimumTurnTests(unittest.TestCase):
     def test_a_turn_that_cannot_finish_is_not_started(self):
-        with patch.object(showrunner, "BACKEND", "subscription"), patch.object(showrunner, "_ACTIVE_BACKEND", [None]), \
+        with patch.object(llm, "BACKEND", "subscription"), patch.object(llm, "_ACTIVE_BACKEND", [None]), \
                 patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1830000", "SET_BUILDER_CALL_TOKENS": "900000"}), \
-                patch.object(showrunner, "tokens_used", return_value=1_440_000), \
+                patch.object(llm, "tokens_used", return_value=1_440_000), \
                 patch("shutil.which", return_value="claude"), \
                 patch.object(sb, "_run_claude_streaming", side_effect=AssertionError("must not start")):
-            with self.assertRaises(showrunner.BudgetExceeded):
+            with self.assertRaises(llm.BudgetExceeded):
                 sb.claude_agent("fix", ["engine/sets/demo_story.py"])
