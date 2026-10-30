@@ -189,5 +189,3 @@ def estimated_remaining_seconds(manifest: ProjectManifest, default_shot_seconds:
     return per_shot * (len(manifest.shots) - completed_shots(manifest))
 
 
-def total_timeline_frames(manifest: ProjectManifest) -> int:
-    return sum(shot.duration_frames for shot in manifest.shots)

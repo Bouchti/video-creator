@@ -4,27 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents import evaluator
-from agents.media import stitch_clips_to_duration
-from agents.scene_utils import get_scenes, scene_prompt
 from agents.transcription import words_to_srt
 from agents.publisher import publish_video
 
 
 class EditorHelperTests(unittest.TestCase):
-    def test_get_scenes_supports_list_and_legacy_schema(self):
-        # New connected-scene schema: a scenes list.
-        self.assertEqual(["a", "b", "c"], get_scenes({"scenes": ["a", "b", "c"]}))
-        # Legacy fixed scene_1..N schema still works.
-        self.assertEqual(["s1", "s2"], get_scenes({"scene_1": "s1", "scene_2": "s2"}))
-
-    def test_scene_prompt_appends_shared_visual_style(self):
-        script = {"scenes": ["a diver descends"], "visual_style": "35mm, teal grade"}
-        self.assertEqual("a diver descends, 35mm, teal grade", scene_prompt(script, 0))
-
-    def test_stitch_requires_at_least_one_clip(self):
-        with self.assertRaisesRegex(ValueError, "At least one clip"):
-            stitch_clips_to_duration([], target_duration=30)
-
     def test_words_to_srt_preserves_apostrophes(self):
         words = [
             {"text": "don't", "start": 0.0, "end": 0.4},

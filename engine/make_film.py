@@ -1,7 +1,7 @@
 """
 Film production driver (runs in the project venv):
 
-  python -m engine.make_film pool [--reuse-voice] [--preview | --frames=450,470]
+  python -m engine.make_film pool_cut [--reuse-voice] [--preview | --frames=450,470]
 
 voiceover → word timings + lip-sync envelope → Blender render timed to the words
 → overlay stickers → restrained sound design (authored SFX, ambience, music)
@@ -32,7 +32,7 @@ from agents.transcription import transcribe_with_whisper  # noqa: E402
 from agents.voice import generate_voiceover  # noqa: E402
 from agents.audio_fx import build_fx_track, mix_audio, SR  # noqa: E402
 from agents.captions import words_to_ass  # noqa: E402
-from agents.animate import _draw_overlay  # noqa: E402
+from agents.render import draw_overlay  # noqa: E402
 from agents import sfx  # noqa: E402
 
 log = logging.getLogger("pipeline")
@@ -73,7 +73,7 @@ def _sticker_job(job):
     """Draw a sticker on a COPY of a raw frame (raw renders stay clean, so they can be re-used by
     --redo / --resume without stickers piling up)."""
     src, overlay, t, dst = job
-    _draw_overlay(Image.open(src).convert("RGB"), overlay, t).save(dst)
+    draw_overlay(Image.open(src).convert("RGB"), overlay, t).save(dst)
 
 
 def _parse_redo(spec, film, beats, spans):
@@ -550,8 +550,7 @@ def produce(args):
     # build-up explainers ("If you ...", agents/buildup.py) render with the cutaway runner but, like
     # evolution films, start on the first build step: no epilogue hook to render, no rewind.
     hookless = evolution or film.get("format") == "buildup"
-    film_py = os.path.join(films, "evolution_film.py" if evolution else
-                           "cutaway_film.py" if film.get("set") else f"{name}_film.py")
+    film_py = os.path.join(films, "evolution_film.py" if evolution else "cutaway_film.py")
     beats = film["beats"]
     work = os.path.join(PROJECT_ROOT, "output", f"{name}_work")
     os.makedirs(work, exist_ok=True)

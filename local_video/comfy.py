@@ -25,10 +25,6 @@ class ComfyClient:
         self.poll_seconds = poll_seconds
         self.client_id = uuid.uuid4().hex
 
-    def health(self) -> dict[str, Any]:
-        response = requests.get(f"{self.base_url}/system_stats", timeout=5)
-        response.raise_for_status()
-        return response.json()
 
     def free_memory(self) -> bool:
         """Best-effort release of cached models between expensive local video jobs."""

@@ -37,7 +37,6 @@ PACKAGE = f"/Game/Generated/{SAFE_ID}"
 LEVEL = f"{PACKAGE}/VC_Level"
 SEQUENCE = f"{PACKAGE}/VC_Sequence"
 PRESET = f"{PACKAGE}/VC_RenderPreset"
-STAGE_SPACING = 500000.0                      # 5 km apart: each set's 4 km ground never covers another's river
 
 # ------------------------------------------------------------------ assets
 
@@ -281,33 +280,8 @@ WATER = clean_water()
 WATER_DEPTH = 900.0                       # translucent water needs real depth under it, or it reads as grey
 
 
-def ground_cover(origin, hole=None, clear=2600.0, reach=21000.0, step=3400.0):
-    """Photoreal terrain pieces over the flat ground in a ring around the set: natural, non-repeating
-    ground near the camera; the centre stays flat for buildings, lakes and rivers stay clear."""
-    terrain = megascan("IcelandicTerrain")
-    if not terrain:
-        return
-    x, y = origin[0], origin[1]
-    k = 0
-    n = int(reach // step)
-    for i in range(-n, n + 1):
-        for j in range(-n, n + 1):
-            jitter_x, jitter_y = ((i * 7 + j * 13) % 9 - 4) * 180, ((i * 11 + j * 5) % 9 - 4) * 180
-            px, py = x + i * step + jitter_x, y + j * step + jitter_y
-            r = math.hypot(px - x, py - y)
-            if r < clear or r > reach:
-                continue
-            if hole:
-                cx, cy, sx, sy = hole
-                if abs(px - cx) < sx / 2 + 1400 and abs(py - cy) < sy / 2 + 1400:
-                    continue
-            spawn(f"Cover{k}", terrain, (px, py, -170), (2.6, 2.6, 0.9), (0, 0, (i * 97 + j * 61) % 360))
-            k += 1
-
-
 HOLES = {}                                 # set origin -> the lake/river cut into its ground
 STF = "/Game/STF/Pack03-LandscapePro/Environment/Foliage"
-FOLIAGE = [f"{STF}/GrassBush/SM_grass_bush0{k}_lod00" for k in (1, 2, 3, 4)] +           [f"{STF}/Grass/SM_GrassGroup0{k}" for k in (1, 2, 3)] +           [f"{STF}/Farn/SM_FarnGroup0{k}" for k in (1, 2)] +           [f"{STF}/Grass/SM_FlowerGroup01", f"{STF}/Bush/SM_bush01", f"{STF}/Grass/SM_PlantGroup01"]
 
 
 def dress(prefix, origin, clear=900.0, reach=9500.0, count=150):
@@ -857,18 +831,6 @@ def travel(actor, points, acts, rest=0.0):
             u = u1
         else:
             keys += [(start, at(u), rot), (end, at(u), rot)]
-    add_keys(actor, keys)
-
-
-def relative_toggle(actor, offset, active):
-    """An attached effect (e.g. exhaust) that sits at `offset` from its parent during `active`
-    actions and far below it otherwise (sequencer keys of attached actors are relative)."""
-    rot = (0.0, 0.0, 0.0)
-    hidden = (offset[0], offset[1], -100000.0)
-    keys = []
-    for start, end, action in WINDOWS:
-        place = offset if action in active else hidden
-        keys += [(start, place, rot), (end - 1 if end - 1 > start else end, place, rot)]
     add_keys(actor, keys)
 
 

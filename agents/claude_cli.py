@@ -22,8 +22,6 @@ log = logging.getLogger("pipeline")
 API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
            "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 
-_notional_usd = [0.0]
-
 
 class ClaudeError(RuntimeError):
     pass
@@ -35,11 +33,6 @@ def executable():
 
 def available() -> bool:
     return executable() is not None
-
-
-def notional_cost() -> float:
-    """What this process's calls would have cost on the API (they are billed to the subscription)."""
-    return _notional_usd[0]
 
 
 def subscription_env(environ=None) -> dict:
@@ -94,7 +87,6 @@ def ask(system: str, prompt: str, schema: dict = None, *, model: str = None, eff
         raise ClaudeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
     if data.get("is_error") or data.get("subtype") != "success":
         raise ClaudeError(f"claude -p error ({data.get('subtype')}): {str(data.get('result'))[:300]}")
-    _notional_usd[0] += float(data.get("total_cost_usd") or 0)
     if schema is not None:
         out = data.get("structured_output")
         return out if out is not None else json.loads(data["result"])

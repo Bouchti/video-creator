@@ -1497,7 +1497,7 @@ class WritersCameraChoiceTests(unittest.TestCase):
     def test_the_writers_vocabulary_is_fully_translated(self):
         """planner.CAMERA_MOVES is 8 prose phrases, the screenplay enum is 6 different values, so
         the two could never match by accident: every enum value needs an explicit phrase."""
-        from agents.animate import CAMERA_MOVES as SCHEMA_MOVES
+        from agents.script import CAMERA_MOVES as SCHEMA_MOVES
         from local_video.planner import _MOVE_PHRASE
         self.assertEqual(set(SCHEMA_MOVES), set(_MOVE_PHRASE))
 

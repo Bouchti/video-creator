@@ -5,7 +5,7 @@ import unittest
 
 from config.paths import PROJECT_ROOT
 from agents import director
-from agents.plan_writer import validate
+from agents.plan_rules import validate
 
 PLAN = os.path.join(PROJECT_ROOT, "engine", "director", "plans", "septic.json")
 

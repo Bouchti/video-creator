@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -85,15 +84,6 @@ def validate_input_file(path: str | Path, extensions: set[str], max_bytes: int =
     if source.stat().st_size > max_bytes:
         raise ValueError(f"Input file is larger than {max_bytes // (1024 * 1024)} MB")
     return source
-
-
-def _pinokio_home() -> Path | None:
-    config = Path.home() / ".pinokio" / "config.json"
-    try:
-        value = json.loads(config.read_text(encoding="utf-8")).get("home")
-        return Path(value).expanduser() if value else None
-    except (OSError, ValueError, TypeError):
-        return None
 
 
 def _candidate_urls(explicit: Iterable[str | None], fallbacks: Iterable[str]) -> list[str]:
@@ -206,8 +196,6 @@ class PipelineConfig:
                 ("VAELoader", "vae_name", self.wan_vae),
             ])
 
-    def backend_available(self, backend: str) -> bool:
-        return bool(self.minimax_url if backend == "minimax" else self.wan_url if backend == "wan" else False)
 
     def tool_versions(self) -> dict[str, str | None]:
         return {

@@ -51,21 +51,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-DEFAULT_TOPIC = "The hidden science behind why ocean waves never stop moving"
 DEFAULT_TONE = "mysterious"
 DEFAULT_VOICE = "mysterious"
 DEFAULT_SOURCE = "local-ai"
 
 OUTPUT_DIR = get_output_dir()
-
-# Older names for a source that now runs through another pipeline.
-SOURCE_ALIASES = {"comfy": "local-ai"}
-
-
-def normalize_source(source: str) -> str:
-    """Map legacy source names onto the pipeline that now handles them."""
-    return SOURCE_ALIASES.get(source, source)
-
 
 def write_post_notes(video_path: str, script: dict, credits: list) -> str:
     """Write title/description/hashtags + photo credits next to the video.
@@ -106,10 +96,6 @@ def run_pipeline(
     publish_live: bool = False,
 ) -> dict:
     started = datetime.now()
-    if source in SOURCE_ALIASES:
-        log.info(f"Source '{source}' runs through '{normalize_source(source)}' "
-                 f"(MiniMax H3 first, Wan fallback).")
-        source = normalize_source(source)
     if source == "local-ai":
         # Fail before the paid script step, not after it.
         from local_video.planner import validate_duration
@@ -234,7 +220,7 @@ def run_pipeline(
     if source == "director":
         process_video = None
     elif source == "pexels":
-        from agents.editor_pexels import process_video
+        from agents.editor_beats import process_video
     elif source == "local-ai":
         from agents.editor_local_ai import process_video
     elif source == "unreal":

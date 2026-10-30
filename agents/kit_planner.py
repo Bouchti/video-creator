@@ -29,9 +29,6 @@ def plan_schema(world: str = vocab.WORLD, hero: bool = True) -> dict:
     }
 
 
-PLAN_SCHEMA = plan_schema()                 # the embankment's Max-story schema
-
-
 def vocabulary(hero: bool = True, world: str = vocab.WORLD) -> str:
     """A world's vocabulary as the planner sees it (a no-hero explainer sees the same world without Max)."""
     w = vocab.for_world(world)

@@ -53,9 +53,6 @@ def schema(world: str = vocab.WORLD, hero: bool = True) -> dict:
     }
 
 
-SCHEMA = schema()                       # the embankment's
-
-
 def has_hero(sb: dict) -> bool:
     return sb.get("hero", True) is not False
 

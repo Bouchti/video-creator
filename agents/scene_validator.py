@@ -526,16 +526,6 @@ def review_sampled_windows(film: dict, spans: list, work: str, spec=None) -> dic
     return report
 
 
-def validate_window(w: dict, frames_dir: str, review_dir: str, subject: str, previous: str = None) -> dict:
-    rep, images, tech = _prepare_window(w, frames_dir, review_dir)
-    if not tech["valid"]:
-        return {**rep, "valid": False, "acceptance": "rejected", "fatal_problems": tech["fatal_problems"],
-                "problems": tech["problems"], "fix": "", "skipped": False}
-    story = review_images(w, images, subject, previous)
-    story["problems"] = tech["problems"] + story.get("problems", [])
-    return {**rep, **story}
-
-
 # ------------------- the watcher (runs beside Blender) -------------------
 
 class SceneWatcher:

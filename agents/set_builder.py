@@ -915,15 +915,6 @@ geometry. Then write exactly these three files:
 Finish with a short summary of the build sequence."""
 
 
-def _is_explainer(set_id):
-    try:
-        import importlib
-        sp = importlib.import_module(f"engine.sets.{set_id}_spec")
-    except Exception:                                # noqa: BLE001
-        return False
-    return getattr(sp, "FORMAT", "") == "explainer" and not getattr(sp, "HERO", None)
-
-
 def _guide(set_id):
     """Return the format-specific repair guide for this set."""
     try:

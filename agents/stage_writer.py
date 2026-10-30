@@ -12,7 +12,7 @@ import json
 import logging
 import re
 
-from agents.plan_writer import ADVICE, _has, _words
+from agents.plan_rules import ADVICE, _has, _words
 from engine.mocap import CLIPS
 
 log = logging.getLogger("pipeline")

@@ -34,9 +34,6 @@ def remove_files(paths) -> None:
                 log.warning("Could not remove temporary file %s: %s", path, exc)
 
 
-# Temporary compatibility alias while callers migrate.
-_remove_files = remove_files
-
 
 def run_process(cmd, timeout: int, cleanup_paths=()):
     try:
@@ -45,8 +42,6 @@ def run_process(cmd, timeout: int, cleanup_paths=()):
         remove_files(cleanup_paths)
         raise
 
-
-_run_process = run_process
 
 
 def get_duration(file_path: str) -> float:
@@ -146,39 +141,6 @@ def concat_clips(clip_paths: list[str], target_duration: float) -> str:
         raise
     finally:
         remove_files([concat_file])
-
-
-def stitch_clips_to_duration(
-    clip_paths: list[str], target_duration: float, loop_to_fill: bool = False,
-) -> str:
-    if not clip_paths:
-        raise ValueError("At least one clip is required for stitching")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    per_clip = target_duration / len(clip_paths)
-    normalized: list[str] = []
-    total = 0.0
-    try:
-        for index, clip in enumerate(clip_paths):
-            target = os.path.join(get_temp_dir(), f"norm_{index}_{stamp}.mp4")
-            normalized.append(target)
-            actual = get_duration(clip)
-            seconds = per_clip if loop_to_fill else min(per_clip + 0.2, actual)
-            landscape_to_vertical(clip, target, seconds, loop=loop_to_fill)
-            total += get_duration(target)
-        if total < target_duration - 0.5:
-            gap_target = os.path.join(get_temp_dir(), f"loop_{stamp}.mp4")
-            result = run_process([
-                FFMPEG, "-y", "-stream_loop", "-1", "-i", normalized[-1],
-                "-t", str(target_duration - total + 0.3), "-c:v", "libx264",
-                "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
-                "-an", gap_target,
-            ], 60, normalized + [gap_target])
-            if result.returncode != 0:
-                raise RuntimeError(f"Clip loop failed: {result.stderr[-300:]}")
-            normalized.append(gap_target)
-        return concat_clips(normalized, target_duration)
-    finally:
-        remove_files(normalized)
 
 
 def merge_audio_video(video_path: str, audio_path: str) -> str:

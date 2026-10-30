@@ -53,17 +53,6 @@ def flicker(frames, threshold=8.0):
     return max((float(_spikes(g, i, threshold).mean() * 100) for i in range(1, len(g) - 1)), default=0.0)
 
 
-def flicker_map(frames, threshold=8.0):
-    """Which third of the frame strobes most (top / middle / bottom), for the warning text."""
-    g = [_gray(f) for f in frames]
-    acc = np.zeros_like(g[0])
-    for i in range(1, len(g) - 1):
-        acc += _spikes(g, i, threshold)
-    h = acc.shape[0]
-    parts = {"top": acc[: h // 3].mean(), "middle": acc[h // 3: 2 * h // 3].mean(), "bottom": acc[2 * h // 3:].mean()}
-    return max(parts, key=parts.get)
-
-
 def colorfulness(img):
     if isinstance(img, str):
         img = Image.open(img)

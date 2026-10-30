@@ -1,16 +1,15 @@
 import json
-import os
 import logging
 from dotenv import load_dotenv
 from config.paths import get_env_path
 from agents import ai_router
-from agents.animate import CAMERA_MOVES
 from agents.beats import DIAGRAM_TEMPLATES, OVERLAY_TYPES, narration_from_beats, repair_beats
 
-# "animated": every beat is a generated Pixar-style 3D scene, animated in 2.5D.
-# "footage": stock footage, real photos, and diagrams (the --source pexels path).
-# "unreal": deterministic primitive-shape engineering dioramas rendered in UE5.
-SCRIPT_MODES = ("animated", "footage", "local-ai", "unreal")
+# Script modes: "footage" (stock footage, real photos and diagrams: the --source pexels path), "local-ai"
+# (generated live-action scenes) and "unreal" (primitive-shape engineering dioramas rendered in UE5).
+
+# The camera moves a writer may give a beat; local_video/planner.py translates each into a shot.
+CAMERA_MOVES = ("push_in", "pull_out", "pan_left", "pan_right", "rise", "orbit")
 
 load_dotenv(get_env_path())
 
@@ -193,7 +192,7 @@ UNREAL_VISUAL_SCHEMA = {
 def build_script_tool(num_beats: int, min_words: int, max_words: int, mode: str = "footage",
                       content_mode: str = "documentary") -> dict:
     lo, hi = beat_word_range(num_beats, min_words, max_words)
-    scene_mode = mode in {"animated", "local-ai"}
+    scene_mode = mode == "local-ai"
     extra = {}
     if scene_mode:
         extra["characters"] = {
@@ -346,7 +345,7 @@ def build_script_tool(num_beats: int, min_words: int, max_words: int, mode: str 
                     "ending_payoff", "location", "time_of_day", "color_palette", "recurring_objects",
                     "screen_geography",
                 ]
-                if mode == "local-ai" else ["characters"] if mode == "animated"
+                if mode == "local-ai"
                 else ["visual_style", "set"] if mode == "unreal" else ["visual_style"]
             )
         }
@@ -404,35 +403,6 @@ DIAGRAM TEMPLATES (kind = diagram, set `template` + its fields):
 - process: title, steps (2-6 labels, max 4 words each), active_step (1-based).
 - timeline: title, events (2-6 of {year, label}), active_event (1-based).
 - comparison: title, items (2-4 of {label, value: number, display: '120 km/h'}).
-
-"""
-
-BEATS_SCENES = """═══ BEATS — THE MOST IMPORTANT RULE ═══
-
-The video is a Pixar-style 3D animated short. The narration is written as BEATS: a beat = the exact
-words spoken + ONE animated scene on screen while they are heard. All beat texts joined in order ARE
-the voiceover. Each scene is generated from your `description`, then animated with a camera move.
-
-1. A beat is ONE short sentence or clause (~3 seconds spoken). The request gives the words-per-beat
-   range and the TOTAL word range. The total is a HARD limit (it sets the video length): count the
-   words of every beat before submitting.
-2. The scene shows EXACTLY what the beat's words say — the action, the object, the place, the step.
-   Never a vague mood shot. "A huge excavator digs the hole" → a cartoon excavator scooping dirt out
-   of a backyard pit while Max cheers from the edge.
-3. Describe ONE clear moment: who (character by name), doing what, where, with which objects, plus
-   the framing (wide shot / close-up / top-down / low angle). Concrete nouns only. Never ask for text,
-   signs, labels, or numbers inside the picture — the image model can't spell.
-4. RECURRING CHARACTERS: define 1-3 `characters` (name + fixed look: age, build, clothes and colours,
-   hair) and feature them by name in most scenes, so the viewer follows someone through one world
-   (same backyard, same house, same town).
-5. Make it FUN and immersive: expressive faces, exaggerated action, playful details, a sense of scale.
-   Vary framing — never the same framing twice in a row.
-6. camera: push_in (focus, reveal a detail), pull_out (show scale, the result), pan_left/pan_right
-   (follow movement, show a row of things), rise (look up, something grows/lifts), orbit (show an
-   object all around). Vary the moves.
-7. overlay (optional, at most 1 beat in 3): a number said in the beat (`stat`: value '2 m', text
-   'deep') or a name/term (`label`: text, max 3 words). It appears as an animated sticker and must
-   match the narration exactly.
 
 """
 
@@ -679,15 +649,11 @@ Hard rules:
 
 
 def system_prompt(mode: str = "footage", content_mode: str = "documentary") -> str:
-    beats = (BEATS_SCENES if mode == "animated" else
-             BEATS_LOCAL_AI_DOCUMENTARY if mode == "local-ai" and content_mode == "documentary" else
+    beats = (BEATS_LOCAL_AI_DOCUMENTARY if mode == "local-ai" and content_mode == "documentary" else
              BEATS_LOCAL_AI if mode == "local-ai"
              else BEATS_UNREAL if mode == "unreal" else BEATS_FOOTAGE)
     return SYSTEM_PROMPT_HEAD + beats + SYSTEM_PROMPT_TAIL
 
-
-# Backward-compatible default prompt.
-SYSTEM_PROMPT = system_prompt("footage")
 
 
 def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 75,
@@ -755,8 +721,6 @@ PREVIOUS DRAFT:
 Submit the corrected FULL script as the structured output."""
     else:
         visual_hint = (
-            "Every beat is a fun Pixar-style 3D scene that shows exactly what its words say, "
-            "starring your recurring characters." if mode == "animated" else
             "Make every beat one connected, photoreal object-led documentary scene. Use no invented "
             "people, staged discoveries, diagrams, cards, labels, or generated text." if mode == "local-ai" and content_mode == "documentary" else
             "Make every beat one connected, photoreal live-action scene with the same recurring "
@@ -783,7 +747,7 @@ Submit it as the structured output."""
         raise ValueError("Claude did not return a video script")
     beats = get_beat_list(script)
     if beats:
-        repair_beats(beats, scene_mode=mode in {"animated", "local-ai", "unreal"})
+        repair_beats(beats, scene_mode=mode in {"local-ai", "unreal"})
         # The voiceover IS the beats — derived, so words and visuals can't drift.
         script["spoken_script"] = narration_from_beats(beats)
     script["content_mode"] = content_mode

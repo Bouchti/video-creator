@@ -204,7 +204,7 @@ python -m agents.director engine/director/plans/septic.json --compose-only   # r
 |---|---|---|
 | Plan (the scenario, data) | `engine/director/plans/septic.json` | beats: narration, hook text, chapters, labels -> anchors, callouts, checklist, end card |
 | World spec (data) | `engine/director/worlds.py` | what each beat shows, cue words, anchors, beat order |
-| Plan writer | `agents/plan_writer.py` | retention rules as the prompt + a validator (word budget, hook <= 12 words, cue words present, labels <= 3 words, 3-4 chapters, 3 rules); one repair turn, then the reference plan |
+| Plan writer | `agents/stage_writer.py` (writer), `agents/plan_rules.py` (validator) | retention rules as the prompt + a validator (word budget, hook <= 12 words, cue words present, labels <= 3 words, 3-4 chapters, 3 rules); one repair turn, then the reference plan |
 | Blender toolkit | `engine/director/lib.py` | ambientCG PBR (box-projected), HDRI, easing (BACK/BOUNCE/ELASTIC), camera shots by "metres of world across the frame", shake, anchors export |
 | Golden world | `engine/director/septic.py` | strata soil with a keyed water table, half-cut tank with sludge/water/scum, PVC tees and pipes, gravel drainfield, mascot, truck, burst FX |
 | Driver | `agents/director.py` | voice fit (pause tightening -> <=5 % tempo -> tail), Whisper cues, Blender under the shared GPU lock, synced SFX + music bed, Remotion compose, duration check, mute test |

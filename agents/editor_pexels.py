@@ -1,7 +1,6 @@
 """
-Stock-footage editor: free real video from MULTIPLE free sources instead of
-AI-generated video. Reuses voice generation, subtitle burn, and stitching from
-the shared media helpers. Only the clip-fetching step is stock-specific.
+Stock-footage sources for the pexels route (agents/editor_beats.py builds the video): free real video
+from MULTIPLE free sources instead of AI-generated video.
 
 Sources (queried in priority order; key-gated ones auto-skip if their key is
 missing, keyless ones always run):
@@ -16,7 +15,6 @@ Order is configurable via the STOCK_SOURCES env var (comma-separated). To favour
 on-topic historical footage over generic stock, put archive/wikimedia first.
 """
 import os
-import re
 import requests
 import logging
 from datetime import datetime
@@ -47,18 +45,6 @@ DEFAULT_SOURCES = ["pexels", "pixabay", "coverr", "nasa", "archive", "wikimedia"
 # variable quality (archival/niche) — only queried to backfill when the fast tier
 # comes up short, so we don't hammer them for every clip slot.
 FAST_SOURCES = {"pexels", "pixabay", "coverr"}
-
-from agents.media import (
-    _remove_files, get_duration, stitch_clips_to_duration, merge_audio_video, burn_subtitles,
-)
-from agents.transcription import transcribe_with_whisper, words_to_srt
-from agents.voice import generate_voiceover
-
-# Narration-aligned stock queries: one on-topic query per clip so the footage
-# follows what the voiceover is actually saying (not generic mood b-roll).
-from agents.comfy_prompts import narration_beats_for_clips
-from agents.stock_queries import generate_stock_queries
-
 
 def _duration_ok(dur, min_duration: int) -> bool:
     """Accept unknown (None) durations; otherwise enforce the min/max window."""
@@ -316,37 +302,6 @@ def search_stock_videos(query: str, min_duration: int = 5, count: int = 3) -> li
 
 
 # Backward-compatible thin wrapper (returns plain URLs).
-def search_pexels_videos(query: str, min_duration: int = 6, count: int = 1) -> list:
-    return [it["url"] for it in search_stock_videos(query, min_duration, count)]
-
-
-def build_pexels_queries(script: dict) -> list:
-    """Read queries directly from the script — Claude already wrote them properly."""
-    queries = script.get("pexels_queries", [])
-    if not queries:
-        # Fallback if script didn't include queries
-        queries = title_terms(script) or ["abstract cinematic"] * 8
-    return queries
-
-
-def title_terms(script: dict) -> list:
-    """Concrete 1-2 word phrases derived from the video title, used as on-topic
-    fallbacks before resorting to generic stock queries."""
-    title = script.get("video_title", "")
-    words = [w for w in re.sub(r"[^a-zA-Z\s]", " ", title.lower()).split() if len(w) > 3]
-    terms = []
-    for i in range(len(words) - 1):
-        terms.append(f"{words[i]} {words[i+1]}")  # bigrams
-    terms.extend(words)  # then single words
-    # de-dupe preserving order
-    seen, out = set(), []
-    for t in terms:
-        if t not in seen:
-            seen.add(t); out.append(t)
-    return out
-
-
-
 def download_clip(url: str, clip_num: int) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(get_temp_dir(), f"clip_{clip_num}_{ts}.mp4")
@@ -358,149 +313,3 @@ def download_clip(url: str, clip_num: int) -> str:
         for chunk in r.iter_content(8192):
             f.write(chunk)
     return path
-
-
-def _per_clip_queries(script: dict, num_clips: int) -> tuple:
-    """Return (clip_queries, clip_beats): one narration-aligned stock query per clip.
-
-    Falls back to (None, beats) so the caller can use the proportional scene-query
-    mapping when Claude is unavailable.
-    """
-    clip_beats = narration_beats_for_clips(script, num_clips)
-    log.info("[2a/5] Writing narration-aligned stock queries (Claude)...")
-    try:
-        clip_queries = generate_stock_queries(script, num_clips, clip_beats)
-        log.info(f"  Got {len(clip_queries)} story-aligned stock queries")
-        return clip_queries, clip_beats
-    except Exception as e:
-        log.warning(f"  Stock query generation failed ({e}) — using scene-query mapping")
-        return None, clip_beats
-
-
-def fetch_stock_footage(script: dict, num_clips: int, per_clip_duration: float = 6.0) -> list:
-    """Pull num_clips clips across all enabled stock sources, each >= per_clip_duration."""
-    log.info(f"\n[2/5] Fetching {num_clips} stock clips (min {per_clip_duration:.0f}s each) "
-             f"from: {', '.join(_enabled_sources())}\n")
-
-    queries = build_pexels_queries(script)
-    title_fallbacks = title_terms(script)
-    generic = ["cinematic abstract", "slow motion nature", "atmospheric mood", "abstract texture"]
-
-    # Per-clip queries tied to the narration beat that plays over each clip, so the
-    # footage follows the STORY in order rather than generic mood b-roll.
-    clip_queries, clip_beats = _per_clip_queries(script, num_clips)
-
-    paths = []
-    used_urls = set()  # dedupe across queries
-
-    for i in range(num_clips):
-        beat = clip_beats[i] if i < len(clip_beats) else ""
-        if clip_queries:
-            # On-topic query for THIS clip's narration, then its neighbours (same
-            # world), then the rest, the script's scene queries, title terms, generic.
-            primary_query = clip_queries[i]
-            neighbours = [clip_queries[j] for j in (i - 1, i + 1)
-                          if 0 <= j < len(clip_queries) and clip_queries[j] != primary_query]
-            others = [q for q in clip_queries if q != primary_query and q not in neighbours]
-            candidate_queries = ([primary_query] + neighbours + others
-                                 + queries + title_fallbacks + generic)
-        else:
-            # Fallback: map each clip slot back to a scene query proportionally so the
-            # cuts still follow the story IN ORDER even without per-clip queries.
-            scene_idx = (i * len(queries)) // max(num_clips, 1)
-            primary_query = queries[min(scene_idx, len(queries) - 1)]
-            neighbours = [queries[j] for j in (scene_idx - 1, scene_idx + 1)
-                          if 0 <= j < len(queries) and queries[j] != primary_query]
-            others = [q for q in queries if q != primary_query and q not in neighbours]
-            candidate_queries = [primary_query] + neighbours + others + title_fallbacks + generic
-
-        # De-dupe while preserving order so we don't search the same term twice.
-        _seen_q = set()
-        candidate_queries = [
-            q for q in candidate_queries if q and not (q in _seen_q or _seen_q.add(q))
-        ]
-
-        chosen = None
-        if beat:
-            log.info(f"  Clip {i+1}/{num_clips} | VO: {beat[:55]}{'...' if len(beat) > 55 else ''}")
-
-        for query in candidate_queries:
-            log.info(f"  Clip {i+1}: trying '{query}' (need {per_clip_duration:.0f}s+)")
-            for item in search_stock_videos(query, min_duration=int(per_clip_duration), count=3):
-                if item["url"] not in used_urls:
-                    chosen = item
-                    used_urls.add(item["url"])
-                    break
-            if chosen:
-                break
-
-        if not chosen:
-            # Last resort: any clip, any duration, any source.
-            log.info(f"    Last resort: any clip")
-            for item in search_stock_videos(generic[0], min_duration=3, count=5):
-                if item["url"] not in used_urls:
-                    chosen = item
-                    used_urls.add(item["url"])
-                    break
-
-        if not chosen:
-            raise Exception(f"No suitable footage found for clip {i+1}")
-
-        path = download_clip(chosen["url"], i + 1)
-        actual_dur = get_duration(path)
-        size_mb = os.path.getsize(path) / 1024 / 1024
-        log.info(f"    Got {actual_dur:.1f}s clip ({size_mb:.1f} MB) [{chosen['source']}]")
-        paths.append(path)
-
-    return paths
-
-
-
-def process_video(script: dict, voice: str = "energetic") -> str:
-    """Pexels stock + ElevenLabs voice + word-by-word subtitles. Cost: ~$0."""
-    from agents.beats import get_beats
-    if get_beats(script):  # beat scripts: visuals timed to the narration
-        from agents.editor_beats import process_video as process_beats
-        return process_beats(script, voice=voice, footage="pexels")
-
-    audio_path = None
-    clips = []
-    stitched = None
-    merged = None
-    srt = None
-
-    try:
-        audio_path, audio_duration = generate_voiceover(script["spoken_script"], voice=voice)
-
-        target_duration = audio_duration + 0.5
-
-        # Cut roughly every MAX_CLIP_SCREEN_SECONDS so no single shot lingers long
-        # enough to bore the viewer. num_clips scales with length (e.g. ~25 clips
-        # for a 75s video) instead of the old hard cap of 8 (which left each clip
-        # on screen ~9s). fetch_stock_footage maps these slots back onto the scene
-        # queries in order, so more cuts == tighter pacing, NOT lost story order.
-        MAX_CLIP_SCREEN_SECONDS = 3.0
-        num_clips = max(6, round(target_duration / MAX_CLIP_SCREEN_SECONDS))
-        log.info(f"\nVoice = {audio_duration:.1f}s. Fetching {num_clips} stock clips "
-                 f"(~{target_duration / num_clips:.1f}s each).\n")
-
-        # Accept clips as short as 3s so on-topic footage isn't rejected for being
-        # short (loop_to_fill trims long clips AND loops short ones to fill their
-        # ~3s slot, so every cut is covered by its own scene-matched footage).
-        clips = fetch_stock_footage(script, num_clips=num_clips, per_clip_duration=3.0)
-        stitched = stitch_clips_to_duration(clips, target_duration=target_duration, loop_to_fill=True)
-
-        merged = merge_audio_video(stitched, audio_path)
-
-        words = transcribe_with_whisper(audio_path)
-        srt = merged.replace(".mp4", ".srt")
-        words_to_srt(words, srt)
-        final = burn_subtitles(merged, srt)
-
-        return final
-    finally:
-        _remove_files(clips + [stitched, audio_path, merged, srt])
-
-
-if __name__ == "__main__":
-    log.info("Pexels editor module loaded successfully.")
