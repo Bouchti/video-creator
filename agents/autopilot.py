@@ -220,6 +220,20 @@ def write_notes(video, film_json):
 
 # ------------------- stages -------------------
 
+def _unused_bk_set():
+    """An unused story set whose code takes its objects from BlenderKit (engine.props), or None."""
+    from agents.blenderkit import USES_PROPS
+    from agents.showrunner import available_topic_sets
+    for set_id in available_topic_sets():
+        try:
+            with open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8") as fh:
+                if USES_PROPS.search(fh.read()):
+                    return set_id
+        except OSError:
+            continue
+    return None
+
+
 def stage_script(run, source, angle, set_id):
     if run["film"] and os.path.exists(run["film"]):
         return run["film"]
@@ -242,13 +256,24 @@ def stage_script(run, source, angle, set_id):
                     run.set(script_topic=topic)
 
                 try:
+                    if run["new_set_plan"] and not run["generated_set"] and not selected_set:
+                        # a new subject is already planned (and maybe half-built): a resume continues IT. Writing
+                        # first let the showrunner pick an older unused set and script it instead.
+                        raise NoUnusedStorySets("continuing the new subject already in progress")
+                    if source == "cutaway-bk" and not selected_set:
+                        # this route films only sets made with BlenderKit props; older all-primitive sets stay
+                        # with the cutaway route
+                        selected_set = _unused_bk_set()
+                        if not selected_set:
+                            raise NoUnusedStorySets("no unused BlenderKit set: building a new one")
                     path = write(angle=use_angle, render=False, set_id=selected_set,
                                  topic_hint=topic_hint, on_topic=remember_topic)
                 except NoUnusedStorySets as exc:
                     if selected_set or not _enabled("SHOWRUNNER_AUTO_BUILD_SETS", True):
                         raise GiveUp(str(exc)) from exc
                     plan = run["new_set_plan"]
-                    kit = (os.getenv("SHOWRUNNER_SET_MODE") or "kit").strip().lower() == "kit"
+                    bk = source == "cutaway-bk"          # whole objects from BlenderKit (opt-in route)
+                    kit = not bk and (os.getenv("SHOWRUNNER_SET_MODE") or "kit").strip().lower() == "kit"
                     if not plan:
                         run.event("script", "all existing Max subjects are consumed; researching a new one")
                         if kit:
@@ -263,7 +288,7 @@ def stage_script(run, source, angle, set_id):
                                 raise GiveUp(str(exc)) from exc
                             plan = plan_kit_story(published, world=world)
                         else:
-                            plan = plan_new_story_set()
+                            plan = plan_new_story_set(allow_assets=bk)
                         run.set(new_set_plan=plan)
                     if plan.get("storyboard"):
                         # the kit films a storyboard: no code is written, nothing is repaired by an agent
@@ -281,7 +306,7 @@ def stage_script(run, source, angle, set_id):
                         run.event("set", "building and visually validating a new Max set",
                                   detail=f"{plan['subject']} ({plan['set_id']})")
                         status = build_story_set(plan["build_brief"], plan["set_id"],
-                                                 rounds=_int("SET_BUILD_ROUNDS", 4))
+                                                 rounds=_int("SET_BUILD_ROUNDS", 4), assets=bk)
                     if not status.get("accepted"):
                         raise GiveUp(f"new set '{plan['set_id']}' did not pass visual validation; "
                                      f"continue it in {status.get('work')}")
@@ -656,7 +681,7 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     ap = argparse.ArgumentParser(description="Make a 3D video end to end, repairing failures automatically.")
-    ap.add_argument("--source", choices=["evolution", "cutaway", "explainer"], default="evolution")
+    ap.add_argument("--source", choices=["evolution", "cutaway", "cutaway-bk", "explainer"], default="evolution")
     ap.add_argument("--angle", default=None)
     ap.add_argument("--set", default=None, help="evolution set (default: the first registered)")
     ap.add_argument("--resume", default=None, help="continue a run from its output/autopilot/<run>.json")

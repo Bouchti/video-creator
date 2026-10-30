@@ -225,7 +225,7 @@ class ScriptAndCheckTests(_Env):
             path = ap.stage_script(self.run, "cutaway", None, None)
         self.assertEqual(path, self.film)
         self.assertEqual(calls, [None, "heat_pump_story"])
-        build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4)
+        build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4, assets=False)
         self.assertEqual(self.run["generated_set"], "heat_pump_story")
 
     def test_an_exhausted_library_is_filmed_by_the_kit_without_any_agent(self):

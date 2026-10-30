@@ -58,3 +58,12 @@ unreal/VideoCreatorUE/Content/*
 # Remotion compositor (npm install in compositor/)
 compositor/node_modules/
 compositor/out/
+
+# BlenderKit downloads (python assets/fetch_blenderkit.py)
+assets/blenderkit/
+run_cutaway_probe.bat
+run_cutaway_hybrid.bat
+
+# Chatterbox TTS environment (agents/libraries.py part chatterbox)
+tools/chatterbox/.venv/
+tools/chatterbox/.wheels/

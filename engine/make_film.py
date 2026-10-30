@@ -662,6 +662,10 @@ def produce(args):
         args.preview = args.frames = None
     elif not (args.preview or args.frames or resume):
         shutil.rmtree(os.path.join(work, "frames"), ignore_errors=True)
+    if film.get("set"):     # the set's BlenderKit props (cutaway-bk sets only; a no-op for sets that build all)
+        from agents import blenderkit
+        blenderkit.resolve_set_props(os.path.join(PROJECT_ROOT, "engine", "sets", f"{film['set']}.py"),
+                                     story=str(film.get("title", "")))
     if not redo:
         log.info("Rendering in Blender...")
     cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json, timings_path, work]

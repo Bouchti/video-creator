@@ -1,0 +1,441 @@
+{
+ "material:grass": {
+  "assetBaseId": "d9bb4c54-f406-484f-90e1-78179b301687",
+  "author": "Paco Salas",
+  "dimensions": null,
+  "file": "assets/blenderkit/d9bb4c54-f406-484f-90e1-78179b301687/grass_01_resolution_1K.blend",
+  "kind": "material",
+  "license": "royalty_free",
+  "name": "Grass 01",
+  "query": "grass"
+ },
+ "material:id:7b89dab0-fc42-4e72-ab1f-61c085285d35": {
+  "assetBaseId": "7b89dab0-fc42-4e72-ab1f-61c085285d35",
+  "author": "Matheus Godoi",
+  "dimensions": null,
+  "file": "assets/blenderkit/7b89dab0-fc42-4e72-ab1f-61c085285d35/stylized_grass_resolution_1K.blend",
+  "kind": "material",
+  "license": "royalty_free",
+  "name": "Stylized Grass",
+  "query": "ground grass"
+ },
+ "material:id:c9c6a0f3-4666-47ee-86ce-4b1610ab5ce6": {
+  "assetBaseId": "c9c6a0f3-4666-47ee-86ce-4b1610ab5ce6",
+  "author": "Nikhil G krishnan",
+  "dimensions": null,
+  "file": "assets/blenderkit/c9c6a0f3-4666-47ee-86ce-4b1610ab5ce6/stylized_paving_resolution_1K.blend",
+  "kind": "material",
+  "license": "royalty_free",
+  "name": "Stylized paving",
+  "query": "ground paving stones"
+ },
+ "material:id:eb7e115a-cb91-4ee7-96c9-89b106c5c45d": {
+  "assetBaseId": "eb7e115a-cb91-4ee7-96c9-89b106c5c45d",
+  "author": "Shaun Xavier",
+  "dimensions": null,
+  "file": "assets/blenderkit/eb7e115a-cb91-4ee7-96c9-89b106c5c45d/stylized_rock_pebble_resolution_1K.blend",
+  "kind": "material",
+  "license": "royalty_free",
+  "name": "Stylized Rock Pebble",
+  "query": "ground gravel"
+ },
+ "material:wood floor": {
+  "assetBaseId": "f925bea6-a07f-40a6-b8b5-3d382f57c38c",
+  "author": "NOVA Studio Studio",
+  "dimensions": null,
+  "file": "assets/blenderkit/f925bea6-a07f-40a6-b8b5-3d382f57c38c/wood_floor_procedural_blend.blend",
+  "kind": "material",
+  "license": "royalty_free",
+  "name": "Wood floor procedural",
+  "query": "wood floor"
+ },
+ "model:bicycle": {
+  "assetBaseId": "32783d96-735c-4365-9bf4-818b9fc39727",
+  "author": "Theo M\u00fcller",
+  "dimensions": [
+   0.5726,
+   1.8679,
+   1.0805
+  ],
+  "file": "assets/blenderkit/32783d96-735c-4365-9bf4-818b9fc39727/vintage_bicycle_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Vintage Bicycle",
+  "query": "bicycle"
+ },
+ "model:bicycle wheel": {
+  "assetBaseId": "6d4808af-e040-4553-87c5-14a7229a5636",
+  "author": "Klo Works",
+  "dimensions": [
+   0.1428,
+   0.7389,
+   1.0414
+  ],
+  "file": "assets/blenderkit/6d4808af-e040-4553-87c5-14a7229a5636/bicycle_wheel_rim_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Bicycle Wheel Rim",
+  "query": "bicycle wheel"
+ },
+ "model:boomerang": {
+  "assetBaseId": "727feb4f-3959-4650-adce-59f87ff0845d",
+  "author": "Micha\u0142 Tala\u015bka",
+  "dimensions": [
+   0.3178,
+   0.1459,
+   0.0087
+  ],
+  "file": "assets/blenderkit/727feb4f-3959-4650-adce-59f87ff0845d/boomerang_blend.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Boomerang",
+  "query": "boomerang"
+ },
+ "model:broom": {
+  "assetBaseId": "87c595b7-970b-4682-baa3-00e26ada9ba0",
+  "author": "3D FLICK",
+  "dimensions": [
+   0.1502,
+   0.1502,
+   1.1966
+  ],
+  "file": "assets/blenderkit/87c595b7-970b-4682-baa3-00e26ada9ba0/witches_broom_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Witches Broom",
+  "query": "broom"
+ },
+ "model:camping stove": {
+  "assetBaseId": "21823144-0ec7-4eb7-8298-929a526a87f1",
+  "author": "Take Refuge TV",
+  "dimensions": [
+   0.3609,
+   0.4368,
+   0.1734
+  ],
+  "file": "assets/blenderkit/21823144-0ec7-4eb7-8298-929a526a87f1/camping_stove_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Camping Stove",
+  "query": "camping stove"
+ },
+ "model:car battery": {
+  "assetBaseId": "4795521c-9b37-4e0f-98ae-5b83a025ba68",
+  "author": "Matteo Pascale",
+  "dimensions": [
+   0.2714,
+   0.195,
+   0.1696
+  ],
+  "file": "assets/blenderkit/4795521c-9b37-4e0f-98ae-5b83a025ba68/car_battery_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Car battery",
+  "query": "car battery"
+ },
+ "model:cooking pot": {
+  "assetBaseId": "9a32d0dd-0bb3-4ee6-bc12-d3cdc1816b00",
+  "author": "Jan Hecl",
+  "dimensions": [
+   0.3037,
+   0.3841,
+   0.2889
+  ],
+  "file": "assets/blenderkit/9a32d0dd-0bb3-4ee6-bc12-d3cdc1816b00/cooking_pot_blend.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Cooking pot",
+  "query": "cooking pot"
+ },
+ "model:edison light bulb": {
+  "assetBaseId": "1ce9d15c-a673-4c6e-aa03-61868a325956",
+  "author": "Jes\u00fas Snz",
+  "dimensions": [
+   0.1774,
+   0.0813,
+   0.0852
+  ],
+  "file": "assets/blenderkit/1ce9d15c-a673-4c6e-aa03-61868a325956/edison_light_bulb_vintage_blend.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Edison Light Bulb VIntage",
+  "query": "edison light bulb"
+ },
+ "model:floor lamp": {
+  "assetBaseId": "133ef4af-185f-4e72-a5a5-3bf007312dd7",
+  "author": "Theo M\u00fcller",
+  "dimensions": [
+   0.4533,
+   0.23,
+   1.164
+  ],
+  "file": "assets/blenderkit/133ef4af-185f-4e72-a5a5-3bf007312dd7/vintage_floor_lamp_blend.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Vintage Floor lamp",
+  "query": "floor lamp"
+ },
+ "model:garden shed": {
+  "assetBaseId": "ed77b4bf-da43-45d0-b1b8-8c08b12357a5",
+  "author": "Dennis Wormgoor",
+  "dimensions": [
+   4.84,
+   6.7,
+   6.1935
+  ],
+  "file": "assets/blenderkit/ed77b4bf-da43-45d0-b1b8-8c08b12357a5/free_modular_shed_with_interior_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Free Modular Shed with interior",
+  "query": "garden shed"
+ },
+ "model:house": {
+  "assetBaseId": "141b8a53-a0f1-447c-9e9c-ea2ea3b77e29",
+  "author": "Dal Roron",
+  "dimensions": [
+   11.0352,
+   10.4276,
+   6.3291
+  ],
+  "file": "assets/blenderkit/141b8a53-a0f1-447c-9e9c-ea2ea3b77e29/small_house_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Small House",
+  "query": "house"
+ },
+ "model:kitchen table": {
+  "assetBaseId": "30d805fa-4b79-495c-b826-6c53ed1ca5f1",
+  "author": "Nick Kotik",
+  "dimensions": [
+   1.25,
+   0.8,
+   0.9
+  ],
+  "file": "assets/blenderkit/30d805fa-4b79-495c-b826-6c53ed1ca5f1/kitchen_island_ikea_vadholma_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Kitchen Island IKEA Vadholma",
+  "query": "kitchen table"
+ },
+ "model:kitchen thermometer": {
+  "assetBaseId": "d09d187e-f57c-4f71-90f4-932d879b1dba",
+  "author": "Patryk Zemsta",
+  "dimensions": [
+   0.045,
+   0.016,
+   0.046
+  ],
+  "file": "assets/blenderkit/d09d187e-f57c-4f71-90f4-932d879b1dba/portable_thermometer_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Portable thermometer",
+  "query": "kitchen thermometer"
+ },
+ "model:oak tree": {
+  "assetBaseId": "295e383e-09d6-4807-909b-05901bbfea78",
+  "author": "Bipro Fx",
+  "dimensions": [
+   2.919,
+   3.0159,
+   5.3294
+  ],
+  "file": "assets/blenderkit/295e383e-09d6-4807-909b-05901bbfea78/optimized_worn_oak_sapling_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Optimized Worn Oak Sapling",
+  "query": "oak tree"
+ },
+ "model:picnic table": {
+  "assetBaseId": "31cc6698-2e31-4518-b190-a3cd98a0a7df",
+  "author": "Ahmad Go",
+  "dimensions": [
+   1.4964,
+   1.83,
+   0.7813
+  ],
+  "file": "assets/blenderkit/31cc6698-2e31-4518-b190-a3cd98a0a7df/picnic_table_rectangular_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Picnic Table - Rectangular",
+  "query": "picnic table"
+ },
+ "model:pressure cooker": {
+  "assetBaseId": "4e4b32e9-6934-4b53-b80b-d3f9ed7b15b0",
+  "author": "J\u00e1n Sta\u0148o",
+  "dimensions": [
+   0.313,
+   0.2695,
+   0.2192
+  ],
+  "file": "assets/blenderkit/4e4b32e9-6934-4b53-b80b-d3f9ed7b15b0/cooker_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Cooker",
+  "query": "pressure cooker"
+ },
+ "model:pressure gauge": {
+  "assetBaseId": "a1e42c0d-43de-4709-a686-a2da7b7b385c",
+  "author": "Gabriel Dobrachinski",
+  "dimensions": [
+   0.041,
+   0.0189,
+   0.0633
+  ],
+  "file": "assets/blenderkit/a1e42c0d-43de-4709-a686-a2da7b7b385c/pressure_gauge_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Pressure gauge",
+  "query": "pressure gauge"
+ },
+ "model:red car": {
+  "assetBaseId": "b24f0fab-da30-4a85-bdec-c3b2fced3bb7",
+  "author": "Jordi Se-Cam",
+  "dimensions": [
+   1.9134,
+   3.9509,
+   1.8337
+  ],
+  "file": "assets/blenderkit/b24f0fab-da30-4a85-bdec-c3b2fced3bb7/cartoon_car_toy_car_blend.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Cartoon Car / toy car",
+  "query": "red car"
+ },
+ "model:red toolbox": {
+  "assetBaseId": "ae3bad25-8841-4644-9333-3097b4aefb19",
+  "author": "abd3d ",
+  "dimensions": [
+   0.2117,
+   0.6252,
+   0.3299
+  ],
+  "file": "assets/blenderkit/ae3bad25-8841-4644-9333-3097b4aefb19/toolbox_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Toolbox",
+  "query": "red toolbox"
+ },
+ "model:soccer ball": {
+  "assetBaseId": "e63280cd-b75a-466d-8c3b-8a1582cc4603",
+  "author": "Zolt\u00e1n P\u00e9ter F\u00e1th",
+  "dimensions": [
+   0.2216,
+   0.2216,
+   0.2216
+  ],
+  "file": "assets/blenderkit/e63280cd-b75a-466d-8c3b-8a1582cc4603/soccer_ball_with_stitches_resolution_1K.blend",
+  "kind": "model",
+  "license": "cc_zero",
+  "name": "Soccer ball with stitches",
+  "query": "soccer ball"
+ },
+ "model:spinning top": null,
+ "model:street lamp": {
+  "assetBaseId": "27b83566-9e98-4224-a1a1-5c0c216a75d1",
+  "author": "Poly Haven ",
+  "dimensions": null,
+  "file": "assets/blenderkit/27b83566-9e98-4224-a1a1-5c0c216a75d1/street_lamp_01_resolution_1K.blend",
+  "kind": "model",
+  "license": "cc_zero",
+  "name": "Street Lamp 01",
+  "query": "street lamp"
+ },
+ "model:swing set": {
+  "assetBaseId": "a29ec82c-d304-44b3-95c9-f42ce882ed43",
+  "author": "Abubakr Hamidov",
+  "dimensions": [
+   4.976,
+   0.6041,
+   2.4894
+  ],
+  "file": "assets/blenderkit/a29ec82c-d304-44b3-95c9-f42ce882ed43/swing_large_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Swing large",
+  "query": "swing set"
+ },
+ "model:toolbox": {
+  "assetBaseId": "ae3bad25-8841-4644-9333-3097b4aefb19",
+  "author": "abd3d ",
+  "dimensions": [
+   0.2117,
+   0.6252,
+   0.3299
+  ],
+  "file": "assets/blenderkit/ae3bad25-8841-4644-9333-3097b4aefb19/toolbox_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Toolbox",
+  "query": "toolbox"
+ },
+ "model:traffic cone": {
+  "assetBaseId": "42bb09b9-4766-42d6-91b4-8f82fb4a622e",
+  "author": "Iteration Unlimited ",
+  "dimensions": [
+   0.4498,
+   0.4498,
+   0.9134
+  ],
+  "file": "assets/blenderkit/42bb09b9-4766-42d6-91b4-8f82fb4a622e/traffic_cone_orange_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Traffic Cone Orange",
+  "query": "traffic cone"
+ },
+ "model:wooden crate": {
+  "assetBaseId": "adfcdaa5-f4b9-4d02-863a-45a731d8fbf0",
+  "author": "Quinn VB",
+  "dimensions": [
+   0.7708,
+   0.6432,
+   0.4358
+  ],
+  "file": "assets/blenderkit/adfcdaa5-f4b9-4d02-863a-45a731d8fbf0/open_top_wooden_crate_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Open Top Wooden Crate",
+  "query": "wooden crate"
+ },
+ "model:wooden ladder": {
+  "assetBaseId": "fb30d2b1-426e-4602-95e5-88db673b0e2d",
+  "author": "Mutanzom3D ",
+  "dimensions": [
+   0.5245,
+   0.0749,
+   3.0217
+  ],
+  "file": "assets/blenderkit/fb30d2b1-426e-4602-95e5-88db673b0e2d/wooden_ladder_resolution_1K.blend",
+  "kind": "model",
+  "license": "royalty_free",
+  "name": "Wooden Ladder",
+  "query": "wooden ladder"
+ },
+ "model:wooden table": {
+  "assetBaseId": "0d4010d7-daef-4b9a-b613-16a17e85b794",
+  "author": "Poly Haven ",
+  "dimensions": [
+   1.7120485305786133,
+   0.6571746468544006,
+   0.5488492709302584
+  ],
+  "file": "assets/blenderkit/0d4010d7-daef-4b9a-b613-16a17e85b794/wooden_table_01_resolution_1K.blend",
+  "kind": "model",
+  "license": "cc_zero",
+  "name": "Wooden Table 01",
+  "query": "wooden table"
+ },
+ "model:wrench": {
+  "assetBaseId": "c5ecea1d-1314-4df3-8433-91924f457f79",
+  "author": "Poly Haven ",
+  "dimensions": [
+   0.05658109299838543,
+   0.33698412775993347,
+   0.021513011306524277
+  ],
+  "file": "assets/blenderkit/c5ecea1d-1314-4df3-8433-91924f457f79/combination_wrench_resolution_1K.blend",
+  "kind": "model",
+  "license": "cc_zero",
+  "name": "Combination Wrench",
+  "query": "wrench"
+ }
+}

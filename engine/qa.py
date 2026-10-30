@@ -21,7 +21,7 @@ from mathutils.bvhtree import BVHTree
 # meshes that are allowed to touch (seated pilot inside the cockpit; held tools)
 ALLOWED = {("MaxPilot", "fuselage"), ("MaxPilot", "seat"), ("MaxPilot", "fus_stripe")}
 # volumes and effects a character may legitimately be inside (swimming, rain, splashes, dust)
-SOFT = re.compile(r"(pool_water|lake_water|_carver|flood|water_surface|rain|splash|bubble|_p\d+$|puff|spray|dust)", re.I)
+SOFT = re.compile(r"(pool_water|lake_water|_carver|flood|water_surface|rain|splash|bubble|_p\d+$|puff|spray|dust|jet|leak|chunk|debris|mud|drip|droplet)", re.I)
 # a shoe resting on a floor/edge is standing, not a collision
 FLOORS = re.compile(r"(floor|turf|coping|slab|deck|dock|ground|strip|step|apron|pad)", re.I)
 SKIP_PREFIX = ("field", "airstrip", "g_", "grass", "lawn", "hill", "cloud", "label_", "lbl", "air_", "cutaway_card", "wing_section",

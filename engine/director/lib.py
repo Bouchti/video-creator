@@ -601,11 +601,19 @@ class Camera:
         b = dict(b or a)
         a = dict(a)
         prev = self.shots[-1] if self.shots and self.shots[-1][1] == f0 - 1 else None
+        asked, glide = dict(a), False
         if prev is not None and self._similar(prev[3], a):
-            a, cut = dict(prev[3]), False          # glide on from where we are instead of jump-cutting
+            a, cut, glide = dict(prev[3]), False, True   # glide on from where we are instead of jump-cutting
         elif prev is not None and not cut:
             cut = True                              # a 1-frame "glide" to a different framing IS a cut
-        b = self._limit(a, b, f1 - f0)
+        limited = self._limit(a, b, f1 - f0)
+        if glide and limited is not b:
+            # the glide cannot reach the framing in time: the speed limit held the camera halfway between a
+            # broom and a bike for a whole beat and the bike was never seen. Cut to the framing instead.
+            self.notes.pop()
+            a, cut = asked, True
+            limited = self._limit(a, b, f1 - f0)
+        b = limited
         la, lb = a.get("lens", self.lens), b.get("lens", self.lens)
         ca, aa = self.pose(**a)
         cb, ab = self.pose(**b)

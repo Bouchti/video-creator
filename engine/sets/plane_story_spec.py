@@ -33,37 +33,37 @@ STORY_ORDER = ["build_flat", "fail_flat", "airfoil", "fail_thrust", "engine", "f
 
 ACTIONS = {
     # ---- hooks (staged after the finale, shown FIRST, before the rewind) ----
-    "tree_hook": {"kind": "hook", "shows": "Max's homemade plane is stuck nose-first in a big oak tree, leaves "
+    "tree_hook": {"extras": "Max is hidden and the pilot Max sits in the cockpit with his brows shooting up, blinking three times, while the plane sinks a little deeper into the leaves and the camera slowly pushes in.", "kind": "hook", "shows": "Max's homemade plane is stuck nose-first in a big oak tree, leaves "
                   "raining down, Max blinking in the cockpit."},
-    "fly_hook": {"kind": "hook", "shows": "Payoff first: Max's plane swoops low over the field while his two kids "
+    "fly_hook": {"extras": "The pilot Max smiles the whole time and waves near the end, the propeller spins, the plane comes out of a slight bank, and the kids smile big as they cheer.", "kind": "hook", "shows": "Payoff first: Max's plane swoops low over the field while his two kids "
                  "cheer and wave."},
     "rewind": {"kind": "rewind", "shows": "Freeze-frame, record scratch, the whole story plays BACKWARDS (VHS look) "
                "to an empty field. Narration: a one-line bridge into the story."},
     # ---- the ladder ----
-    "build_flat": {"kind": "story", "shows": "In front of his barn Max hammers together a frame, wheels, a seat and "
+    "build_flat": {"extras": "Max's hammer appears while he works and disappears before his thumbs up, and the plane parts pop in one after another (fuselage first, then the plank wings and struts).", "kind": "story", "shows": "In front of his barn Max hammers together a frame, wheels, a seat and "
                    "two FLAT wooden boards as wings. Proud thumbs up.", "seconds": (3.5, 6)},
-    "fail_flat": {"kind": "fail", "shows": "Max shoves it down the field at a run: it rolls and rolls, never lifts, "
+    "fail_flat": {"extras": "Max leans over the tail with both arms pushing, then points ahead after letting go ('go on!'); the wheels turn, and the nose dips briefly when it bumps the hay.", "kind": "fail", "shows": "Max shoves it down the field at a run: it rolls and rolls, never lifts, "
                   "and bumps into a haystack. Max scratches his head.", "seconds": (4, 7)},
-    "airfoil": {"kind": "fix", "shows": "The boards are swapped for curved wings. A big cutaway of the wing section "
+    "airfoil": {"extras": "A puff of dust hides the wing swap, the diagram sits on a dark blue card, and Max turns to the viewer and points up at it.", "kind": "fix", "shows": "The boards are swapped for curved wings. A big cutaway of the wing section "
                 "appears: air streams race faster over the curved top, labels LOW PRESSURE / HIGH PRESSURE, a big "
                 "LIFT arrow pushes up.", "seconds": (4, 7)},
-    "fail_thrust": {"kind": "fail", "shows": "Max pushes it again, running as fast as he can: it hops a few "
+    "fail_thrust": {"extras": "The wheels turn, the plane rolls on by itself after Max lets go, and Max crouches bent over with his mouth hanging open, panting.", "kind": "fail", "shows": "Max pushes it again, running as fast as he can: it hops a few "
                     "centimetres and stops. Max collapses, out of breath.", "seconds": (3.5, 6)},
-    "engine": {"kind": "fix", "shows": "An engine and propeller are bolted to the nose; the prop spins up, grass "
+    "engine": {"extras": "Max cheers beside the nose once the propeller starts, and puffs of dust blow out behind the plane.", "kind": "fix", "shows": "An engine and propeller are bolted to the nose; the prop spins up, grass "
                "flattens behind it, a THRUST arrow points forward.", "seconds": (3.5, 6)},
-    "fail_flip": {"kind": "fail", "shows": "Max takes off! The nose keeps rising, the plane rears up, stalls and "
+    "fail_flip": {"extras": "The propeller spins until the stall, the wheels turn on the takeoff roll, the pilot Max opens his mouth wide at the top, and the plane bounces when it slams back onto its wheels.", "kind": "fail", "shows": "Max takes off! The nose keeps rising, the plane rears up, stalls and "
                   "flops back down tail-first. Max's eyes go wide.", "seconds": (4, 7)},
-    "tail": {"kind": "fix", "shows": "A horizontal tail and a vertical fin are added; a WEIGHT arrow and a LIFT "
+    "tail": {"extras": "Max stands behind the tail hammering away, and his hammer disappears at the end.", "kind": "fix", "shows": "A horizontal tail and a vertical fin are added; a WEIGHT arrow and a LIFT "
              "arrow show the balance.", "seconds": (3, 6)},
-    "fail_turn": {"kind": "fail", "shows": "It flies straight and level... straight into the big oak tree, and "
+    "fail_turn": {"extras": "The propeller spins until the crash, then the plane's nose tips down and it leans slightly as it sinks into the leaves, while the pilot Max's brows jump up and his mouth falls open.", "kind": "fail", "shows": "It flies straight and level... straight into the big oak tree, and "
                   "sticks there. Leaves rain down.", "seconds": (4, 7)},
-    "controls": {"kind": "fix", "shows": "Hinged flaps appear and wiggle: AILERONS on the wings, ELEVATOR and RUDDER "
+    "controls": {"extras": "Max stands by the nose pointing up at the flaps while the three labels pop in one after another.", "kind": "fix", "shows": "Hinged flaps appear and wiggle: AILERONS on the wings, ELEVATOR and RUDDER "
                  "on the tail.", "seconds": (3.5, 7)},
-    "finale": {"kind": "story", "shows": "Sunny. Max takes off smoothly, banks a full circle around the field, "
+    "finale": {"extras": "The lighting brightens, the propeller spins the whole time, and the pilot Max smiles, gives a thumbs up and then waves, while the kids cheer during the flight, then run over and turn to the camera, cheering and smiling.", "kind": "story", "shows": "Sunny. Max takes off smoothly, banks a full circle around the field, "
                "and LANDS gently right next to his kids; they run to the plane cheering and he waves from the "
                "cockpit. (The ending: it works, and he lands it.)", "seconds": (5, 8)},
     # ---- optional explainer ----
-    "forces": {"kind": "explain", "after": "engine", "shows": "The plane in flight with four arrows: LIFT up, "
+    "forces": {"extras": "Max stands beside the plane and points at the arrows as they pop in one by one.", "kind": "explain", "after": "engine", "shows": "The plane in flight with four arrows: LIFT up, "
                "WEIGHT down, THRUST forward, DRAG back.", "seconds": (3, 5)},
 }
 

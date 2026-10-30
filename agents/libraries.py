@@ -33,9 +33,13 @@ TOLERANCE = 0.005      # a part with <= 0.5 % broken upstream records (2 of 2,03
 
 # part -> (what it is, rough size) ; the order is the download order (small and essential first)
 PARTS = {
+    "python": ("Python packages in requirements.txt (a missing edge-tts left a run with no voice)", "0.1 GB"),
     "kenney": ("Kenney CC0 kits + sky HDRI (assets/fetch_cc0.py)", "0.2 GB"),
     "quaternius": ("Quaternius CC0 characters, animations, props (assets/fetch_quaternius.py)", "1.8 GB"),
     "compositor": ("Remotion compositor npm packages (compositor/)", "0.3 GB"),
+    "sfx": ("Kenney CC0 audio + Sonniss GDC sound effects (assets/fetch_sfx.py)", "7.5 GB"),
+    "music": ("Kevin MacLeod comedy music beds, CC BY 4.0 (assets/fetch_music.py)", "0.07 GB"),
+    "chatterbox": ("Chatterbox TTS in its own env, tools/chatterbox (only when VOICE_ENGINE=chatterbox)", "3 GB"),
     "hdris": ("Poly Haven HDRIs, 2k", "6.4 GB"),
     "ambientcg": ("ambientCG PBR materials, 2K", "6 GB"),
     "textures": ("Poly Haven PBR textures, 2k", "18 GB"),
@@ -74,12 +78,74 @@ def _ok(result):
     return len(result.get("failed", [])) <= TOLERANCE * max(1, result.get("assets", 1))
 
 
+def missing_packages():
+    """requirements.txt entries not installed in this Python (name only; version pins are not enforced)."""
+    from importlib import metadata
+    import re as _re
+    path = os.path.join(PROJECT_ROOT, "requirements.txt")
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return []
+    missing = []
+    for line in lines:
+        name = _re.split(r"[<>=!~;\[ ]", line.split("#")[0].strip())[0]
+        if not name:
+            continue
+        try:
+            metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            missing.append(line.split("#")[0].strip())
+    return missing
+
+
+CHATTERBOX = os.path.join(PROJECT_ROOT, "tools", "chatterbox")
+
+
+def _chatterbox_env():
+    """tools/chatterbox/.venv: Python 3.10 + CUDA torch 2.6 + chatterbox-tts, isolated from the pipeline's env."""
+    py = os.path.join(CHATTERBOX, ".venv", "Scripts" if os.name == "nt" else "bin",
+                      "python.exe" if os.name == "nt" else "python")
+    steps = []
+    if not os.path.isfile(py):
+        launcher = ["py", "-3.10"] if os.name == "nt" and shutil.which("py") else [sys.executable]
+        steps.append(launcher + ["-m", "venv", os.path.join(CHATTERBOX, ".venv")])
+    # a fresh venv's old pip trusts only its own certificate bundle and fails behind TLS inspection
+    # (antivirus / proxy): bring truststore in through THIS env's pip, then upgrade pip with the system store
+    wheels = os.path.join(CHATTERBOX, ".wheels")
+    steps += [[sys.executable, "-m", "pip", "download", "truststore", "-d", wheels, "--only-binary=:all:"],
+              [py, "-m", "pip", "install", "--no-index", "--find-links", wheels, "truststore"],
+              [py, "-m", "pip", "install", "--use-feature=truststore", "--upgrade", "pip"]]
+    steps += [[py, "-m", "pip", "install", "torch==2.6.0", "torchaudio==2.6.0", "--index-url",
+               "https://download.pytorch.org/whl/cu124"],
+              [py, "-m", "pip", "install", "chatterbox-tts"],
+              [py, "-c", "import chatterbox, torch; assert torch.cuda.is_available()"]]
+    for cmd in steps:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"{' '.join(cmd[:4])}: {(r.stderr or r.stdout)[-400:]}")
+    return {"assets": 1, "failed": []}
+
+
 def _fetch(part):
+    if part == "python":
+        missing = missing_packages()
+        if missing:
+            r = subprocess.run([sys.executable, "-m", "pip", "install", *missing], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr[-600:])
+        return {"assets": 1, "failed": missing_packages()}
+    if part == "chatterbox":
+        return _chatterbox_env()
     if part == "kenney":
         _script("fetch_cc0").main()
         return {"assets": 1, "failed": []}
     if part == "quaternius":
         return _script("fetch_quaternius").main([])
+    if part == "sfx":
+        return _script("fetch_sfx").main([])
+    if part == "music":
+        return _script("fetch_music").main([])
     if part == "compositor":
         npm = shutil.which("npm.cmd" if os.name == "nt" else "npm") or shutil.which("npm")
         if not npm:
@@ -101,7 +167,11 @@ def ensure(parts=None):
     if os.getenv("LIBRARIES_AUTO", "1") == "0":
         return []
     wanted = parts or [p.strip() for p in os.getenv("LIBRARIES_PARTS", ",".join(PARTS)).split(",") if p.strip()]
-    missing = [p for p in wanted if p in PARTS and not installed(p)]
+    # Python packages are checked on EVERY run (cheap, and a stamp cannot see a package removed later); the
+    # 3 GB Chatterbox env only when it is the chosen voice
+    if (os.getenv("VOICE_ENGINE") or "").strip().lower() != "chatterbox":
+        wanted = [p for p in wanted if p != "chatterbox"]
+    missing = [p for p in wanted if p in PARTS and (not installed(p) or (p == "python" and missing_packages()))]
     if not missing:
         return []
     log.info("libraries: fetching %s before the run (one-time; later runs skip this)",

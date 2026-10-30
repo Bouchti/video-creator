@@ -186,6 +186,25 @@ def run_pipeline(
 
         log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
 
+        if source == "director":
+            # Max and his kids on the generic stage: the plan (script + staging as data) is written and
+            # checked by agents/stage_writer.py, then the director films, scores, mixes and composes it.
+            log.info("\n[STAGE 1-6] Director: stage plan -> BlenderKit assets -> film")
+            from agents import director
+            try:
+                final_path, plan = director.make(topic, research, selection.get("angle") if selection else None,
+                                                 (selection or {}).get("grounding"))
+            except Exception as e:
+                log.error(f"Director failed for this topic: {e}", exc_info=True)
+                failure = {"success": False, "stage_failed": "director", "topic": topic, "error": str(e)}
+                given_up.append(topic)
+                continue
+            script = {"video_title": plan["title"], "description": plan.get("caption", ""),
+                      "hashtags": plan.get("hashtags", []), "spoken_script": director.narration(plan),
+                      "quality_warnings": plan.get("quality_warnings", []), "director_final": final_path,
+                      "credits": plan.get("credits", [])}
+            break
+
         log.info("\n[STAGE 1] Script generation + evaluation")
         angle = selection.get("angle") if selection else None
         # Claims the topic grounder already struck out. The writer otherwise re-supplies them from its
@@ -212,7 +231,9 @@ def run_pipeline(
 
     log.info(f"\n[STAGE 2] Video generation ({source})")
 
-    if source == "pexels":
+    if source == "director":
+        process_video = None
+    elif source == "pexels":
         from agents.editor_pexels import process_video
     elif source == "local-ai":
         from agents.editor_local_ai import process_video
@@ -223,7 +244,9 @@ def run_pipeline(
         return {"success": False, "stage_failed": "source_invalid", "topic": topic}
 
     try:
-        if source == "local-ai":
+        if source == "director":
+            final_path = script["director_final"]
+        elif source == "local-ai":
             final_path = process_video(
                 script,
                 voice=voice,
@@ -256,7 +279,7 @@ def run_pipeline(
     safe_title = "".join(c if c.isalnum() else "_" for c in script["video_title"])[:60]
     output_path = os.path.join(OUTPUT_DIR, f"{ts}_{source}_{safe_title}.mp4")
     try:
-        if source in ("local-ai", "unreal"):
+        if source in ("local-ai", "unreal", "director"):
             # The durable project keeps its canonical final render; preserve the
             # legacy top-level output convention with a copy.
             shutil.copy2(final_path, output_path)
@@ -339,10 +362,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["cutaway", "explainer", "evolution", "pexels", "local-ai", "unreal"],
+    parser.add_argument("--source", choices=["cutaway", "cutaway-bk", "explainer", "evolution", "pexels", "local-ai",
+                                             "unreal", "director"],
                         default=DEFAULT_SOURCE,
                         help="local-ai (durable MiniMax/Wan production; default), cutaway (3D cross-section "
-                             "story starring Max: trial and error, critiqued and rendered), "
+                             "story starring Max: trial and error, critiqued and rendered), cutaway-bk (the same "
+                             "Max stories, with whole objects taken from BlenderKit and only the mechanism built), "
                              "explainer (no-hero 3D cutaway explainer in the @youbuiltit format: the build in "
                              "physical order, problem -> fix; builds a new set when none fits), "
                              "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
@@ -378,7 +403,7 @@ if __name__ == "__main__":
     from agents.libraries import ensure as ensure_libraries
     ensure_libraries()
 
-    if args.source in ("evolution", "cutaway", "explainer"):
+    if args.source in ("evolution", "cutaway", "cutaway-bk", "explainer"):
         # The 3D pipelines run under the autopilot: script → voice → exact-timing low-res rehearsal
         # (every ~3 s window must pass) → Blender production render with free technical rechecks →
         # sound + captions → final check. This gate is shared by Max cutaways, no-hero explainers and

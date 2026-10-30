@@ -114,8 +114,17 @@ class TopicSelectionTests(unittest.TestCase):
         with open(os.path.join(films, "by_hand.json"), "w", encoding="utf-8") as f:
             json.dump({"title": "By hand", "set": "boat_story", "meta": {"angle": "a"}}, f)
         with patch.object(showrunner, "HISTORY", os.path.join(root, "missing.json")), \
-                patch.object(showrunner, "FILMS_DIR", films):
+                patch.object(showrunner, "FILMS_DIR", films), \
+                patch.object(showrunner, "ENGINE_FILMS_DIR", os.path.join(root, "none")):
             self.assertEqual(showrunner.available_topic_sets(["nuclear_story", "boat_story"]), ["nuclear_story"])
+
+    def test_committed_hero_films_consume_their_subject(self):
+        # the published pool / boat / pumpkin films live in engine/films, outside the log
+        root = tempfile.mkdtemp()
+        with patch.object(showrunner, "HISTORY", os.path.join(root, "missing.json")), \
+                patch.object(showrunner, "FILMS_DIR", os.path.join(root, "none")):
+            available = showrunner.available_topic_sets(["boat_story", "pool_story", "record_chasing_giant_pumpkin_story"])
+        self.assertEqual(available, [])
 
     def test_explicit_repeat_override(self):
         history = [{"set": "nuclear_story"}]

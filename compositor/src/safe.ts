@@ -11,6 +11,7 @@ export const ZONES = {
   captionY: 0.66,
   labelMinY: SAFE.top + 0.02,
   labelMaxY: 0.56,
+  arrowMaxY: 0.62,
   calloutY: 0.32,
 };
 

@@ -48,6 +48,7 @@ FACTS_MAX_AGE_DAYS = 30
 HISTORY = os.path.join(get_output_dir(), "explainer_history.json")
 WISHLIST = os.path.join(get_output_dir(), "set_wishlist.json")
 FILMS_DIR = os.path.join(get_output_dir(), "films")
+ENGINE_FILMS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine", "films")
 
 # ------------------- the house style (shared by writer + editor) -------------------
 
@@ -441,19 +442,21 @@ class NoUnusedStorySets(RuntimeError):
 
 
 def _history():
-    """Logged scripts plus any film JSON in FILMS_DIR the log missed (e.g. a film written or
-    rendered by hand), so a subject already filmed is never offered again as unused."""
+    """Logged scripts plus any film JSON the log missed (in FILMS_DIR, or the hero films committed in
+    engine/films: the pool, boat and pumpkin films were not in the log and their sets were offered again),
+    so a subject already filmed is never offered again as unused."""
     try:
         hist = json.load(open(HISTORY, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         hist = []
     known = {os.path.normcase(os.path.abspath(h["film"])) for h in hist if h.get("film")}
-    try:
-        names = sorted(n for n in os.listdir(FILMS_DIR) if n.endswith(".json"))
-    except OSError:
-        names = []
-    for name in names:
-        path = os.path.join(FILMS_DIR, name)
+    paths = []
+    for folder in (FILMS_DIR, ENGINE_FILMS_DIR):
+        try:
+            paths += [os.path.join(folder, n) for n in sorted(os.listdir(folder)) if n.endswith(".json")]
+        except OSError:
+            pass
+    for path in paths:
         if os.path.normcase(os.path.abspath(path)) in known:
             continue
         try:
@@ -477,6 +480,9 @@ def available_topic_sets(set_ids=None, history=None):
     requested = list(set_ids or sets.AVAILABLE)
     if os.getenv("SHOWRUNNER_ALLOW_REPEATS", "0").lower() in ("1", "true", "yes"):
         return requested
+    if os.getenv("SHOWRUNNER_FORCE_NEW_SET", "0").lower() in ("1", "true", "yes"):
+        # producer switch: research and build a NEW subject even if older built sets are still unused
+        return [set_id for set_id in requested if not getattr(sets.spec(set_id), "HERO", None)]
     history = _history() if history is None else history
     consumed = {item.get("set") for item in history if item.get("set")}
     return [set_id for set_id in requested
@@ -515,11 +521,15 @@ def _new_story_set_id(subject):
     return candidate
 
 
-def plan_new_story_set():
+def plan_new_story_set(allow_assets=False):
     """Research and choose a genuinely new, timely Max subject that can become a 3D set."""
     published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
     ideas = _wishlist()[-30:]
     wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in ideas) or "- none"
+    asset_rule = ("Whole recognisable objects (vehicles, ships, cranes, houses, trees, furniture) may come from "
+                  "BlenderKit models; the mechanism (what is cut open, floods, cracks or moves piece by piece) must "
+                  "be feasible with Blender primitives. No logos." if allow_assets else
+                  "It must be feasible using Blender primitives and must not need logos or downloaded assets.")
     prompt = f"""Today is {datetime.date.today().isoformat()}. Search current sources from the last
 14 days and choose one genuinely new Max trial-and-error engineering story to build next. Search
 across home projects, infrastructure, transport, energy, water, machines and practical science.
@@ -542,12 +552,34 @@ Return:
 - build_brief: a self-contained production brief describing the single coherent cutaway world,
   Max's goal, two children in the payoff, 3-5 escalating visible failures, the real engineering fix
   immediately after each failure, the final working result, and the physical principles viewers
-  learn. It must be feasible using Blender primitives and must not need logos or downloaded assets.
+  learn. {asset_rule}
+
+IMPRESSIVE, NOT ORDINARY: the subject must make a viewer say "no way!": a huge scale, a spectacular visible
+disaster, or an "impossible" result (a brand-new pool that floats out of the ground, a steel slab that sinks
+while a steel hull floats, a pumpkin heavier than a car). A useful but ordinary object (a garden wall, a
+fence, a shelf) is NOT enough, even with a good lesson.
 
 Do not choose a subject merely because it appears in the old wishlist. It needs a credible current
 signal and must be different from every used subject."""
     tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
-    plan = _call(STORY_STYLE, prompt, NEW_STORY_SCHEMA, effort="medium", tools=tools)
+    # the novelty gate: the viewer must LEARN something (a subject everyone knows was a wasted set build);
+    # up to NEW_SET_PICKS picks, each told why the previous ones failed; the least-known one is used anyway
+    from agents.leader import LAST_NOVELTY, novelty_problem
+    tried, rejected = [], []
+    for _ in range(int(os.getenv("NEW_SET_PICKS", "3"))):
+        retry = ("\n\nREJECTED (do not choose these or close variants):\n- " + "\n- ".join(rejected)) if rejected else ""
+        plan = _call(STORY_STYLE, prompt + retry, NEW_STORY_SCHEMA, effort="medium", tools=tools)
+        problem, known = novelty_problem(f"{plan.get('subject', '')}: {plan.get('hook_line', '')} "
+                                         f"{plan.get('payoff', '')}", need_demo=False)
+        tried.append((int(LAST_NOVELTY.get("impressive") or 0), -known, plan))
+        if not problem:
+            break
+        rejected.append(f"{plan.get('subject', '')} ({problem})")
+        log.warning("[showrunner] new subject rejected: %s", problem)
+    else:
+        impressive, known, plan = max(tried, key=lambda t: (t[0], t[1]))
+        log.warning("QUALITY WARNING: no new subject passed the novelty check; using the most impressive one "
+                    "(%d/10, %d%% already know it)", impressive, -known)
     url = str(plan.get("trend_source_url", ""))
     if not url.startswith(("http://", "https://")):
         raise NoUnusedStorySets("Fresh topic research returned no verifiable trend source; no set was built.")

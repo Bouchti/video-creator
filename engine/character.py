@@ -31,6 +31,73 @@ DEFAULT_LOOK = {
 R = math.radians
 
 
+def _arc(name, radius, thickness, mat, parent, location, upper=False, span=1.0):
+    """A curved stroke (half a torus): a "U" smile, or with upper=True an arched brow. Straight capsules read
+    as a frown or a shout on a small face; curves read as a smile / friendly brows."""
+    bpy.ops.mesh.primitive_torus_add(major_radius=radius, minor_radius=thickness, major_segments=32,
+                                     minor_segments=10, rotation=(math.pi / 2, 0, 0))
+    obj = bpy.context.active_object
+    obj.name = name
+    bpy.ops.object.transform_apply(rotation=True)
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    cut = radius * (1 - span) - 1e-4
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if (v.co.z < -cut if upper else v.co.z > cut)],
+                     context="VERTS")
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.location = location
+    return toy._finish(obj, mat, subdiv=1, parent=parent)
+
+
+def _hair_shell(name, radius, mat, parent, location, front=0.19, side=0.02, back=-0.16):
+    """Hair that HUGS the head: a sphere just bigger than the skull, cut by a slanted hairline (high at the
+    forehead so it shows, low at the nape), covering the crown and the sides. A hair cap slid back to free
+    the forehead stood out from the head."""
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, segments=96, ring_count=48)   # fine: a smooth hairline
+    obj = bpy.context.active_object
+    obj.name = name
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+
+    def line(v):
+        # hairline height (local z) by DIRECTION around the head: front high, sides low, back lowest.
+        # (By y/radius the line barely moved: the sphere narrows toward the top.)
+        k = v.co.y / max(1e-6, math.hypot(v.co.x, v.co.y))
+        return side + (front - side) * max(0.0, -k) ** 0.7 + (back - side) * max(0.0, k)
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.co.z < line(v)], context="VERTS")
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.location = location
+    sol = obj.modifiers.new("Solidify", "SOLIDIFY")
+    sol.thickness = 0.025
+    return toy._finish(obj, mat, subdiv=2, parent=parent)
+
+
+def _smile(name, mat, tongue_mat, parent, location, width=0.06):
+    """A filled cartoon smile: a dark half-moon (flat top, round bottom) with a little pink tongue. Thin
+    strokes on a small face read as a line or a ring."""
+    import bmesh as _bm
+    bpy.ops.mesh.primitive_cylinder_add(radius=width, depth=0.03, vertices=40, rotation=(math.pi / 2, 0, 0))
+    obj = bpy.context.active_object
+    obj.name = name
+    bpy.ops.object.transform_apply(rotation=True)
+    bm = _bm.new()
+    bm.from_mesh(obj.data)
+    _bm.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], plane_co=(0, 0, 0), plane_no=(0, 0, 1),
+                         clear_outer=True)
+    _bm.ops.holes_fill(bm, edges=bm.edges[:], sides=0)
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.location = location
+    obj.scale = (1.15, 1.0, 0.85)
+    mouth = toy._finish(obj, mat, subdiv=1, parent=parent)
+    tongue = toy.sphere(f"{name}_tongue", width * 0.45, (0, -0.006, -width * 0.55), scale=(1.3, 0.5, 0.7),
+                        mat=tongue_mat, parent=mouth, subdiv=1)
+    tongue.name = f"{name}_tongue"
+    return mouth
+
+
 def _half_sphere(name, radius, mat, parent, location, scale=(1, 1, 1)):
     """Dome (top half of a sphere) — hard hats, hair caps."""
     bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, segments=32, ring_count=16)
@@ -109,25 +176,38 @@ class Character:
             toy.sphere(f"{n}_ear{side}", 0.07, (0.3 * side, 0.0, 0.29), scale=(0.5, 0.8, 1.0),
                        mat=skin, parent=head)
             # Big, slightly tall Pixar-style eyes: white, coloured iris, pupil, two glints.
-            eye = toy.sphere(f"{n}_eye{side}", 0.1, (0.125 * side, -0.235, 0.35),
+            es = L.get("eye_scale", 1.0)          # kids: bigger eyes (blinks key the scale, not the radius)
+            eye = toy.sphere(f"{n}_eye{side}", 0.1 * es, ((0.125 + 0.03 * (es - 1)) * side, -0.235, 0.35),
                              scale=(0.95, 0.6, 1.12), mat=white, parent=head, segments=32, rings=16)
             self.j[f"eye{side}"] = eye
-            ir = toy.sphere(f"{n}_iris{side}", 0.062, (-0.008 * side, -0.086, -0.005),
+            kid = bool(L.get("hair_style"))
+            # the iris keeps its size in a bigger kid eye: more white around it reads young, not goggly
+            ir = toy.sphere(f"{n}_iris{side}", 0.062, (-0.008 * side, -0.086 * es, -0.005),
                             scale=(1.0, 0.45, 1.05), mat=iris, parent=eye, subdiv=1)
             pupil = toy.sphere(f"{n}_pupil{side}", 0.034, (0, -0.02, 0), scale=(1.0, 0.6, 1.05),
                                mat=dark, parent=ir, subdiv=1)
             glint = toy.material("glint", (1, 1, 1), roughness=0.0)
-            toy.sphere(f"{n}_glint{side}", 0.016, (0.022, -0.028, 0.03), mat=glint, parent=pupil, subdiv=0)
-            toy.sphere(f"{n}_glint2{side}", 0.008, (-0.02, -0.028, -0.025), mat=glint, parent=pupil, subdiv=0)
-            brow = toy.capsule(f"{n}_brow{side}", 0.03, 0.11, (0.13 * side, -0.25, 0.495),
-                               rotation=(0, R(90 + 14 * side), 0), mat=hair, parent=head)
-            brow.scale = (0.8, 0.7, 1.0)
+            g = 1.35 if kid else 1.0
+            toy.sphere(f"{n}_glint{side}", 0.016 * g, (0.022, -0.028, 0.03), mat=glint, parent=pupil, subdiv=0)
+            toy.sphere(f"{n}_glint2{side}", 0.008 * g, (-0.02, -0.028, -0.025), mat=glint, parent=pupil, subdiv=0)
+            brow_z = 0.495 + 0.112 * (es - 1)            # above the eye, however big it is
+            if kid:      # an arched brow: a straight bar read as a frown at any angle
+                brow = _arc(f"{n}_brow{side}", 0.05, 0.011, hair, head, (0.135 * side, -0.262, 0.35 + 0.112 * es + 0.005),
+                            upper=True, span=0.55)
+            else:
+                brow = toy.capsule(f"{n}_brow{side}", 0.03, 0.11, (0.13 * side, -0.25, brow_z),
+                                   rotation=(0, R(90 + 14 * side), 0), mat=hair, parent=head)
+                brow.scale = (0.8, 0.7, 1.0)
             self.j[f"brow{side}"] = brow
-        toy.sphere(f"{n}_nose", 0.072, (0, -0.315, 0.255), scale=(1.0, 0.9, 0.85),
+        toy.sphere(f"{n}_nose", 0.072 * L.get("nose", 1.0), (0, -0.315, 0.255), scale=(1.0, 0.9, 0.85),
                    mat=self._mat("nose", L["skin"], roughness=0.45, subsurface=0.2), parent=head)
-        mouth = toy.capsule(f"{n}_mouth", 0.03, 0.07, (0, -0.27, 0.14), rotation=(0, R(90), 0),
-                            mat=mouth_mat, parent=head)
-        mouth.scale = (0.7, 0.6, 1.0)
+        if L.get("hair_style"):   # a kid smiles: a filled half-moon (a capsule read as a line or a scream)
+            tongue = toy.material(f"{n}_tongue", toy.srgb("#FF7F8A"), roughness=0.45)
+            mouth = _smile(f"{n}_mouth", mouth_mat, tongue, head, (0, -0.272, 0.175))
+        else:
+            mouth = toy.capsule(f"{n}_mouth", 0.03, 0.07, (0, -0.27, 0.14), rotation=(0, R(90), 0),
+                                mat=mouth_mat, parent=head)
+            mouth.scale = (0.7, 0.6, 1.0)
         self.j["mouth"] = mouth
         if L["mustache"]:
             for side in (-1, 1):
@@ -143,28 +223,36 @@ class Character:
             for side in (-1, 1):
                 toy.sphere(f"{n}_sideburn{side}", 0.06, (0.285 * side, -0.02, 0.4),
                            scale=(0.5, 0.9, 1.0), mat=hair, parent=head)
+        elif L.get("hair_style"):   # kids: hair that hugs the skull, hairline above the brows (a forehead)
+            _hair_shell(f"{n}_hair", 0.33, hair, head, hc, front=0.27, side=0.03, back=-0.17)
         else:
             _half_sphere(f"{n}_hair", 0.325, hair, head, (0, 0.02, 0.32), scale=(1.0, 1.0, 1.0))
         if L.get("ponytail"):
             toy.sphere(f"{n}_ponytail", 0.11, (0, 0.33, 0.3), scale=(0.8, 1.0, 1.4), mat=hair, parent=head)
+        self._kid_features(head, hair)
 
-        # Arms: shoulder joints, sleeve + arm + hand.
+        # Arms: shoulder + elbow joints (motion capture bends both; at rest the arm is the same straight
+        # limb as before), sleeve + upper arm, forearm + hand.
         for side, key in ((-1, "R"), (1, "L")):
             sh = self.j[f"shoulder{key}"] = toy.empty(f"{n}_shoulder{key}", (0.27 * side, 0, 0.47), spine)
             toy.sphere(f"{n}_sleeve{key}", 0.085, (0, 0, -0.02), mat=shirt, parent=sh)
-            toy.capsule(f"{n}_arm{key}", 0.068, 0.26, (0, 0, -0.17), mat=skin, parent=sh)
-            hand = toy.sphere(f"{n}_hand{key}", 0.085, (0, -0.01, -0.36), scale=(0.9, 0.8, 1.0),
-                              mat=skin, parent=sh)
-            toy.capsule(f"{n}_thumb{key}", 0.03, 0.05, (-0.055 * side, -0.05, -0.33),
-                        rotation=(R(-30), R(-35 * side), 0), mat=skin, parent=sh)
-            self.j[f"hand{key}"] = toy.empty(f"{n}_grip{key}", (0, -0.03, -0.38), sh)
+            toy.capsule(f"{n}_arm{key}", 0.068, 0.12, (0, 0, -0.1), mat=skin, parent=sh)
+            el = self.j[f"elbow{key}"] = toy.empty(f"{n}_elbow{key}", (0, 0, -0.17), sh)
+            toy.capsule(f"{n}_forearm{key}", 0.066, 0.12, (0, 0, -0.07), mat=skin, parent=el)
+            hand = toy.sphere(f"{n}_hand{key}", 0.085, (0, -0.01, -0.19), scale=(0.9, 0.8, 1.0),
+                              mat=skin, parent=el)
+            toy.capsule(f"{n}_thumb{key}", 0.03, 0.05, (-0.055 * side, -0.05, -0.16),
+                        rotation=(R(-30), R(-35 * side), 0), mat=skin, parent=el)
+            self.j[f"hand{key}"] = toy.empty(f"{n}_grip{key}", (0, -0.03, -0.21), el)
             hand.name = f"{n}_handmesh{key}"
 
-        # Legs: hip joints, pant leg + shoe.
+        # Legs: hip + knee joints, pant leg (thigh, shin) + shoe.
         for side, key in ((-1, "R"), (1, "L")):
             hp = self.j[f"leg{key}"] = toy.empty(f"{n}_leg{key}", (0.115 * side, 0, 0.0), hips)
-            toy.capsule(f"{n}_pantleg{key}", 0.1, 0.3, (0, 0, -0.25), mat=overalls, parent=hp)
-            toy.box(f"{n}_shoe{key}", (0.19, 0.27, 0.12), (0, -0.04, -0.5), mat=shoes, parent=hp,
+            toy.capsule(f"{n}_pantleg{key}", 0.1, 0.14, (0, 0, -0.15), mat=overalls, parent=hp)
+            kn = self.j[f"knee{key}"] = toy.empty(f"{n}_knee{key}", (0, 0, -0.27), hp)
+            toy.capsule(f"{n}_shin{key}", 0.095, 0.12, (0, 0, -0.08), mat=overalls, parent=kn)
+            toy.box(f"{n}_shoe{key}", (0.19, 0.27, 0.12), (0, -0.04, -0.23), mat=shoes, parent=kn,
                     bevel=0.05)
         seed = sum(map(ord, n))
         toy.add_noise(sway, "rotation_euler", 0, strength=0.035, scale=55, phase=seed)
@@ -173,6 +261,31 @@ class Character:
         toy.add_noise(nsway, "rotation_euler", 2, strength=0.09, scale=60, phase=seed + 11)
         self.rest = {k: tuple(o.rotation_euler) for k, o in self.j.items()}
         self.rest_loc = {k: tuple(o.location) for k, o in self.j.items()}
+
+    def _kid_features(self, head, hair):
+        """Optional look keys that make a child read as a child, not a small Max (the defaults change nothing):
+        head_scale  rounder, bigger head      blush  rosy cheeks
+        hair_style  "pigtails" (two bunches with ties) | "tuft" (messy cowlick); also arched brows, a "U"
+                    smile and bigger glints (see _build)"""
+        L, n = self.look, self.name
+        if L.get("head_scale", 1.0) != 1.0:
+            head.scale = (L["head_scale"],) * 3
+        if L.get("blush"):
+            pink = toy.material(f"{n}_blush", toy.srgb("#FF8C9E"), roughness=0.6)
+            for side in (-1, 1):
+                toy.sphere(f"{n}_blush{side}", 0.055, (0.175 * side, -0.25, 0.215), scale=(1.0, 0.35, 0.62),
+                           mat=pink, parent=head, subdiv=1)
+        style = L.get("hair_style")     # (no fringe: on the round cap it read as a hat ridge or a visor)
+        if style == "pigtails":
+            tie = toy.material(f"{n}_tie", toy.srgb(L.get("tie", "#FFD23F")), roughness=0.35, coat=0.5)
+            for side in (-1, 1):
+                toy.sphere(f"{n}_bunch{side}", 0.12, (0.36 * side, 0.08, 0.36), scale=(0.75, 0.8, 1.15),
+                           mat=hair, parent=head)
+                toy.sphere(f"{n}_tie{side}", 0.045, (0.3 * side, 0.06, 0.42), mat=tie, parent=head, subdiv=1)
+        elif style == "tuft":
+            for k, (x, tilt) in enumerate(((-0.05, -25), (0.04, 15), (0.0, -5))):
+                toy.capsule(f"{n}_tuft{k}", 0.035, 0.12, (x, 0.03, 0.65), rotation=(R(-20), R(tilt), 0),
+                            mat=hair, parent=head)
 
     # ------------------- KEYFRAME HELPERS -------------------
 
@@ -440,6 +553,10 @@ class Character:
         self.blink(frames)
 
     def smile(self, frame: int, big: bool = False):
+        if self.look.get("hair_style"):
+            # a kid's "U" smile gets wider and deeper, never an open oval (that read as a scream)
+            self.key("mouth", frame, scale=(1.3, 1.0, 1.15) if big else (1.0, 1.0, 1.0))
+            return
         self.key("mouth", frame, scale=(1.3, 0.6, 1.8) if big else (0.7, 0.6, 1.0))
 
     def hold(self, obj, hand: str = "R"):

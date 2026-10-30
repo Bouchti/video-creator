@@ -724,6 +724,33 @@ def _example_spec():
     return open(p, encoding="utf-8").read() if os.path.isfile(p) else ""
 
 
+BK_RULES = """
+BLENDERKIT PROPS (this set MAY use downloaded models; this overrides "never require downloaded assets"):
+- Every WHOLE, recognisable object that is not the mechanism (vehicles, ships, cranes and machines seen from
+  outside, houses, trees, furniture, tools, animals) comes from BlenderKit, with a fallback:
+      from engine import props as bk
+      truck = bk.prop("dump truck", 7.5, fallback=lambda: self.build_truck())
+  The query is a LITERAL of 1-3 plain words naming ONE real object; the size is a LITERAL number, its real
+  largest dimension in metres (the pipeline reads both from the code and downloads the model before Blender
+  runs). bk.prop returns one root empty at the origin with the bottom on z = 0: place, rotate, animate and
+  show/hide that ROOT only, never its children (the model inside is opaque and toy-coloured automatically).
+- Always write the fallback: a simple recognisable build from primitives AT THE ORIGIN, returning its root
+  (used when BlenderKit has nothing that fits). Never let a missing model break the scene.
+- Build from primitives ONLY the mechanism and the world: whatever is sliced open, floods, fills, cracks or
+  moves piece by piece, the cutaway ground and water. Never boolean-cut or animate the parts of a model.
+"""
+
+
+def _bk_rules(set_id):
+    """The BlenderKit rules for a set whose code already uses engine.props (repairs keep the same approach)."""
+    try:
+        from agents.blenderkit import USES_PROPS
+        with open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8") as fh:
+            return BK_RULES if USES_PROPS.search(fh.read()) else ""
+    except OSError:
+        return ""
+
+
 def story_design_prompt(subject, set_id):
     return f"""Create a completely new 3D Max trial-and-error story set.
 
@@ -925,7 +952,7 @@ def fix_prompt(set_id, problems, header):
 Set: engine/sets/{set_id}.py (spec: engine/sets/{set_id}_spec.py, script: engine/films/{set_id}.json)
 
 {_guide(set_id)}
-
+{_bk_rules(set_id)}
 Problems to fix:
 {problems}
 
@@ -991,10 +1018,10 @@ def fix_scenes(set_id: str, rejected: list, allowed=None, keep=None, max_windows
         lines.append("\nThe reviewer ACCEPTED these actions; their shots must still look the same afterwards. "
                      "Do not change their a_<action> methods, and keep any shared change (ground, camera "
                      "helpers, characters, materials) from altering them: " + ", ".join(keep))
-    try:
-        timeout = max(60, int(os.getenv("SCENE_FIX_AGENT_TIMEOUT") or 600))
+    try:   # an Opus repair turn takes 15-40 min: at 600 s it was killed while still reading, and retried forever
+        timeout = max(60, int(os.getenv("SCENE_FIX_AGENT_TIMEOUT") or 2400))
     except ValueError:
-        timeout = 600
+        timeout = 2400
     out = claude_agent(fix_prompt(set_id, "\n".join(lines),
                                   "The scene reviewer REJECTED these rendered windows of a 3D film."),
                        allowed, timeout=timeout, allow_edit=allow_edit, measure=measure)
@@ -1115,6 +1142,9 @@ def preview_render(set_id, work) -> str:
     from engine.make_film import BLENDER, _run_blender
     film_json = _film_file(set_id)
     film = json.load(open(film_json, encoding="utf-8"))
+    from agents import blenderkit       # the set's BlenderKit props (cutaway-bk sets only; a no-op for the rest)
+    blenderkit.resolve_set_props(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"),
+                                 story=str(film.get("title", "")))
     timings = os.path.join(work, "timings.json")
     fake_timings(film, timings)
     import importlib
@@ -1162,10 +1192,41 @@ _CORE = re.compile(r"\(\w*_(skull|cheek|nose|ear|eye|iris|pupil|brow|hair|ponyta
                    r"\w*\s*/", re.I)
 
 
+# Contacts the story WANTS: a gull standing on Max's hat, a fish landing on his head ("Max surfaces wearing a
+# fish"), a leak spraying him. Rejecting them made the fixer delete the gags.
+_GAG = re.compile(r"/\s*\w*(gull|bird|fish|duck|worm|frog|crab|bee|cat|dog)\w*\)", re.I)   # (a hat in a post is not)
+
+
 def _advisory(text):
     if text.startswith(("cropped:", "occluded:")):
         return True
-    return text.startswith("collision:") and not _CORE.search(text)
+    return text.startswith("collision:") and (not _CORE.search(text) or bool(_GAG.search(text)))
+
+
+LOOK_MIN = float(os.getenv("SET_LOOK_COLOUR_MIN", "45"))   # median colourfulness of the beats' middle stills
+LOOK_ROUNDS = int(os.getenv("SET_LOOK_ROUNDS", "2"))         # set-wide look repairs per build
+
+
+def look_problem(work):
+    """The whole set's LOOK against the published films (measured on frames of the pool, boat and pumpkin
+    shorts: median colourfulness 47-57). A murky, grey set (a hazy blue sea over grey boxes measured 40) passed
+    every per-beat check: it needs one set-wide repair of materials, water and light, not beat fixes."""
+    from agents import frame_qa
+    stills = sorted(glob.glob(os.path.join(work, "preview_*_b.png")))
+    if not stills:
+        return ""
+    values = sorted(frame_qa.colorfulness(p) for p in stills)
+    median = values[len(values) // 2]
+    if median >= LOOK_MIN:
+        return ""
+    worst = ", ".join(os.path.basename(p)[8:-6] for p in sorted(stills, key=frame_qa.colorfulness)[:4])
+    return (f"The whole set looks washed out next to the channel's published films: median colourfulness "
+            f"{median:.0f} (the published pool / boat / pumpkin films measure 47-57; needs >= {LOOK_MIN:.0f}). "
+            f"Greyest beats: {worst}. Fix it SET-WIDE in the shared world code, not beat by beat: saturated, "
+            "clean toy colours on the big surfaces (no large grey or beige planes), CLEAR water with a crisp "
+            "waterline and a bright blue tint (no fog or haze filling the frame), a blue sky with white clouds "
+            "above the surface, warm sunlight, and the characters and key objects the most colourful things "
+            "in frame. Keep every object, action and timing as they are.")
 
 
 def qa_check(set_id, work, strict=False) -> dict:
@@ -1413,7 +1474,7 @@ def register(set_id, collection="EVOLUTION"):
 # ------------------- the build loop -------------------
 
 def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = False,
-              explainer: bool = False, hook_action: str = None) -> dict:
+              explainer: bool = False, hook_action: str = None, assets: bool = False) -> dict:
     suffix = "_explainer" if explainer else "_story" if story else "_evolution"
     set_id = set_id or re.sub(r"[^a-z0-9]+", "_", subject.lower()).strip("_")[:28] + suffix
     files = _files(set_id)
@@ -1424,6 +1485,8 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
         log.info(f"[set_builder] designing and writing '{set_id}' for: {subject}")
         prompt = (explainer_design_prompt(subject, set_id, hook_action) if explainer else
                   story_design_prompt(subject, set_id) if story else design_prompt(subject, set_id))
+        if assets:                  # cutaway-bk: whole objects from BlenderKit, the mechanism from primitives
+            prompt += "\n" + BK_RULES
         log.info(claude_agent(prompt, files, allow_edit=False)[-1500:])
     else:
         log.info(f"[set_builder] '{set_id}' already exists: checking and improving it")
@@ -1478,6 +1541,19 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
         rejected = [r for r in reports if not r.get("valid")]
         log.info(f"[set_builder] round {rnd}: {len(reports) - len(rejected)}/{len(reports)} beats accepted"
                  + (f" (contact sheet: {sheet})" if sheet else ""))
+        look = look_problem(work) if story else ""
+        if look and status.get("look_repairs", 0) < LOOK_ROUNDS:
+            # the look is a whole-set property: one set-wide turn before any beat repair (beat fixes on a murky
+            # world only polished actions nobody could see clearly)
+            status["look_repairs"] = status.get("look_repairs", 0) + 1
+            max_rounds = max(max_rounds, rnd + 1)
+            log.info(f"[set_builder] round {rnd}: set-wide look repair {status['look_repairs']}/{LOOK_ROUNDS}: "
+                     f"{look[:160]}")
+            claude_agent(fix_prompt(set_id, look, "The set's overall look does not match the channel."), files)
+            continue
+        if look:
+            log.warning(f"QUALITY WARNING: [set_builder] the set still looks washed out after {LOOK_ROUNDS} "
+                        f"look repairs; continuing")
         if not rejected:
             register(set_id, "EXPLAINER" if explainer else "AVAILABLE" if story else "EVOLUTION")
             status.update(accepted=True, contact_sheet=sheet)
@@ -1694,9 +1770,10 @@ def _compiled_storyboard(set_id):
     return None
 
 
-def build_story_set(subject: str, set_id: str = None, rounds: int = 4) -> dict:
-    """Build, visually validate and register a new Max cutaway story set."""
-    return build_set(subject, set_id=set_id, rounds=rounds, story=True)
+def build_story_set(subject: str, set_id: str = None, rounds: int = 4, assets: bool = False) -> dict:
+    """Build, visually validate and register a new Max cutaway story set (assets: whole objects from BlenderKit,
+    the cutaway-bk route)."""
+    return build_set(subject, set_id=set_id, rounds=rounds, story=True, assets=assets)
 
 
 def main():

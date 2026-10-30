@@ -11,7 +11,7 @@ from datetime import datetime
 
 import requests
 
-from config.paths import get_temp_dir
+from config.paths import PROJECT_ROOT, get_temp_dir
 from agents.media import get_duration
 
 log = logging.getLogger("pipeline")
@@ -174,10 +174,63 @@ def _edge_voiceover(spoken_script: str, voice: str) -> str:
     return path
 
 
+CHATTERBOX_DIR = os.path.join(PROJECT_ROOT, "tools", "chatterbox")
+CHATTERBOX_PY = os.path.join(CHATTERBOX_DIR, ".venv", "Scripts" if os.name == "nt" else "bin",
+                             "python.exe" if os.name == "nt" else "python")
+# narration style -> (exaggeration, cfg_weight): more exaggeration = livelier delivery, lower cfg = looser pace
+CHATTERBOX_STYLES = {"energetic": (0.7, 0.4), "playful": (0.75, 0.4), "mysterious": (0.5, 0.5),
+                     "calm": (0.4, 0.5), "dramatic": (0.8, 0.35)}
+
+
+def _chatterbox_voiceover(spoken_script: str, voice: str) -> str:
+    """Narration from Chatterbox (MIT), run in its own environment (tools/chatterbox/.venv) on the GPU, under the
+    shared GPU lock so it never collides with a render. CHATTERBOX_VOICE = a reference .wav to clone (optional)."""
+    import json
+    import subprocess
+    import tempfile
+    if not os.path.isfile(CHATTERBOX_PY):
+        raise RuntimeError("tools/chatterbox/.venv is missing (python -m agents.libraries installs it)")
+    ex, cfg = CHATTERBOX_STYLES.get(voice, CHATTERBOX_STYLES["energetic"])
+    out = os.path.join(get_temp_dir(), f"voiceover_{datetime.now():%Y%m%d_%H%M%S_%f}.wav")
+    job = {"text": spoken_script, "out": out, "exaggeration": ex, "cfg_weight": cfg,
+           "voice": os.getenv("CHATTERBOX_VOICE") or "", "seed": 7}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as fh:
+        json.dump(job, fh)
+    lock = None
+    try:
+        from agents.director import _gpu_lock
+        lock = _gpu_lock()
+    except Exception:  # noqa: BLE001  (no lock available: run anyway)
+        lock = None
+    try:
+        # utf-8: the progress bars are not cp1252, and decoding them with the Windows default threw in the reader
+        r = subprocess.run([CHATTERBOX_PY, os.path.join(CHATTERBOX_DIR, "speak.py"), fh.name], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=1800)
+    finally:
+        if lock is not None:
+            lock.__exit__(None, None, None)
+    if r.returncode != 0 or not os.path.isfile(out):
+        raise RuntimeError((r.stderr or r.stdout)[-400:])
+    log.info("Narration voiced by Chatterbox (%s)", voice)
+    return out
+
+
 def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple[str, float]:
     if not spoken_script.strip():
         raise ValueError("Narration is empty")
     fallback = (os.getenv("VOICE_FALLBACK") or "edge").strip().lower()
+    # VOICE_ENGINE: elevenlabs (default, premium) | chatterbox (free, local, expressive) | edge (free, online)
+    engine = (os.getenv("VOICE_ENGINE") or "elevenlabs").strip().lower()
+    if engine == "chatterbox":
+        try:
+            path = _chatterbox_voiceover(spoken_script, voice)
+            return path, get_duration(path)
+        except Exception as exc:  # noqa: BLE001  (a run never loses its voice: Edge takes over)
+            log.warning("Chatterbox unavailable (%s); using the Edge voice", str(exc)[:200])
+            engine = "edge"
+    if engine == "edge":
+        path = _edge_voiceover(spoken_script, voice)
+        return path, get_duration(path)
     if not elevenlabs_keys():
         if fallback == "edge":
             path = _edge_voiceover(spoken_script, voice)

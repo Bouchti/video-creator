@@ -21,6 +21,7 @@ from agents.media import FFMPEG
 log = logging.getLogger("pipeline")
 
 SR = 44100
+LOUDNESS_TARGET = float(os.getenv("LOUDNESS_TARGET", "-14"))   # integrated LUFS of every final mix
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".ogg")
 
 
@@ -80,14 +81,25 @@ def pick_music():
     return random.choice(tracks) if tracks else None
 
 
+def loudness(path: str) -> float:
+    """Integrated loudness (LUFS) of a media file's audio; -70 when silent or unreadable."""
+    r = subprocess.run([FFMPEG, "-hide_banner", "-nostats", "-i", path, "-vn", "-af", "ebur128", "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=300)
+    lines = [ln for ln in r.stderr.splitlines() if ln.strip().startswith("I:") and "LUFS" in ln]
+    try:
+        return float(lines[-1].split()[1])
+    except (IndexError, ValueError):
+        return -70.0
+
+
 def mix_audio(voice_path: str, fx_path: str, out_path: str, total_seconds: float, music: str = None) -> str:
     """Voice + effects (+ looped music bed if available) → AAC audio file.
     The music is side-chain DUCKED by the voice: it dips while words are spoken and swells
     back in the pauses, so it can sit louder without ever masking the narration."""
     music = music or pick_music()
-    music_vol = float(os.getenv("MUSIC_VOLUME", "0.18"))
+    music_vol = float(os.getenv("MUSIC_VOLUME", "0.28"))
     cmd = [FFMPEG, "-y", "-i", voice_path, "-i", fx_path]
-    filt = "[1:a]aresample=44100,volume=0.8[f];"
+    filt = "[1:a]aresample=44100,volume=1.1[f];"
     if music:
         log.info(f"  Music bed: {os.path.basename(music)} (ducked under the voice)")
         cmd += ["-stream_loop", "-1", "-i", music]
@@ -97,6 +109,8 @@ def mix_audio(voice_path: str, fx_path: str, out_path: str, total_seconds: float
                  "[v][f][m]amix=inputs=3:duration=longest:normalize=0[a]")
     else:
         filt += "[0:a]aresample=44100[v];[v][f]amix=inputs=2:duration=longest:normalize=0[a]"
+    # Shorts platforms play at about -14 LUFS; a -22 LUFS mix sounds almost silent on a phone speaker.
+    filt = filt.replace("[a]", "[raw]") + f";[raw]loudnorm=I={LOUDNESS_TARGET}:TP=-1.5:LRA=11,aresample=44100[a]"
     cmd += ["-filter_complex", filt, "-map", "[a]", "-t", f"{total_seconds:.3f}",
             "-c:a", "aac", "-b:a", "192k", out_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

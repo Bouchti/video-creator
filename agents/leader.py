@@ -109,12 +109,32 @@ def _channel_queries() -> list[str]:
     return picks
 
 
+DIRECTOR_QUERIES = [
+    "how everyday things work surprising physics explained", "why does it work everyday object science",
+    "home garden backyard science surprising fact", "how machines vehicles tools work simple explanation",
+    "kitchen science surprising facts", "engineering trick everyday life surprising",
+    "common misconception how things work science", "simple machine physics surprising fact",
+    "how bicycles cars planes really work explained", "weather and water everyday physics explained",
+    "plants trees how they work surprising science", "sports physics surprising explanation",
+]
+
+
+def _director_queries() -> list[str]:
+    """Six of the evergreen how-it-works searches, varied run to run (timeless subjects, no time window)."""
+    import random
+    return random.sample(DIRECTOR_QUERIES, 6)
+
+
 def search_trending_subjects(source: str | None = None) -> list:
     """Search Tavily for subjects that fit the channel (Unreal: mechanisms its sets can show)."""
     log.info("  Searching for trending subjects...")
 
-    if source != "unreal" and channel_profile():
+    # The history channel's own queries feed every route except those with their own subject rules (the
+    # director's Max stage needs everyday how-it-works subjects; its candidates were all wars and biographies).
+    if source not in ("unreal", "director") and channel_profile():
         return _search(_channel_queries(), time_range=None)
+    if source == "director":
+        return _search(_director_queries(), time_range=None)
 
     # Multiple search angles to find variety
     queries = (
@@ -423,9 +443,27 @@ AI-VIDEO REALISM (mandatory for the local-ai generator):
   amputation, suicide or self-harm, and sexual content. "Wildlife" is not automatically safe either:
   feeding, migration, nesting, play, cooperation, camouflage and construction are all suitable, but
   predation, prey capture, venom and animals eating their young are removed as animal cruelty.
-""" if source == "local-ai" else ""
+""" if source == "local-ai" else """
+MAX-AND-KIDS STAGE (mandatory for the director route):
+- The film is acted out by Max (a handyman dad) and his two kids on one outdoor or indoor stage, with 3-9
+  real everyday-scale objects (a ladder, a bike, a pot, a car, a tree, a ball) that can appear, move, spin,
+  rise, drop, glow, tip over. Pick a topic whose HOW-IT-WORKS can be shown by such objects and people doing
+  things: physics of everyday life, how a machine, tool, vehicle, plant or household thing works, a
+  surprising engineering trick.
+- Reject wars, politics, biographies, crime, disasters with victims, medicine inside the body, anything
+  microscopic or in space, and topics that only charts or numbers can explain.
+- IMPRESSIVE AND NEW: most viewers must NOT already know it. Pick the counter-intuitive fact that makes
+  people say "wait, what?!" and send the video to a friend: a common belief that is wrong, a hidden
+  mechanism, an absurd number, an everyday thing doing something impossible-sounding. Reject common
+  knowledge, however well explained ("a pressure cooker cooks faster", "the sun is a star", "plants need
+  light" were rejected: everyone knows them). Good: "a bike stays up because of steering geometry, not
+  gyroscopes", "ice is slippery because of a liquid-like layer, not pressure from your weight".
+- The topic must give a VISIBLE, physical surprise for the first second of the film (something that bursts,
+  flies, falls, spins away or explodes in a funny way), and a real "how it works" that props can show.
+- The topic is a specific, surprising, true claim, not a generic subject.
+""" if source == "director" else ""
 
-    profile = channel_profile() if source != "unreal" else ""
+    profile = channel_profile() if source not in ("unreal", "director") else ""
     channel = f"""
 THE CHANNEL (every pick must fit this description; reject candidates that do not):
 {profile}
@@ -441,20 +479,103 @@ RECENTLY USED (avoid these or anything similar):
 
 Submit your selection as the structured output. The topic should be a specific factual claim, not a generic subject. The angle should match what kind of topic it is."""
 
-    rejected = []
-    for _ in range(3):
+    rejected, tried = [], []
+    # the director route's novelty gate is strict: five picks, each one told why the previous ones failed
+    for _ in range(5 if source == "director" else 3):
         retry = ("\n\nREJECTED BY THE VIDEO RENDERER (do not choose these or close variants):\n- "
                  + "\n- ".join(rejected)) if rejected else ""
         system = LEADER_SYSTEM_PROMPT if profile else MECHANISM_LEADER_PROMPT
         selection = ai_router.ask(system, base_prompt + retry, TOPIC_TOOL["input_schema"])
         if not isinstance(selection, dict):
             raise ValueError("Leader Agent returned no topic selection")
-        problem = local_ai_topic_problem(str(selection.get("topic") or "")) if source == "local-ai" else None
+        if source == "director":
+            problem, known = novelty_problem(str(selection.get("topic") or ""))
+            tried.append((known, selection))
+        else:
+            problem = local_ai_topic_problem(str(selection.get("topic") or "")) if source == "local-ai" else None
         if not problem:
+            if source == "director":
+                selection = dict(selection, angle=director_brief(selection.get("angle"), LAST_NOVELTY))
             return selection
         rejected.append(f"{selection.get('topic', '')} — {problem}")
         log.warning("  Topic rejected before scripting: %s", problem)
+    if tried:            # the run never stops here: the least-known pick, flagged
+        known, selection = min(tried, key=lambda t: t[0])
+        log.warning("QUALITY WARNING: no topic passed the novelty check; using the least-known one (%d%% of "
+                    "viewers already know it)", known)
+        return selection
     raise RuntimeError("Leader Agent could not select a local-AI-safe, visibly filmable topic")
+
+
+LAST_NOVELTY = {}     # the judge's last report: its wow / demo / simple_why brief the writer
+IMPRESSIVE_MIN = int(os.getenv("IMPRESSIVE_MIN", "7"))     # 1-10: below it the subject is too ordinary
+IMPRESSIVE_SCALE = ("10 = jaw-dropping, people send it to friends; 9 = a brand-new pool floats out of the ground; "
+                    "8 = a steel boat that sinks as a slab but floats as a hull, a pumpkin heavier than a car; "
+                    "5 = a garden retaining wall that tips over (useful, but an ordinary object); 3 = why bread goes "
+                    "stale. Impressive = a huge scale, a spectacular visible event, or an 'impossible' result, about "
+                    "something the viewer did not think could happen")
+NOVELTY_MAX_KNOWN = int(os.getenv("NOVELTY_MAX_KNOWN", "30"))     # % of viewers who may already know the fact
+NOVELTY_SCHEMA = {"type": "object", "additionalProperties": False,
+                  "required": ["known_percent", "impressive", "impressive_why", "wow", "first_second", "simple_why",
+                               "demo", "verdict"],
+                  "properties": {"known_percent": {"type": "integer"}, "impressive": {"type": "integer"},
+                                 "impressive_why": {"type": "string"}, "wow": {"type": "string"},
+                                 "first_second": {"type": "string"}, "simple_why": {"type": "string"},
+                                 "demo": {"type": "string"},
+                                 "verdict": {"type": "string"}}}
+
+
+def director_brief(angle, report):
+    """The angle + what the judge found: the wow line, the first-second surprise and HOW to show the why. The
+    writer otherwise reinvented the explanation and wrote steps no picture could show."""
+    parts = [angle or ""]
+    for key, name in (("wow", "THE WOW"), ("first_second", "FIRST SECOND"), ("simple_why", "THE WHY"),
+                      ("demo", "HOW TO SHOW IT")):
+        if (report.get(key) or "").strip():
+            parts.append(f"{name}: {report[key].strip()}")
+    return "\n".join(p for p in parts if p)
+
+
+def novelty_problem(topic: str, need_demo: bool = True):
+    """(problem or None, % of viewers who already know it). A strict, separate judge: the picker rates its own
+    picks too kindly ("a pressure cooker cooks faster" went through; everyone knows that). need_demo: the why
+    must be showable with whole objects (the director stage); a 3D cutaway set can show inside parts."""
+    from agents import ai_router
+    system = ("You judge short-video topics for a family science-comedy channel. Be strict and honest: you are "
+              "paid for rejecting boring picks.")
+    prompt = (f"TOPIC: {topic}\n\nEstimate what percent of a general TikTok / YouTube Shorts audience (teens and "
+              "adults) ALREADY KNOWS the core fact (known_percent, 0-100). impressive: 1-10 on this scale: " + IMPRESSIVE_SCALE +
+              ". Be strict: most topics are 4-6. impressive_why: one line. wow: the single most surprising "
+              "sentence the video can say, or '' if there is none. first_second: the visible physical surprise the "
+              "film can open with (something bursts, flies, falls, explodes), or '' if the topic has none. "
+              "simple_why: the WHY explained to a 12-year-old in at most 2 short sentences with everyday objects, "
+              "with no step they would have to take on trust; '' if that is impossible (the bike's self-steering "
+              "needed hinge geometry no prop could make obvious, and the film stayed confusing). demo: how a cartoon "
+              "can SHOW that why, step by step, with everyday objects that move only as a WHOLE (appear, tip over, "
+              "spin, slide, launch, grow, puff steam) plus big arrows drawn over them; '' if showing it needs an "
+              "object's inner parts to move, a cutaway, or invisible things (molecules, forces, signals). "
+              "verdict: one line.")
+    try:
+        r = ai_router.ask(system, prompt, NOVELTY_SCHEMA, effort="low")
+    except Exception as exc:  # noqa: BLE001  (the judge is advice: never blocks the run)
+        log.warning("  Novelty check unavailable (%s)", str(exc)[:80])
+        return None, 0
+    LAST_NOVELTY.clear()
+    LAST_NOVELTY.update(r)
+    known = int(r.get("known_percent") or 0)
+    if known > NOVELTY_MAX_KNOWN:
+        return f"common knowledge ({known}% already know it): {r.get('verdict', '')}", known
+    impressive = int(r.get("impressive") or 0)
+    if impressive and impressive < IMPRESSIVE_MIN:
+        return (f"not impressive enough ({impressive}/10, needs {IMPRESSIVE_MIN}): {r.get('impressive_why', '')}",
+                known)
+    if not (r.get("wow") or "").strip() or not (r.get("first_second") or "").strip():
+        return f"no wow fact or no visible first-second surprise: {r.get('verdict', '')}", known
+    if not (r.get("simple_why") or "").strip():
+        return f"too hard to explain simply in 60 s: {r.get('verdict', '')}", known
+    if need_demo and not (r.get("demo") or "").strip():
+        return f"the why cannot be SHOWN with whole objects and arrows: {r.get('verdict', '')}", known
+    return None, known
 
 
 # A platform ban is about what the VIDEO SHOWS, not what the topic mentions. script.py's CONTENT
