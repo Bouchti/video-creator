@@ -22,12 +22,11 @@ import subprocess
 import sys
 import time
 
-from config.paths import PROJECT_ROOT
+from config.paths import COMPOSITOR, PROJECT_ROOT
 
 log = logging.getLogger("pipeline")
 ASSETS = os.path.join(PROJECT_ROOT, "assets")
 STAMPS = os.path.join(ASSETS, "cc0", ".stamps")
-COMPOSITOR = os.path.join(PROJECT_ROOT, "compositor")
 VERSION = 1            # bump to make every machine re-check its libraries
 TOLERANCE = 0.005      # a part with <= 0.5 % broken upstream records (2 of 2,037 ambientCG) still counts as done
 

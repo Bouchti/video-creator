@@ -140,12 +140,15 @@ def discover_comfy_url(
     return None
 
 
+def default_output_root() -> Path:
+    """Where local-video projects live, and the GPU lock every route shares (LOCAL_VIDEO_OUTPUT_DIR)."""
+    return Path(os.getenv("LOCAL_VIDEO_OUTPUT_DIR") or Path(PROJECT_ROOT) / "output" / "projects").expanduser().resolve()
+
+
 @dataclass
 class PipelineConfig:
     discover_services: bool = True
-    output_root: Path = field(default_factory=lambda: Path(
-        os.getenv("LOCAL_VIDEO_OUTPUT_DIR") or Path(PROJECT_ROOT) / "output" / "projects"
-    ).expanduser().resolve())
+    output_root: Path = field(default_factory=lambda: default_output_root())
     minimax_url: str | None = None
     wan_url: str | None = None
     wan_workflow: Path = field(default_factory=lambda: Path(

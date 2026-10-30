@@ -9,14 +9,13 @@ random per video. TikTok's in-app trending sounds can also be added at posting.
 import os
 import glob
 import random
-import wave
 import logging
 import subprocess
 
 import numpy as np
 
 from config.paths import PROJECT_ROOT
-from agents.media import FFMPEG
+from agents.media import FFMPEG, write_wav
 
 log = logging.getLogger("pipeline")
 
@@ -66,13 +65,7 @@ def build_fx_track(total_seconds: float, cut_times: list, pop_times: list, path:
         add(whoosh, t - len(whoosh) / SR / 2)   # peak lands on the cut
     for t in pop_times:
         add(_pop(), t)
-    track = np.clip(track, -1, 1)
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes((track * 32767).astype(np.int16).tobytes())
-    return path
+    return write_wav(path, track, SR)
 
 
 def pick_music():

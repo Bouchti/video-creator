@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -41,6 +42,66 @@ def run_process(cmd, timeout: int, cleanup_paths=()):
     except Exception:
         remove_files(cleanup_paths)
         raise
+
+
+def run(cmd, **kw):
+    """Run a tool and return its CompletedProcess; raise with the tail of its output when it fails."""
+    kw.setdefault("text", True)
+    r = subprocess.run(cmd, capture_output=True, **kw)
+    if r.returncode != 0:
+        err = r.stderr or r.stdout
+        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
+        raise RuntimeError(f"{os.path.basename(str(cmd[0]))} failed: {err[-1500:]}")
+    return r
+
+
+def probe_json(path, entries: str = "format=duration:stream=codec_type,width,height", timeout: int = 30) -> dict:
+    """ffprobe's JSON for `path`, limited to `entries`."""
+    return json.loads(run([FFPROBE, "-v", "error", "-show_entries", entries, "-of", "json", str(path)],
+                          timeout=timeout).stdout)
+
+
+def vertical_short_problems(path, min_seconds: float, max_seconds: float) -> tuple[float, list[str]]:
+    """(duration, why `path` is not a deliverable short): 1080x1920 video, an audio stream and
+    min_seconds < duration < max_seconds."""
+    try:
+        info = probe_json(path)
+    except (RuntimeError, ValueError):
+        return 0.0, [f"ffprobe could not read {path}"]
+    streams = info.get("streams", [])
+    video = [s for s in streams if s.get("codec_type") == "video"]
+    duration = float(info.get("format", {}).get("duration") or 0)
+    problems = []
+    if not video:
+        problems.append("no video stream")
+    elif (video[0].get("width"), video[0].get("height")) != (1080, 1920):
+        problems.append(f"video is {video[0].get('width')}x{video[0].get('height')}, not 1080x1920")
+    if not any(s.get("codec_type") == "audio" for s in streams):
+        problems.append("no audio stream")
+    if not min_seconds < duration < max_seconds:
+        problems.append(f"duration {duration:.2f}s is outside {min_seconds:g}-{max_seconds:g} s")
+    return duration, problems
+
+
+def read_pcm(path, sr: int, seconds: float | None = None):
+    """Mono float32 samples in [-1, 1] at `sr`, decoded by FFmpeg (the first `seconds` only, if given)."""
+    import numpy as np
+    head = ["-t", str(seconds)] if seconds else []
+    raw = run([FFMPEG, "-v", "error", "-i", str(path), *head, "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
+              text=False).stdout
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+
+
+def write_wav(path, x, sr: int) -> str:
+    """Write mono float samples (clipped to [-1, 1]) as a 16-bit WAV."""
+    import wave
+    import numpy as np
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes())
+    return path
 
 
 

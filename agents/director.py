@@ -26,9 +26,9 @@ import subprocess
 import sys
 import time
 
-from config.paths import PROJECT_ROOT
+from config.paths import COMPOSITOR, NPX, PROJECT_ROOT, get_blender
 from agents.beats import _norm_words, script_word_timings
-from agents.media import FFMPEG, get_duration
+from agents.media import FFMPEG, get_duration, read_pcm, run, vertical_short_problems, write_wav
 
 log = logging.getLogger("pipeline")
 FPS = 30
@@ -36,22 +36,10 @@ WINDOW = (60.0, 65.0)          # the final video must be strictly inside this (s
 IDEAL = 62.5
 TAIL = (1.0, 3.0)              # silence after the last word, for the end card to land
 MAX_TEMPO = 0.05               # never change the speech rate by more than 5 %
-BLENDER = os.getenv("BLENDER_EXE", r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
-COMPOSITOR = os.path.join(PROJECT_ROOT, "compositor")
-NPX = "npx.cmd" if os.name == "nt" else "npx"
+BLENDER = get_blender()
 
 
 # ------------------------------------------------------------------ helpers
-
-def _run(cmd, **kw):
-    kw.setdefault("text", True)
-    r = subprocess.run(cmd, capture_output=True, **kw)
-    if r.returncode != 0:
-        err = r.stderr or r.stdout
-        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
-        raise RuntimeError(f"{os.path.basename(str(cmd[0]))} failed: {err[-1500:]}")
-    return r
-
 
 def _save(path, data):
     with open(path, "w", encoding="utf-8") as f:
@@ -87,14 +75,8 @@ def fit_window(voice_seconds):
     return None, None
 
 
+VOICE_SR = 44100                    # narration is analysed and tightened at this rate
 MIN_PAUSE, MAX_PAUSE = 0.22, 0.7    # a tightened pause never gets shorter than this
-
-
-def _pcm(path, sr=44100):
-    import numpy as np
-    raw = _run([FFMPEG, "-v", "error", "-i", path, "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
-               text=False).stdout
-    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768, sr
 
 
 def pauses(x, sr, threshold_db=-38.0, min_len=0.2):
@@ -136,8 +118,8 @@ def pause_cap(runs, seconds, target):
 def tighten(src, dst, cap):
     """Shorten every pause longer than `cap` to `cap` (keeping its two edges, 10 ms crossfades)."""
     import numpy as np
-    import wave
-    x, sr = _pcm(src)
+    sr = VOICE_SR
+    x = read_pcm(src, sr)
     out, last, fade = [], 0, int(sr * 0.01)
     ramp = np.linspace(0, 1, fade)
     for a, b in pauses(x, sr):
@@ -151,12 +133,7 @@ def tighten(src, dst, cap):
         last = i1 + fade
     out.append(x[last:])
     y = np.concatenate(out)
-    with wave.open(dst, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes((np.clip(y, -1, 1) * 32767).astype(np.int16).tobytes())
-    return dst
+    return write_wav(dst, y, sr)
 
 
 VOICE_FIT_ROUNDS = int(os.getenv("DIRECTOR_VOICE_FIT_ROUNDS", "2"))
@@ -175,7 +152,8 @@ def stage_voice(plan, work, attempt=0):
         raw = os.path.join(work, f"voice_{digest}{os.path.splitext(path)[1] or '.mp3'}")
         shutil.copy(path, raw)
     # 1) tighten dead air just enough to aim at the window (natural: words keep their speed)
-    x, sr = _pcm(raw)
+    sr = VOICE_SR
+    x = read_pcm(raw, sr)
     runs = pauses(x, sr)
     cap = pause_cap(runs, len(x) / sr, IDEAL - 1.6)
     tight = tighten(raw, os.path.join(work, "voice_tight.wav"), cap)
@@ -207,7 +185,7 @@ def stage_voice(plan, work, attempt=0):
         log.warning("voice is %.1fs: outside what +-5%% tempo can fit; the script needs %s words", d,
                     "fewer" if d > IDEAL else "more")
     voice = os.path.join(work, "voice.wav")
-    _run([FFMPEG, "-y", "-v", "error", "-i", raw, "-filter:a", f"atempo={tempo:.4f}", "-ar", "44100", "-ac", "1",
+    run([FFMPEG, "-y", "-v", "error", "-i", raw, "-filter:a", f"atempo={tempo:.4f}", "-ar", "44100", "-ac", "1",
           voice])
     d = get_duration(voice)
     info = {"tightened_seconds": round(get_duration(raw), 3), "pause_cap": round(cap, 3), "pauses": len(runs),
@@ -262,32 +240,15 @@ def strictly_increasing(words, gap=0.02):
 
 # ------------------------------------------------------------------ 3. render
 
-def _gpu_lock():
-    """The shared GPU lock (local_video): wait while another run owns it, never fail."""
-    from pathlib import Path
-    from local_video.queue import FileLock, QueueBusyError
-    root = Path(os.getenv("LOCAL_VIDEO_OUTPUT_DIR") or Path(PROJECT_ROOT) / "output" / "projects")
-    lock = FileLock(root / ".gpu-generation.lock")
-    while True:
-        try:
-            return lock.__enter__() and lock
-        except QueueBusyError as exc:
-            log.info("GPU busy (%s); waiting", exc)
-            time.sleep(60)
-
-
 def blender(job, work, name):
     path = os.path.join(work, f"{name}.json")
     _save(path, job)
     log_path = os.path.join(work, f"{name}.log")
-    lock = _gpu_lock()
-    try:
-        with open(log_path, "w", encoding="utf-8") as fh:
-            r = subprocess.run([BLENDER, "-b", "--factory-startup", "--python",
-                                os.path.join(PROJECT_ROOT, "engine", "director", "blender_job.py"), "--", path],
-                               stdout=fh, stderr=subprocess.STDOUT)
-    finally:
-        lock.__exit__(None, None, None)
+    from local_video.queue import gpu_lock
+    with gpu_lock(), open(log_path, "w", encoding="utf-8") as fh:
+        r = subprocess.run([BLENDER, "-b", "--factory-startup", "--python",
+                            os.path.join(PROJECT_ROOT, "engine", "director", "blender_job.py"), "--", path],
+                           stdout=fh, stderr=subprocess.STDOUT)
     text = open(log_path, encoding="utf-8", errors="replace").read()
     if r.returncode != 0 or "Traceback" in text:
         raise RuntimeError(f"Blender failed (see {log_path}): {text[-1200:]}")
@@ -455,7 +416,7 @@ def _render_movie(job, out, movie, work, name, total, crf):
         blender(job, work, name)
         frames = sorted(glob.glob(os.path.join(out, "frames", "*.png")))
     if not os.path.isfile(movie) or os.path.getmtime(movie) < max(os.path.getmtime(f) for f in frames):
-        _run([FFMPEG, "-y", "-v", "error", "-framerate", str(FPS), "-i", os.path.join(out, "frames", "%04d.png"),
+        run([FFMPEG, "-y", "-v", "error", "-framerate", str(FPS), "-i", os.path.join(out, "frames", "%04d.png"),
               "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-pix_fmt", "yuv420p", movie])
     return movie
 
@@ -594,7 +555,7 @@ def viewer_review(plan, timing, work, movie):
             t = (share - 1) / FPS
             png = os.path.join(work, "review", f"{b['id']}_{share}.png")
             os.makedirs(os.path.dirname(png), exist_ok=True)
-            _run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", movie, "-frames:v", "1", "-vf",
+            run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", movie, "-frames:v", "1", "-vf",
                   "scale=300:533", png])
             tiles.append(Image.open(png).convert("RGB"))
         sheet = Image.new("RGB", (310 * len(tiles), 533), "white")
@@ -673,8 +634,6 @@ def sound_events(plan, timing, work=None):
 def stage_sound(plan, timing, voice, total_seconds, work):
     from agents import sfx
     from agents.audio_fx import mix_audio
-    import numpy as np
-    import wave
     fx = sfx.render_events(sound_events(plan, timing, work), FPS, total_seconds, os.path.join(work, "fx.wav"))
     track = music_track(plan)
     if track:
@@ -685,11 +644,7 @@ def stage_sound(plan, timing, voice, total_seconds, work):
     else:                                     # no library on this machine: the generated bed
         music = os.path.join(work, "music.wav")
         bed = sfx.music(total_seconds + 0.5, bpm=112)
-        with wave.open(music, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(sfx.SR)
-            w.writeframes((np.clip(bed, -1, 1) * 32767).astype(np.int16).tobytes())
+        write_wav(music, bed, sfx.SR)
     return mix_audio(voice, fx, os.path.join(work, "mix.m4a"), total_seconds, music=music)
 
 
@@ -769,7 +724,7 @@ def stage_compose(plan, timing, words, work, final):
     p = props(plan, timing, words, anchors, timing["total"])
     path = os.path.join(work, "props.json")
     _save(path, p)
-    _run([NPX, "remotion", "render", "src/index.ts", "Short", final, f"--props={path}", f"--public-dir={public}",
+    run([NPX, "remotion", "render", "src/index.ts", "Short", final, f"--props={path}", f"--public-dir={public}",
           "--codec=h264", "--crf=20", "--audio-codec=aac", "--log=error"], cwd=COMPOSITOR, timeout=7200)
     return final
 
@@ -777,18 +732,8 @@ def stage_compose(plan, timing, words, work, final):
 # ------------------------------------------------------------------ 6. check
 
 def check(final):
-    probe = json.loads(_run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height",
-                             "-of", "json", final]).stdout)
-    d = float(probe["format"]["duration"])
-    v = next(s for s in probe["streams"] if s["codec_type"] == "video")
-    problems = []
-    if not WINDOW[0] < d < WINDOW[1]:
-        problems.append(f"duration {d:.2f}s is outside {WINDOW}")
-    if (v["width"], v["height"]) != (1080, 1920):
-        problems.append(f"video is {v['width']}x{v['height']}")
-    if not any(s["codec_type"] == "audio" for s in probe["streams"]):
-        problems.append("no audio")
-    else:
+    d, problems = vertical_short_problems(final, *WINDOW)
+    if "no audio stream" not in problems:
         from agents.audio_fx import loudness, LOUDNESS_TARGET
         lufs = loudness(final)
         if abs(lufs - LOUDNESS_TARGET) > 2:

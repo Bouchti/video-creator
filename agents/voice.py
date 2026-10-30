@@ -198,8 +198,9 @@ def _chatterbox_voiceover(spoken_script: str, voice: str) -> str:
         json.dump(job, fh)
     lock = None
     try:
-        from agents.director import _gpu_lock
-        lock = _gpu_lock()
+        from local_video.queue import gpu_lock
+        lock = gpu_lock()
+        lock.__enter__()
     except Exception:  # noqa: BLE001  (no lock available: run anyway)
         lock = None
     try:

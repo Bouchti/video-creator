@@ -17,6 +17,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+# The Remotion compositor (npm project) and the npx that runs it.
+COMPOSITOR = os.path.join(PROJECT_ROOT, "compositor")
+NPX = "npx.cmd" if os.name == "nt" else "npx"
+
+
+def get_blender() -> str:
+    """Blender executable: BLENDER_EXE, else the default Windows install location."""
+    return os.getenv("BLENDER_EXE") or r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
+
+
 def get_env_path() -> str:
     return os.path.join(PROJECT_ROOT, ".env")
 

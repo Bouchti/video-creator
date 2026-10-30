@@ -25,9 +25,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from config.paths import PROJECT_ROOT, get_output_dir  # noqa: E402
+from config.paths import PROJECT_ROOT, get_blender, get_output_dir  # noqa: E402
 from agents.beats import align_beats, script_word_timings, FPS  # noqa: E402
-from agents.media import FFMPEG, get_duration, merge_audio_video, burn_subtitles  # noqa: E402
+from agents.media import FFMPEG, get_duration, merge_audio_video, burn_subtitles, read_pcm, write_wav  # noqa: E402
 from agents.transcription import transcribe_with_whisper  # noqa: E402
 from agents.voice import generate_voiceover  # noqa: E402
 from agents.audio_fx import build_fx_track, mix_audio, SR  # noqa: E402
@@ -36,14 +36,12 @@ from agents.render import draw_overlay  # noqa: E402
 from agents import sfx  # noqa: E402
 
 log = logging.getLogger("pipeline")
-BLENDER = os.getenv("BLENDER_EXE", r"C:\blender-5.2.3-windows-x64\blender.exe")
+BLENDER = get_blender()
 
 
 def voice_envelope(path: str, frames: int) -> list:
     """Per-frame loudness (0..1) of the voiceover — drives lip-sync."""
-    raw = subprocess.run([FFMPEG, "-v", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
-                         capture_output=True, check=True).stdout
-    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+    x = read_pcm(path, 16000)
     hop = 16000 / FPS
     rms = np.zeros(frames)
     for i in range(frames):
@@ -58,15 +56,6 @@ def voice_envelope(path: str, frames: int) -> list:
 def _read_wav(path):
     with wave.open(path) as w:
         return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
-
-
-def _write_wav(path, x):
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes((np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes())
-    return path
 
 
 def _sticker_job(job):
@@ -774,12 +763,12 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     fx = np.zeros(n)
     fx[:len(whoosh)] += whoosh * WHOOSH_GAIN
     fx[:len(synced)] += synced * SFX_GAIN
-    fx_path = _write_wav(os.path.join(work, "fx_all.wav"), fx)
+    fx_path = write_wav(os.path.join(work, "fx_all.wav"), fx, SR)
     music = None
     if film.get("music") == "synth":                       # generated bed (no licensed tracks needed)
         # the whole film's length: a shorter bed is looped by the mixer, and its fade-out/in plus the
         # chord jump at the seam were audible ~60 s into every 90 s film
-        music = _write_wav(os.path.join(work, "music.wav"), sfx.music(total + 0.5))
+        music = write_wav(os.path.join(work, "music.wav"), sfx.music(total + 0.5), SR)
     mixed = mix_audio(voice_path, fx_path, os.path.join(work, "mix.m4a"), total, music=music)
     merged = merge_audio_video(video, mixed)
 

@@ -11,7 +11,6 @@ uses a library sound when one exists for an event kind and falls back to the syn
 import logging
 import math
 import os
-import subprocess
 
 import numpy as np
 import requests
@@ -315,10 +314,8 @@ def load(name):
     if p is None:
         _cache[name] = None
         return None
-    from agents.media import FFMPEG
-    raw = subprocess.run([FFMPEG, "-v", "error", "-i", p, "-t", "20", "-ac", "1", "-ar", str(SR), "-f", "s16le",
-                          "-"], capture_output=True, check=True).stdout
-    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+    from agents.media import read_pcm
+    x = read_pcm(p, SR, seconds=20)
     if len(x) == 0:
         return None
     x = x / max(1e-4, float(np.sqrt(np.mean(x ** 2)))) * 0.12        # same loudness for every sample

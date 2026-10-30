@@ -17,13 +17,11 @@ import os
 import re
 import subprocess
 
-from config.paths import PROJECT_ROOT
+from config.paths import COMPOSITOR, NPX, PROJECT_ROOT
 
 log = logging.getLogger("pipeline")
-COMPOSITOR = os.path.join(PROJECT_ROOT, "compositor")
 GENERATED = os.path.join(COMPOSITOR, "src", "diagrams", "generated")
 INDEX = os.path.join(COMPOSITOR, "src", "diagrams", "index.ts")
-NPX = "npx.cmd" if os.name == "nt" else "npx"
 ROUNDS = int(os.getenv("DIAGRAM_ROUNDS", "3"))
 
 KIT_API = """\

@@ -181,27 +181,8 @@ def _restore_first_backup(set_id, run):
 
 def probe(path):
     """1080x1920 video, an audio stream, a sane duration."""
-    from agents.media import FFMPEG
-    ffprobe = shutil.which("ffprobe") or FFMPEG.replace("ffmpeg", "ffprobe")
-    r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration",
-                        "-of", "json", path], capture_output=True, text=True)
-    problems = []
-    try:
-        info = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return [f"ffprobe could not read {path}"]
-    streams = info.get("streams", [])
-    video = [s for s in streams if s.get("codec_type") == "video"]
-    if not video:
-        problems.append("no video stream")
-    elif (video[0].get("width"), video[0].get("height")) != (1080, 1920):
-        problems.append(f"video is {video[0].get('width')}x{video[0].get('height')}, not 1080x1920")
-    if not any(s.get("codec_type") == "audio" for s in streams):
-        problems.append("no audio stream")
-    dur = float(info.get("format", {}).get("duration") or 0)
-    if not 15 <= dur <= 180:
-        problems.append(f"duration {dur:.1f}s is outside 15-180 s")
-    return problems
+    from agents.media import vertical_short_problems
+    return vertical_short_problems(path, 15, 180)[1]
 
 
 def write_notes(video, film_json):

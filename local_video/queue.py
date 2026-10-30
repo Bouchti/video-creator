@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import threading
 import time
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
@@ -24,7 +24,7 @@ from .assembly import assemble_project
 from .backends import BackendAdapter, GenerationResult, MiniMaxAdapter, _remove_generated_audio, build_backends
 from .freevideo import ensure_minimax
 from .keyframes import prepare_keyframes, usable_keyframe
-from .config import PipelineConfig, resolve_within
+from .config import PipelineConfig, default_output_root, resolve_within
 from .models import ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
 from .planner import (
     MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, _continuity, construct_prompt, continuation_source, framing_for, framing_scale, payoff_of,
@@ -45,6 +45,9 @@ TIKTOK_MIN_SECONDS = 61                # TikTok pays (Creator Rewards) only on v
 
 class QueueBusyError(RuntimeError):
     pass
+
+
+GPU_LOCK_NAME = ".gpu-generation.lock"
 
 
 class VisualReviewRejected(ValueError):
@@ -163,6 +166,23 @@ class FileLock(AbstractContextManager):
                 pass
             self.owned = False
         return False
+
+
+@contextmanager
+def gpu_lock(root: Path | None = None):
+    """Hold the GPU lock every route shares (local-ai, director, Chatterbox), waiting while another run owns it."""
+    lock = FileLock((root or default_output_root()) / GPU_LOCK_NAME)
+    while True:
+        try:
+            lock.__enter__()
+            break
+        except QueueBusyError as exc:
+            log.info("GPU busy (%s); waiting", exc)
+            time.sleep(60)
+    try:
+        yield lock
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def _music_path(manifest: ProjectManifest) -> Path | None:
@@ -964,8 +984,7 @@ class QueueRunner:
             self._cancel_speculation(manifest, "the run stopped")
 
     def _run(self, manifest: ProjectManifest, shots: set[int] | None) -> ProjectManifest:
-        lock_path = self.config.output_root / ".gpu-generation.lock"
-        with FileLock(lock_path):
+        with FileLock(self.config.output_root / GPU_LOCK_NAME):
             self._silence_accepted_clips(manifest)
             self._upgrade_prompts(manifest)
             # Start FreeVideo before preflight checks the backends: a stopped server is not a

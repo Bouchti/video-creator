@@ -740,7 +740,8 @@ def hard_checks(script, set_id):
         q = closing_question(beats[-1]["text"])
         if not q:
             problems.append("the last beat must END with a short question to the viewer that invites comments")
-        elif re.search(r"(comment|comments|like|subscribe|follow)", q, re.I):
+        # call-to-action words only: "what does it look like?" or "follow the water" are fine
+        elif re.search(r"\b(comments?|likes|subscrib\w*|followers?)\b", q, re.I):
             problems.append("the closing question must not mention comments, likes, subscribing or following")
         elif len(q.split()) > 14:
             problems.append(f"the closing question has {len(q.split())} words; keep it under 13")

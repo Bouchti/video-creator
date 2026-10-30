@@ -5,7 +5,6 @@ rebar clinks, tile clacks, concrete spray, pouring water, pump hum, clock
 ticks, the splash — plus a soft birdsong ambience under the whole film.
 All sounds are generated here, so there is nothing to license.
 """
-import wave
 
 import numpy as np
 
@@ -303,12 +302,8 @@ def render_events(events: list, fps: int, total_seconds: float, path: str, ambie
     peak = np.abs(track).max()
     if peak > 0.95:
         track *= 0.95 / peak
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes((np.clip(track, -1, 1) * 32767).astype(np.int16).tobytes())
-    return path
+    from agents.media import write_wav
+    return write_wav(path, track, SR)
 
 
 # ------------------- MUSIC BED -------------------
