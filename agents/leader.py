@@ -512,8 +512,9 @@ IMPRESSIVE_MIN = int(os.getenv("IMPRESSIVE_MIN", "7"))     # 1-10: below it the 
 IMPRESSIVE_SCALE = ("10 = jaw-dropping, people send it to friends; 9 = a brand-new pool floats out of the ground; "
                     "8 = a steel boat that sinks as a slab but floats as a hull, a pumpkin heavier than a car; "
                     "5 = a garden retaining wall that tips over (useful, but an ordinary object); 3 = why bread goes "
-                    "stale. Impressive = a huge scale, a spectacular visible event, or an 'impossible' result, about "
-                    "something the viewer did not think could happen")
+                    "stale. Impressive = a spectacular visible event or an 'impossible' result about something the viewer "
+                    "did not think could happen (a giant real-world record can be the closing number; size alone is "
+                    "not the wow)")
 NOVELTY_MAX_KNOWN = int(os.getenv("NOVELTY_MAX_KNOWN", "30"))     # % of viewers who may already know the fact
 NOVELTY_SCHEMA = {"type": "object", "additionalProperties": False,
                   "required": ["known_percent", "impressive", "impressive_why", "wow", "first_second", "simple_why",
@@ -536,10 +537,11 @@ def director_brief(angle, report):
     return "\n".join(p for p in parts if p)
 
 
-def novelty_problem(topic: str, need_demo: bool = True):
+def novelty_problem(topic: str, need_demo: bool = True, report: dict = None):
     """(problem or None, % of viewers who already know it). A strict, separate judge: the picker rates its own
     picks too kindly ("a pressure cooker cooks faster" went through; everyone knows that). need_demo: the why
-    must be showable with whole objects (the director stage); a 3D cutaway set can show inside parts."""
+    must be showable with whole objects (the director stage); a 3D cutaway set can show inside parts.
+    report: filled with the judge's full answer (LAST_NOVELTY is shared, and judges may run in parallel)."""
     from agents import llm
     system = ("You judge short-video topics for a family science-comedy channel. Be strict and honest: you are "
               "paid for rejecting boring picks.")
@@ -562,6 +564,8 @@ def novelty_problem(topic: str, need_demo: bool = True):
         return None, 0
     LAST_NOVELTY.clear()
     LAST_NOVELTY.update(r)
+    if report is not None:
+        report.update(r)
     known = int(r.get("known_percent") or 0)
     if known > NOVELTY_MAX_KNOWN:
         return f"common knowledge ({known}% already know it): {r.get('verdict', '')}", known

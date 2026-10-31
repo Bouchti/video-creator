@@ -32,9 +32,27 @@ from engine import sets
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
 
-WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 words → 82.8 s (pauses)
-TARGET_WORDS = (140, 192)              # ≈ 60–80 s with this voice (incl. the closing question)
-WORDS_PER_BEAT, WORDS_CAP = 18, 230    # long story ladders: ~18 words a beat, never over ~95 s
+# Scripts are sized in SECONDS of voice and turned into words with the pace the voice really has in these
+# films (output/voice_rates.json, "<engine>/cutaway", measured by engine/make_film after every recording).
+# A fixed 2.4 words/s (ElevenLabs) sized the tunnel film for a voice that spoke 3.27 words/s (Chatterbox):
+# every action timed to the voice ran ~35 % faster than designed and nobody could follow.
+TARGET_SECONDS = (58, 80)              # narration; the film is longer (action holds + tail), only > 60 s matters
+SECONDS_PER_BEAT, MAX_SECONDS = 7.5, 96   # long story ladders: ~7.5 s a beat, never over ~96 s of narration
+
+
+def words_per_second():
+    from agents import stage_writer
+    return round(stage_writer.voice_rate(route="cutaway"), 2)
+
+
+def _words(seconds):
+    return int(round(seconds * words_per_second()))
+
+
+def target_words():
+    return _words(TARGET_SECONDS[0]), _words(TARGET_SECONDS[1])
+
+
 HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # what the editor and writer aim for
 # What actually ships: no rule breaks and EVERY score >= SHIP_FLOOR. Calibrated on the editor's real
@@ -198,7 +216,8 @@ def available_topic_sets(set_ids=None, history=None):
     requested = list(set_ids or sets.AVAILABLE)
     if os.getenv("SHOWRUNNER_ALLOW_REPEATS", "0").lower() in ("1", "true", "yes"):
         return requested
-    if os.getenv("SHOWRUNNER_FORCE_NEW_SET", "0").lower() in ("1", "true", "yes"):
+    if os.getenv("SHOWRUNNER_FORCE_NEW_SET", "0").lower() in ("1", "true", "yes") and set_ids is None:
+        # (only when choosing among ALL sets: the new set itself, named explicitly, must stay scriptable)
         # producer switch: research and build a NEW subject even if older built sets are still unused
         return [set_id for set_id in requested if not getattr(sets.spec(set_id), "HERO", None)]
     history = _history() if history is None else history
@@ -219,7 +238,12 @@ NEW_STORY_SCHEMA = _obj({
     "why_people_care_now": S,
     "build_brief": S,
     "fact_sheet": S,
+    "largest_part_m": {"type": "number"},
+    "mechanism_size_cm": {"type": "number"},
 })
+NEW_STORY_CANDIDATES = _obj({"candidates": {"type": "array", "items": NEW_STORY_SCHEMA}})
+STORY_MAX_SCALE_M = float(os.getenv("STORY_MAX_SCALE_M", "12"))   # largest part Max works on, in metres
+STORY_MIN_MECHANISM_CM = float(os.getenv("STORY_MIN_MECHANISM_CM", "10"))   # the thing that explains it, seen working
 
 
 def _wishlist():
@@ -239,9 +263,25 @@ def _new_story_set_id(subject):
     return candidate
 
 
+def _subjects_in_progress():
+    """Subjects other autopilot runs are building right now (two runs at once must not build the same one)."""
+    import glob
+    out = []
+    for path in glob.glob(os.path.join(os.path.dirname(__file__), "..", "output", "autopilot", "*.json")):
+        try:
+            run = json.load(open(path, encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        plan = run.get("new_set_plan") or {}
+        if run.get("status") == "running" and plan.get("subject"):
+            out.append(f"- {plan.get('set_id')}: {plan['subject']} (being built now)")
+    return out
+
+
 def plan_new_story_set(allow_assets=False):
     """Research and choose a genuinely new, timely Max subject that can become a 3D set."""
-    published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
+    published = "\n".join([f"- {h.get('set')}: {h.get('title')}" for h in _history()]
+                          + _subjects_in_progress()) or "- none"
     ideas = _wishlist()[-30:]
     wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in ideas) or "- none"
     asset_rule = ("Whole recognisable objects (vehicles, ships, cranes, houses, trees, furniture) may come from "
@@ -259,7 +299,7 @@ OLDER SET WISHLIST (inspiration only; live research wins):
 USED SUBJECTS (never repeat or rename these):
 {published}
 
-Return:
+Return 3 CANDIDATES: three genuinely different subjects (different fields, a different wow), each with:
 - subject: a short concrete name for the thing Max builds
 - title, angle, hook_line (13 words maximum), hook_action, and payoff for the eventual video
 - trend_signal and the exact direct trend_source_url from the live research
@@ -272,29 +312,71 @@ Return:
   immediately after each failure, the final working result, and the physical principles viewers
   learn. {asset_rule}
 
-IMPRESSIVE, NOT ORDINARY: the subject must make a viewer say "no way!": a huge scale, a spectacular visible
-disaster, or an "impossible" result (a brand-new pool that floats out of the ground, a steel slab that sinks
-while a steel hull floats, a pumpkin heavier than a car). A useful but ordinary object (a garden wall, a
-fence, a shelf) is NOT enough, even with a good lesson.
+IMPRESSIVE, NOT ORDINARY: the subject must make a viewer say "no way!": a spectacular visible disaster or an
+"impossible" result (a brand-new pool that floats out of the ground, a steel slab that sinks while a steel
+hull floats, a pumpkin heavier than a car). A useful but ordinary object (a garden wall, a fence, a shelf) is
+NOT enough, even with a good lesson.
+
+MAX'S OWN VERSION, AT HUMAN SCALE: Max builds HIS OWN backyard / garden / lake-size version of the thing, the
+way he built his own pool, his own boat and grew his own pumpkin: every part a viewer must see working fits
+within about 10 metres of Max, so he and the mechanism are both big on a phone screen. A giant real-world
+version (a sea tunnel, a dam, a skyscraper) appears only as the closing number and scale card. Give
+largest_part_m: the largest dimension, in metres, of anything Max builds or that must be read in a shot.
+
+A BIG, VISIBLE MECHANISM: the thing whose behaviour explains each failure and fix must be seen working with the
+naked eye, as itself: a gusher, a pipe bursting, a hull tilting, a wall sliding, water rising, a pump spinning.
+NOT a microscopic or invisible cause (bacteria, molecules, crystals, grain contacts, electrons, chemistry): the
+sandcastle film explained bacteria cementing sand grains in a small magnifier circle and nobody understood what
+was in the video. Give mechanism_size_cm: the size, in centimetres, of the smallest thing the viewer must watch
+to understand the story (a 2 cm grain = 2, a 40 cm pipe = 40, a gusher = 500).
 
 Do not choose a subject merely because it appears in the old wishlist. It needs a credible current
 signal and must be different from every used subject."""
-    # the novelty gate: the viewer must LEARN something (a subject everyone knows was a wasted set build);
-    # up to NEW_SET_PICKS picks, each told why the previous ones failed; the least-known one is used anyway
-    from agents.leader import LAST_NOVELTY, novelty_problem
-    tried, rejected = [], []
-    for _ in range(int(os.getenv("NEW_SET_PICKS", "3"))):
-        retry = ("\n\nREJECTED (do not choose these or close variants):\n- " + "\n- ".join(rejected)) if rejected else ""
-        plan = llm.ask(STORY_STYLE, prompt + retry, NEW_STORY_SCHEMA, effort="medium", web=True)
+    # the novelty gate: the viewer must LEARN something (a subject everyone knows was a wasted set build).
+    # Each search returns 3 candidates, judged in PARALLEL (three searches in a row, each told why the last one
+    # failed, took 11 min); up to NEW_SET_SEARCHES searches, and the best of all is used anyway
+    from concurrent.futures import ThreadPoolExecutor
+    from agents.leader import novelty_problem
+
+    def judge(plan):
+        size = float(plan.get("largest_part_m") or 0)
+        if size > STORY_MAX_SCALE_M:
+            # the tunnel set staged a tens-of-metres tube beside a 1.8 m Max: no phone shot could show both, and
+            # 9 of 13 scenes were rejected for "Max too small" / "labels too small" / "mechanism a thin line"
+            return (f"too big to read on a phone: the largest part is {size:g} m (max {STORY_MAX_SCALE_M:g} m); "
+                    "Max must build his own human-scale version, with the giant real one as the closing number"), \
+                (-1, -100)                          # a last resort only: never a crash when every pick is too big
+        mech = float(plan.get("mechanism_size_cm") or 0)
+        if 0 < mech < STORY_MIN_MECHANISM_CM:
+            return (f"the mechanism is too small to see ({mech:g} cm; min {STORY_MIN_MECHANISM_CM:g} cm): the story "
+                    "must be explained by something big that visibly moves, not a microscopic cause in an inset"),                 (-1, -100)
+        report = {}
         problem, known = novelty_problem(f"{plan.get('subject', '')}: {plan.get('hook_line', '')} "
-                                         f"{plan.get('payoff', '')}", need_demo=False)
-        tried.append((int(LAST_NOVELTY.get("impressive") or 0), -known, plan))
-        if not problem:
+                                         f"{plan.get('payoff', '')}", need_demo=False, report=report)
+        return problem, (int(report.get("impressive") or 0), -known)
+
+    tried, rejected, plan = [], [], None
+    for _ in range(max(1, int(os.getenv("NEW_SET_SEARCHES", "3")))):
+        retry = ("\n\nREJECTED (do not choose these or close variants):\n- " + "\n- ".join(rejected)) if rejected else ""
+        found = llm.ask(STORY_STYLE, prompt + retry, NEW_STORY_CANDIDATES, effort="medium", web=True)
+        cands = [c for c in found.get("candidates", []) if c.get("subject")][:3]
+        if not cands:
+            continue
+        with ThreadPoolExecutor(max_workers=len(cands)) as pool:
+            verdicts = list(pool.map(judge, cands))
+        for c, (problem, rank) in zip(cands, verdicts):
+            tried.append((rank, c))
+            if problem:
+                rejected.append(f"{c.get('subject', '')} ({problem})")
+                log.warning("[showrunner] new subject rejected: %s: %s", c.get("subject", ""), problem)
+        passed = [(rank, c) for c, (problem, rank) in zip(cands, verdicts) if not problem]
+        if passed:
+            plan = max(passed, key=lambda t: t[0])[1]
             break
-        rejected.append(f"{plan.get('subject', '')} ({problem})")
-        log.warning("[showrunner] new subject rejected: %s", problem)
-    else:
-        impressive, known, plan = max(tried, key=lambda t: (t[0], t[1]))
+    if plan is None:
+        if not tried:
+            raise NoUnusedStorySets("Fresh topic research returned no candidate subject; no set was built.")
+        (impressive, known), plan = max(tried, key=lambda t: t[0])
         log.warning("QUALITY WARNING: no new subject passed the novelty check; using the most impressive one "
                     "(%d/10, %d%% already know it)", impressive, -known)
     url = str(plan.get("trend_source_url", ""))
@@ -341,7 +423,7 @@ TOPIC_SCHEMA = _obj({
 def pick_topic(set_ids=None, forced_angle=None):
     requested = list(set_ids or sets.AVAILABLE)
     history = _history()
-    set_ids = available_topic_sets(requested, history)
+    set_ids = available_topic_sets(set_ids and requested, history)
     if not set_ids:
         consumed = sorted({h.get("set") for h in history if h.get("set") in requested})
         raise NoUnusedStorySets(
@@ -503,7 +585,7 @@ CRITIQUE_SCHEMA = _obj({
 def _rules(set_id):
     from agents import buildup
     if buildup.enabled(set_id):
-        return buildup.rules(set_id, WORDS_PER_SECOND, word_budget(set_id))
+        return buildup.rules(set_id, words_per_second(), word_budget(set_id))
     sp = sets.spec(set_id)
     order = getattr(sp, "STORY_ORDER", None) or sp.BUILD_ORDER
     hooks = ", ".join(k for k, v in sp.ACTIONS.items() if v["kind"] == "hook")
@@ -516,6 +598,7 @@ def _rules(set_id):
               f"\n  real cause, and make the NEXT beat the fix that answers it. Never use stickers for fail counts,"
               f"\n  scores or attempts (no 'Fail #', no scoreboards).") if fails else ""
     lo, hi = word_budget(set_id)
+    wps = words_per_second()
     return f"""STRUCTURE RULES (the renderer enforces them):
 - Beat 1 = a hook action ({hooks}): pick the one whose VISUAL matches your hook line (the viewer must
   see what the first words say); beat 2 = rewind.
@@ -524,9 +607,9 @@ def _rules(set_id):
 - A beat plays ONE action, or a quick MONTAGE of 2-{max_group} consecutive actions ("actions": ["rebar",
   "shotcrete"]) to race through steps that are not the point. Hooks, the rewind{' and failures' if fails else ''} are single.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
-  {WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. 10-17 beats in total.
+  {wps} x 0.75 words. No beat over 32 words. 10-17 beats in total.
 - Word budget: aim for {hi - 37}-{hi - 12} words and count before returning. The hard allowed range is
-  {lo}-{hi} words in total (~{WORDS_PER_SECOND} words/s); do not draft at
+  {lo}-{hi} words in total (~{wps} words/s, this voice's measured pace); do not draft at
   the upper boundary. Hook <= {HOOK_MAX_WORDS} words.
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "50 tons", text like "of dirt": a REAL measurement only); "label" = a short badge naming a real
@@ -694,33 +777,35 @@ GAG_RE = re.compile(r"\b(physics|fail(ure)?|round|attempt|score|plane|max|take)\
 
 
 def word_budget(set_id):
-    """(min, max) narration words for a set. A Max story ladder gets ~WORDS_PER_BEAT words per beat (its
-    actions + hook + rewind), at least TARGET_WORDS' maximum and at most WORDS_CAP: a 12-beat ladder with
-    four failure mechanisms could not be both clear and funny in 192 words (16 a beat) - every revision
-    traded one for the other. Other formats keep TARGET_WORDS."""
+    """(min, max) narration words for a set, for the voice's measured pace. A Max story ladder gets
+    ~SECONDS_PER_BEAT of narration per beat (its actions + hook + rewind), at least TARGET_SECONDS' maximum and
+    at most MAX_SECONDS: a 12-beat ladder with four failure mechanisms could not be both clear and funny in 80 s
+    (16 words a beat) - every revision traded one for the other. Other formats keep TARGET_SECONDS."""
+    lo, hi = target_words()
     try:
         sp = sets.spec(set_id)
     except Exception:                                    # noqa: BLE001  unknown set: the default budget
-        return TARGET_WORDS
+        return lo, hi
     order = getattr(sp, "STORY_ORDER", None)
     if not (getattr(sp, "HERO", None) and order):
-        return TARGET_WORDS
-    return TARGET_WORDS[0], min(WORDS_CAP, max(TARGET_WORDS[1], WORDS_PER_BEAT * (len(order) + 2)))
+        return lo, hi
+    return lo, min(_words(MAX_SECONDS), max(hi, _words(SECONDS_PER_BEAT * (len(order) + 2))))
 
 
 def hard_checks(script, set_id):
     from agents import buildup
     if buildup.enabled(set_id):
-        return buildup.checks(script, set_id, WORDS_PER_SECOND, word_budget(set_id))
+        return buildup.checks(script, set_id, words_per_second(), word_budget(set_id))
     sp = sets.spec(set_id)
     beats = script["beats"]
     problems = list(sp.validate(beats))
+    wps = words_per_second()
     for k, b in enumerate(beats):
         if GAG_RE.search(b["text"]):
             problems.append(f"beat {k + 1}: score/counter gag ('{GAG_RE.search(b['text']).group(0)}') carries no "
                             "information; replace it with story or explanation")
         n = len(b["text"].split())
-        need = int(sp.min_seconds(b) * WORDS_PER_SECOND * 0.75)
+        need = int(sp.min_seconds(b) * wps * 0.75)
         if k > 1 and n < need:
             problems.append(f"beat {k + 1} {sp.beat_actions(b)} has {n} words; it needs at least {need} to show its actions")
         if n > 32:
@@ -860,6 +945,10 @@ def _last_rejected(topic):
             last = d.get("last") or {}
             if last.get("review"):
                 newest = (last["script"], hard_checks(last["script"], topic["set"]), last["review"])
+                if newest[1] and _ships(newest[2], []):
+                    # good enough except a mechanical rule (a beat one word over): trim it and ship it
+                    fixed, left = repair_rules(newest[0], topic["set"], newest[1])
+                    newest = (fixed, left, newest[2])
                 return max((best, newest), key=lambda candidate: _rank(candidate[2], candidate[1]))
             return best
     return None
@@ -918,6 +1007,10 @@ def _revise(topic, facts, script, problems, review, best, trace=None):
                      "when a beat cannot hold both its lesson and a gag, keep the lesson.")},
             effort="high")
         fixed_problems = hard_checks(fixed, topic["set"])
+        if fixed_problems:
+            # mechanical breaks (a beat one word over, a counter word) are trimmed BEFORE grading: a revision that
+            # met the bar lost to an older fun-6 draft over one word, and the retry was heading for a new subject
+            fixed, fixed_problems = repair_rules(fixed, topic["set"], fixed_problems)
         new_review = critique_script(fixed, topic, facts, fixed_problems)
         log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(new_review['scores'])} | "
                  f"hard problems: {fixed_problems or 0}")
@@ -946,7 +1039,7 @@ def to_film(script, topic, facts, review=None):
         ov = b.get("overlay") or {}
         if ov.get("type") == "label" and re.search(r"\d", str(ov.get("text", ""))):
             ov = {}                     # no counters/scores/"Fail #N" labels; numbers belong in real stats
-        if sp.ACTIONS[acts[0]].get("label"):
+        if sp.ACTIONS[acts[0]].get("label") or (ov and sets.repeats_label(ov, sets.scene_labels(topic["set"], acts))):
             ov = {}                     # the scene already shows this beat's label: a sticker would stack on it
         if ov.get("type") == "stat" and ov.get("value"):
             beat["overlay"] = {"type": "stat", "value": ov["value"], "text": ov.get("text", "")}
@@ -968,6 +1061,15 @@ def to_film(script, topic, facts, review=None):
     return film
 
 
+def _hook_for(set_id, prose):
+    """The set's hook action whose "shows" shares the most words with a hook described in prose ('' if none)."""
+    hooks = [(k, v) for k, v in sets.spec(set_id).ACTIONS.items() if v.get("kind") == "hook"]
+    if not hooks:
+        return ""
+    words = set(re.findall(r"[a-z]{4,}", prose.lower()))
+    return max(hooks, key=lambda kv: len(words & set(re.findall(r"[a-z]{4,}", kv[1].get("shows", "").lower()))))[0]
+
+
 def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on_topic=None):
     import time
     t0 = time.time()
@@ -977,6 +1079,10 @@ def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on
     log.info(f"[showrunner] backend: {backend} ({detail}), quality: {QUALITY}"
              + (f", fallback: {fallback}" if fallback else ""))
     needed = ("title", "angle", "hook_line", "hook_action", "payoff", "trend_signal", "trend_source_url")
+    if topic_hint and set_id and topic_hint.get("hook_action") not in sets.spec(set_id).ACTIONS:
+        # a new-set plan describes its hook in prose: film it with the set's hook action that shows it, instead
+        # of throwing the planned angle away for a fresh web topic search
+        topic_hint = dict(topic_hint, hook_action=_hook_for(set_id, str(topic_hint.get("hook_action") or "")))
     hint_is_filmable = (topic_hint and set_id and all(topic_hint.get(k) for k in needed)
                         and topic_hint.get("hook_action") in sets.spec(set_id).ACTIONS)
     if hint_is_filmable:

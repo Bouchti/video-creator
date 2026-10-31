@@ -27,7 +27,6 @@ from engine import sets
 log = logging.getLogger("pipeline")
 
 OPEN_MAX_WORDS = 18
-TARGET_WORDS = sr.TARGET_WORDS
 
 EVO_STYLE = """You write narration for 55-75 second vertical 3D "EVOLUTION" videos (TikTok, Reels, Shorts):
 one continuous 3D world seen from drone height, where a thing has to keep getting smarter because
@@ -60,14 +59,16 @@ The format, beat by beat:
 
 def _rules(set_id):
     sp = sets.spec(set_id)
+    lo, hi = sr.target_words()
+    wps = sr.words_per_second()
     pairs = "; ".join(f"{p} then {s}" for p, s in getattr(sp, "ANSWERS", {}).items())
     return f"""STRUCTURE RULES (the renderer enforces them):
 - The actions, exactly once each, in this order: {' → '.join(sp.STAGE_ORDER)}.
 - One action per beat. A problem may share ONE beat with the fix that answers it ("actions":
   ["heat", "expansion_joint"]) when both lines are short. Problem/fix pairs: {pairs}.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
-  {sr.WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. Opening <= {OPEN_MAX_WORDS} words.
-- Word budget: {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{sr.WORDS_PER_SECOND} words/s).
+  {wps} x 0.75 words. No beat over 32 words. Opening <= {OPEN_MAX_WORDS} words.
+- Word budget: {lo}-{hi} words in total (~{wps} words/s).
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "120 m", text like "river width": a REAL measurement only); "label" = a short badge naming a real
   idea, no numbers (e.g. "Cables only pull"). Use "none" on most beats, at most 5 stickers, never

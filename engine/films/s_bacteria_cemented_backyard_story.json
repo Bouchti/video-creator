@@ -1,0 +1,78 @@
+{
+  "title": "Max turns his sandcastle into stone (with bacteria)",
+  "set": "s_bacteria_cemented_backyard_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "wave_hook",
+      "action": "wave_hook",
+      "video": "epilogue",
+      "text": "A wave is about to hit Max's sandcastle. His kids are inside it."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's rewind to his first try."
+    },
+    {
+      "id": "dry_tower",
+      "action": "dry_tower",
+      "text": "Max wants a two-metre castle for his kids. Sand is just tiny rocks, he says, and rocks stack."
+    },
+    {
+      "id": "fail_pour",
+      "action": "fail_pour",
+      "text": "It pours into a 34-degree cone. Dry grains have nothing pulling them together.",
+      "overlay": {"type": "stat", "value": "34°", "text": "angle of repose"}
+    },
+    {
+      "id": "mist",
+      "action": "mist",
+      "text": "One percent water forms tiny bridges whose surface tension pulls grains together. It holds 45 degrees.",
+      "overlay": {"type": "stat", "value": "1%", "text": "water by volume"}
+    },
+    {
+      "id": "fail_flood",
+      "action": "fail_flood",
+      "text": "More water is better? Full pores merge the bridges, and the heavy mud slumps."
+    },
+    {
+      "id": "pack",
+      "action": "pack",
+      "text": "Back to one percent, packed hard: seventy thumps, like the lab test. Tighter grains, more bridges. It stands."
+    },
+    {
+      "id": "fail_tide",
+      "action": "fail_tide",
+      "text": "Then the tide comes in. The moat fills first, water creeps into every pore, and the castle melts."
+    },
+    {
+      "id": "spray_bacteria",
+      "action": "spray_bacteria",
+      "text": "So Max sprays in soil bacteria, Sporosarcina pasteurii, the same microbes engineers use to make biocement.",
+      "overlay": {"type": "label", "text": "Biocement bacteria"}
+    },
+    {
+      "id": "fail_wave",
+      "action": "fail_wave",
+      "text": "The next wave melts it anyway. Bacteria alone glue nothing: to grow cement crystals, they need urea and calcium."
+    },
+    {
+      "id": "cement_bath",
+      "action": "cement_bath",
+      "text": "Three days in a urea and calcium chloride bath, two days drying: calcite glues every grain like sandstone. It releases ammonium, so gloves on.",
+      "overlay": {"type": "label", "text": "Calcite crystals"}
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "The wave hits. It stands. Scientists bio-cemented a full-size dune in an Oregon flume: 19 trials, 300 waves each. Would you build one?",
+      "overlay": {"type": "stat", "value": "19 x 300", "text": "waves survived"}
+    }
+  ],
+  "cta": "Would you build one?"
+}

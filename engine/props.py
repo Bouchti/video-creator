@@ -134,9 +134,32 @@ def _import(path, name, size_m, style=True):
     root.scale = (s, s, s)
     for o in meshes:
         o.visible_shadow = True
+    light(meshes)
     if style:
         toon(meshes)
     return root
+
+
+def light(objs):
+    """Render-time weight of a downloaded model: subdivision capped at one level and fast booleans. A BlenderKit
+    birthday cake (subdivision + displace + booleans + geometry nodes at render levels) took 45 s of CPU per
+    frame with the GPU idle: the floating-cabin finale would have rendered for 4 hours. The toon pass flattens
+    that detail anyway."""
+    for ob in objs:
+        for m in getattr(ob, "modifiers", []):
+            if m.type == "SUBSURF":
+                m.levels = min(m.levels, 1)
+                m.render_levels = min(m.render_levels, 1)
+            elif m.type == "MULTIRES":
+                m.render_levels = min(m.render_levels, 1)
+                m.levels = min(m.levels, 1)
+            elif m.type == "BOOLEAN":
+                for solver in ("FAST", "FLOAT"):          # (the fast solver's name differs between versions)
+                    try:
+                        m.solver = solver
+                        break
+                    except TypeError:
+                        continue
 
 
 def _placeholder(name, size_m):

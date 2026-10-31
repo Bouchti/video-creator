@@ -19,7 +19,8 @@ log = logging.getLogger("pipeline")
 
 # words per second of TIGHTENED narration, per voice engine (measured; updated after every recording in
 # output/voice_rates.json). Chatterbox speaks ~25 % faster than ElevenLabs: a 146-word script made 46 s.
-VOICE_RATES = {"elevenlabs": 2.55, "edge": 2.5, "chatterbox": 3.15}
+VOICE_RATES = {"elevenlabs": 2.55, "edge": 2.5, "chatterbox": 3.15,
+               "elevenlabs/cutaway": 2.4}   # raw voice with beat pauses: 206 words -> 76.5 s, 198 -> 82.8 s
 
 
 def _rates_file():
@@ -28,23 +29,37 @@ def _rates_file():
     return os.path.join(PROJECT_ROOT, "output", "voice_rates.json")
 
 
-def voice_rate(engine=None):
+def _rate_key(engine, route):
     import os
     engine = (engine or os.getenv("VOICE_ENGINE") or "elevenlabs").strip().lower()
+    return engine, f"{engine}/{route}" if route else engine
+
+
+def voice_rate(engine=None, route=None):
+    """Measured words per second. A route ("cutaway": the raw voice WITH its beat pauses, as make_film plays it)
+    keeps its own rate; until it has one it uses its default, else the engine's (the tightened stage voice)."""
+    engine, key = _rate_key(engine, route)
     try:
         with open(_rates_file(), encoding="utf-8") as fh:
-            measured = json.load(fh).get(engine)
-        if measured and 1.5 < float(measured) < 4.5:
-            return float(measured)
+            rates = json.load(fh)
     except (OSError, ValueError):
-        pass
-    return VOICE_RATES.get(engine, 2.55)
+        rates = {}
+    for k in dict.fromkeys((key, engine)):
+        try:
+            measured = float(rates.get(k) or 0) if isinstance(rates, dict) else 0
+        except (TypeError, ValueError):
+            measured = 0
+        if 1.5 < measured < 4.5:
+            return measured
+        if k in VOICE_RATES:
+            return VOICE_RATES[k]
+    return 2.55
 
 
-def record_rate(words, seconds, engine=None):
+def record_rate(words, seconds, engine=None, route=None):
     """Keep a running average of what the engine really does, so the next script is the right length."""
     import os
-    engine = (engine or os.getenv("VOICE_ENGINE") or "elevenlabs").strip().lower()
+    engine, key = _rate_key(engine, route)
     if seconds <= 5 or words <= 10:
         return
     path = _rates_file()
@@ -54,7 +69,7 @@ def record_rate(words, seconds, engine=None):
     except (OSError, ValueError):
         rates = {}
     rate = words / seconds
-    rates[engine] = round(0.5 * rates[engine] + 0.5 * rate, 3) if engine in rates else round(rate, 3)
+    rates[key] = round(0.5 * rates[key] + 0.5 * rate, 3) if key in rates else round(rate, 3)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(rates, fh, indent=1)

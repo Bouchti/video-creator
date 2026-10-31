@@ -20,3 +20,12 @@ def _no_real_ai(monkeypatch):
             return os.path.join(_FAKE_DIR, f"{name}.exe")
         return _real_which(cmd, *a, **k)
     monkeypatch.setattr(shutil, "which", which)
+
+
+@pytest.fixture(autouse=True)
+def _reference_voice(monkeypatch, tmp_path):
+    """Script sizing follows the measured voice pace (output/voice_rates.json) and VOICE_ENGINE from .env: a test
+    sees the ElevenLabs reference pace unless it sets its own, and never reads or writes the real rates file."""
+    from agents import stage_writer
+    monkeypatch.setenv("VOICE_ENGINE", "elevenlabs")
+    monkeypatch.setattr(stage_writer, "_rates_file", lambda: str(tmp_path / "voice_rates.json"))

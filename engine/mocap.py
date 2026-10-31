@@ -28,6 +28,10 @@ ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 LIBS = ("universal-animation-library/**/Unreal-Godot/UAL1_Standard.glb",
         "universal-animation-library-2/**/Unreal-Godot/UAL2_Standard.glb")
 BLEND = 8          # cross-fade frames between clips
+# work one-shots that read as the same action done again when repeated (scooping sand, spraying, hammering at a
+# fix): over a range longer than the clip they REPEAT. Others (a fall, a hit, a nod) play once and hold the end.
+# "pick_up" given 60 frames played its 20 and froze: the reviewer saw Max "never dump sand, only hold a bucket".
+REPEAT = {"pick_up", "interact", "water", "plant", "harvest", "throw", "fix", "punch", "open_chest", "eat"}
 FPS = 30
 
 # toy joint -> (driving bone, bone of the toy joint's parent; None = the armature itself)
@@ -213,16 +217,18 @@ class Mocap:
         travel = max(ys) - min(ys)
         return travel / (0.55 * c.frames / FPS) * height / self.pelvis_height
 
-    def perform(self, char, segments, speed=1.0, hips_height=0.56):
-        """Key `char`'s joints from `segments` = [(clip, f0, f1) or (clip, f0, f1, clip_speed)], in order.
-        Neighbouring segments cross-fade over BLEND frames; gaps hold the last pose."""
+    def perform(self, char, segments, speed=1.0, hips_height=0.56, skip=None):
+        """Key `char`'s joints from `segments` = [(clip, f0, f1[, clip_speed[, origin]])], in order (origin: the
+        frame the clip's time counts from, default f0). Neighbouring segments cross-fade over BLEND frames; gaps
+        hold the last pose. skip(joint, frame) -> True leaves that joint's key at that frame to hand animation."""
         if not self.clips:
             return False
         segs = []
         for s in segments:
             c = self.clip(s[0])
             if c is not None:
-                segs.append((c, s[1], s[2], s[3] if len(s) > 3 else speed))
+                segs.append((c, s[1], s[2], s[3] if len(s) > 3 else speed, s[4] if len(s) > 4 else s[1],
+                             c.loop or s[0] in REPEAT or s[0] in {CLIPS.get(k) for k in REPEAT}))
         if not segs:
             return False
         scale = hips_height / self.pelvis_height
@@ -230,13 +236,13 @@ class Mocap:
         rest_hips = Vector(char.rest_loc["hips"])
 
         def at(seg, f):
-            c, f0, _f1, sp = seg
-            t = (f - f0) * sp
-            t = (t % c.frames) if c.loop else min(t, c.frames)
+            c, _f0, _f1, sp, origin, cyclic = seg
+            t = (f - origin) * sp
+            t = (t % c.frames) if cyclic else min(t, c.frames)
             return c.sample(c.f0 + t)
 
         for k, seg in enumerate(segs):
-            _c, f0, f1, _sp = seg
+            _c, f0, f1, _sp, _o, _cy = seg
             nxt = segs[k + 1] if k + 1 < len(segs) else None
             for f in range(f0, f1 + 1):
                 rot, lift = at(seg, f)
@@ -247,7 +253,7 @@ class Mocap:
                     rot = {j: rot[j].slerp(r2[j], w) for j in rot}
                     lift = lift.lerp(l2, w)
                 for j, q in rot.items():
-                    if j not in char.j:
+                    if j not in char.j or (skip and skip(j, f)):
                         continue
                     ob = char.j[j]
                     ob.rotation_mode = "XYZ"
@@ -255,7 +261,8 @@ class Mocap:
                     ob.rotation_euler = e
                     prev_euler[j] = e
                     ob.keyframe_insert("rotation_euler", frame=f)
-                hips = char.j["hips"]
-                hips.location = rest_hips + Vector((0, 0, lift.z * scale))
-                hips.keyframe_insert("location", frame=f)
+                if not (skip and skip("hips", f)):
+                    hips = char.j["hips"]
+                    hips.location = rest_hips + Vector((0, 0, lift.z * scale))
+                    hips.keyframe_insert("location", frame=f)
         return True

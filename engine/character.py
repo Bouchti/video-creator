@@ -8,6 +8,7 @@ keyframed joint rotation: walk, wave, cheer, point, dig, hammer, talk, blink,
 look-around, and idle breathing.
 """
 import math
+import os
 import random
 
 import bmesh
@@ -115,7 +116,102 @@ def _half_sphere(name, radius, mat, parent, location, scale=(1, 1, 1)):
     return toy._finish(obj, mat, subdiv=2, parent=parent)
 
 
+HAND_MARGIN = 6       # frames a motion-capture clip keeps away from a hand-keyed joint (it blends in and out)
+HAND_GAP = 24         # hand keys closer than this on one joint are one gesture (the clip stays out in between)
+LIMB_CHILD = {"elbowL": "shoulderL", "elbowR": "shoulderR", "kneeL": "legL", "kneeR": "legR"}
+
+
+LOW_CLIPS = {"fix", "crouch", "sneak", "push", "pick_up", "plant", "harvest", "water", "open_chest", "roll"}
+CLOSE_FRAC = 0.33     # a character this tall on screen (share of the frame height) is in a close shot
+HEIGHT = 1.9          # a scale-1 character's height (m)
+
+
+def _camera_at(scene, f):
+    """(camera position, unit view direction, vertical field of view) at frame f, from the animation curves (no
+    frame_set). The view direction follows a TRACK_TO target (engine/camera.CameraRig aims through one)."""
+    cam = scene.camera
+    pos = toy.world_location_at(cam, f)
+    target = next((c.target for c in cam.constraints if c.type == "TRACK_TO" and c.target and not c.mute), None)
+    if target is not None:
+        view = toy.world_location_at(target, f) - pos
+    else:
+        view = toy.world_matrix_at(cam, f).to_3x3() @ Vector((0, 0, -1))
+    lens = next((fc.evaluate(f) for fc in toy.fcurves(cam.data) if fc.data_path == "lens"), cam.data.lens)
+    r = scene.render
+    tall = r.resolution_y >= r.resolution_x               # sensor_fit AUTO: the sensor spans the longer side
+    span = cam.data.sensor_width * (1.0 if tall else r.resolution_y / max(1, r.resolution_x))
+    return pos, view.normalized() if view.length > 1e-6 else Vector((0, 1, 0)), 2 * math.atan(span / (2 * lens))
+
+
+def screen_share(scene, ch, f):
+    """How tall `ch` stands on screen at frame f (share of the frame height), 0 when off screen."""
+    pos, view, fov = _camera_at(scene, f)
+    h = HEIGHT * ch.look["scale"]
+    head = toy.world_location_at(ch.root, f) + Vector((0, 0, 0.75 * h))
+    d = head - pos
+    depth = d.dot(view)
+    if depth <= 0.05:
+        return 0.0
+    right = view.cross(Vector((0, 0, 1)))
+    right = right.normalized() if right.length > 1e-6 else Vector((1, 0, 0))
+    up = right.cross(view)
+    r = bpy.context.scene.render
+    half_y = math.tan(fov / 2)
+    half_x = half_y * r.resolution_x / max(1, r.resolution_y)
+    if abs(d.dot(right) / depth) > half_x * 1.1 or abs(d.dot(up) / depth) > half_y * 1.1:
+        return 0.0
+    return h / depth / (2 * half_y)
+
+
+def upright_close_ups(scene=None, log=print, step=2, gap=8, pad=4):
+    """A kneeling / bending clip in a close shot of that character films the top of his hat from centimetres away
+    (the flood-house film opened four beats on a giant orange hat: the close camera aims at standing head height
+    while 'fix' kneels him toward it; the water-tower film laid Max flat over a footing with 'crouch'). Before the
+    clips play, the frames of such a clip where the camera is close on its character get the upright talk clip
+    instead (later calls win the frames they share). Returns {character: frames swapped}."""
+    scene = scene or bpy.context.scene
+    if scene.camera is None:
+        return {}
+    done = {}
+    for ch in Character.cast:
+        add = []
+        for clip, a, b, _sp, _fb, _walk in list(ch._queue):
+            if clip not in LOW_CLIPS or b <= a:
+                continue
+            close = [f for f in range(a, b + 1, step) if screen_share(scene, ch, f) >= CLOSE_FRAC]
+            runs = []
+            for f in close:
+                if runs and f - runs[-1][1] <= gap:
+                    runs[-1][1] = f
+                else:
+                    runs.append([f, f])
+            add += [(max(a, r0 - pad), min(b, r1 + pad)) for r0, r1 in runs]
+        for r0, r1 in add:
+            ch._queue.append(("talk", r0, r1, 1.0, None, None))
+        if add:
+            done[ch.name] = sum(r1 - r0 + 1 for r0, r1 in add)
+    if done:
+        log("close shots: kneeling/bending clips swapped for an upright one while the camera is close: "
+            + ", ".join(f"{k} ({v} f)" for k, v in sorted(done.items())))
+    return done
+
+
+def perform_queued():
+    """Play every character's queued motion capture (act / idle / talk / walk), once the whole scene is keyed:
+    engine/films/cutaway_film.py calls it after the set has animated every beat (and built its camera)."""
+    if os.getenv("CLOSE_UPRIGHT", "1") == "1":
+        try:
+            upright_close_ups()
+        except Exception as exc:                           # noqa: BLE001  a guard, never a crash
+            print(f"close shots: upright guard skipped ({exc})")
+    for ch in Character.cast:
+        ch._perform_queue()
+    Character.cast.clear()
+
+
 class Character:
+    cast = []         # every character built in this Blender session (perform_queued plays their clips)
+
     def __init__(self, name: str, look: dict = None, location=(0, 0, 0), facing_deg=0.0):
         self.name = name
         self.look = {**DEFAULT_LOOK, **(look or {})}
@@ -125,6 +221,125 @@ class Character:
         self.root.rotation_euler = (0, 0, R(facing_deg))
         self.root.scale = (self.look["scale"],) * 3
         self.held = None
+        self._queue = []
+        Character.cast.append(self)
+
+    # ------------------- MOTION CAPTURE -------------------
+
+    def act(self, clip: str, start: int, end: int, speed: float = 1.0, fallback=None, _walk=None):
+        """The whole body plays a motion-capture clip (engine/mocap.py, Quaternius CC0) from start to end: a
+        meaning from mocap.CLIPS ("idle", "talk", "yes", "no", "fold_arms", "jump", "dance", "knocked", "fall",
+        "get_up", "push", "pick_up", "interact", "throw", "fix", "crouch", "walk", "jog", "run") or a library
+        clip name. Real motion instead of hand-keyed poses (the tunnel film's raw pose keys read as stiff).
+        Work clips (pick_up, water, interact, fix, plant, throw) REPEAT over a range longer than the clip (scooping
+        again and again); reactions (yes, no, fall, knocked, jump) play once and hold their end pose.
+        Queued and played after the whole scene is keyed: hand keys on a joint (a point, a hammer stroke, a
+        look_at) keep that joint, and the clip blends around them. Later calls win the frames they share with
+        earlier ones. fallback() keys the old hand animation when the library or the clip is missing."""
+        self._queue.append((clip, int(start), int(end), speed, fallback, _walk))
+
+    def _hand_keyed(self):
+        """{joint: [(f0, f1)]}: frames keyed by hand on each joint (any key, however it was made)."""
+        from engine.mocap import JOINTS, _fcurves
+        out = {}
+        for j in JOINTS:
+            ob = self.j.get(j)
+            ad = ob.animation_data if ob is not None else None
+            if ad is None or ad.action is None:
+                continue
+            frames = sorted({int(round(kp.co.x)) for fc in _fcurves(ad.action)
+                             if fc.data_path in ("rotation_euler", "location") for kp in fc.keyframe_points})
+            spans = []
+            for f in frames:
+                if spans and f - spans[-1][1] <= HAND_GAP:
+                    spans[-1][1] = f
+                else:
+                    spans.append([f, f])
+            out[j] = [(a - HAND_MARGIN, b + HAND_MARGIN) for a, b in spans]
+        return out
+
+    def _perform_queue(self):
+        if not self._queue:
+            return
+        try:
+            from engine.mocap import Mocap
+            mc = Mocap() if os.getenv("CUT_MOCAP", "1") != "0" else None     # CUT_MOCAP=0: hand animation only
+            ok = mc is not None and mc.available()
+        except Exception:                                  # noqa: BLE001  no library: the hand animation plays
+            mc, ok = None, False
+        hand = self._hand_keyed() if ok else {}
+        segs = []
+        for clip, a, b, speed, fallback, walk in self._queue:
+            if ok and mc.clip(clip) is not None and b > a:
+                if walk:                                   # the clip's own stride at this root speed: no sliding
+                    natural = mc.ground_speed(clip, 0.56 * self.look["scale"])
+                    if natural > 0:
+                        speed = min(2.0, max(0.5, walk / ((b - a) / 30) / natural))
+                segs.append((clip, a, b, speed))
+            elif fallback is not None:
+                fallback()
+        self._queue = []
+        if not segs:
+            return
+        lo, hi = min(s[1] for s in segs), max(s[2] for s in segs)
+        owner = [-1] * (hi - lo + 1)
+        for i, (_c, a, b, _sp) in enumerate(segs):         # a later call wins the frames it shares
+            owner[a - lo:b - lo + 1] = [i] * (b - a + 1)
+        runs, f = [], lo
+        while f <= hi:
+            i, g = owner[f - lo], f
+            while g + 1 <= hi and owner[g + 1 - lo] == i:
+                g += 1
+            if i >= 0:
+                clip, a, _b, sp = segs[i]
+                runs.append((clip, f, g, sp, a))           # (the clip keeps its phase across an interruption)
+            f = g + 1
+
+        # A hand-keyed shoulder (or hip) is a straight-limb pose: the clip must not bend the elbow (or knee) under
+        # it. With the idle clip folding the elbow under a hand-raised arm, the sandcastle's bucket ended up in
+        # front of Max's face instead of over the tower. The child joint rests straight through the gesture.
+        straight = {}
+        for child, parent in LIMB_CHILD.items():
+            if parent in hand and child in self.j:
+                own = hand.get(child, [])
+                spans = [(a, b) for a, b in hand[parent] if not any(x <= b and a <= y for x, y in own)]
+                if spans:
+                    hand[child] = own + spans
+                    straight[child] = spans
+
+        def skip(joint, frame):
+            return any(a <= frame <= b for a, b in hand.get(joint, ()))
+
+        # Outside its frames a clip must leave no trace: its last key would otherwise hold for the rest of the
+        # film (the tunnel's Max carried the end of a talk gesture, right foot forward and down, into every
+        # later beat, through roofs and hulls). Key each joint's own pose BLEND frames before and after every
+        # clip, so the clip blends in and out of whatever the scene had there.
+        from engine.mocap import BLEND, JOINTS
+        scene = bpy.context.scene
+        now = scene.frame_current
+        covered = [(a, b) for _c, a, b, _s, _o in runs]
+        edges = sorted({f for a, b in covered for f in (a - BLEND, b + BLEND)
+                        if f >= 0 and not any(x <= f <= y for x, y in covered)})
+        held = {}
+        for f in edges:
+            scene.frame_set(f)
+            held[f] = {j: (self.j[j].rotation_euler.copy(), self.j[j].location.copy()) for j in JOINTS if j in self.j}
+        scene.frame_set(now)
+        mc.perform(self, runs, hips_height=0.56, skip=skip)
+        for child, spans in straight.items():           # straight through the gesture (blends at its margins)
+            ob = self.j[child]
+            for a, b in spans:
+                for f in (a + HAND_MARGIN, b - HAND_MARGIN):
+                    ob.rotation_euler = self.rest[child]
+                    ob.keyframe_insert("rotation_euler", frame=f)
+        for f, pose in held.items():
+            for j, (rot, loc) in pose.items():
+                ob = self.j[j]
+                ob.rotation_euler = rot
+                ob.keyframe_insert("rotation_euler", frame=f)
+                if j == "hips":
+                    ob.location = loc
+                    ob.keyframe_insert("location", frame=f)
 
     # ------------------- BUILD -------------------
 
@@ -360,14 +575,16 @@ class Character:
     # ------------------- ACTIONS -------------------
 
     def idle(self, start: int, end: int, seed: int = 0):
-        """Breathing + small weight shifts so a standing character is never frozen."""
-        rnd = random.Random(seed)
-        f = start
-        while f <= end:
-            k = (f - start) / 20
-            self.key("spine", f, rot_deg=(2 * math.sin(k), 0, 1.5 * math.sin(k * 0.6)))
-            self.key("head", f, rot_deg=(3 * math.sin(k * 0.8 + 1), 0, rnd.uniform(-6, 6)))
-            f += 12
+        """Standing, alive: motion-captured idle (breathing, weight shifts), so a character is never frozen."""
+        def by_hand():
+            rnd = random.Random(seed)
+            f = start
+            while f <= end:
+                k = (f - start) / 20
+                self.key("spine", f, rot_deg=(2 * math.sin(k), 0, 1.5 * math.sin(k * 0.6)))
+                self.key("head", f, rot_deg=(3 * math.sin(k * 0.8 + 1), 0, rnd.uniform(-6, 6)))
+                f += 12
+        self.act("idle", start, end, fallback=by_hand)
 
     def walk(self, start: int, end: int, to, facing_deg: float, step_frames: int = 9, hold_arm=None,
              hold_rot=(-40, 0, 0)):
@@ -381,20 +598,27 @@ class Character:
         self.root.location = to
         self.root.keyframe_insert("location", frame=end)
         toy.set_interpolation(self.root, "location", (start, end), "LINEAR")  # constant speed: no foot sliding
-        f, phase = start, 0
-        while f <= end:
-            s = 1 if phase % 2 == 0 else -1
+        for f in range(start, end + 1, step_frames):
             events.add(f, "step", gain=0.6)
-            self.key("legL", f, rot_deg=(28 * s, 0, 0))
-            self.key("legR", f, rot_deg=(-28 * s, 0, 0))
-            self.key("shoulderL", f, rot_deg=hold_rot if hold_arm == "L" else (-30 * s, 0, 4))
-            self.key("shoulderR", f, rot_deg=hold_rot if hold_arm == "R" else (30 * s, 0, -4))
-            self.key("hips", f, loc=(0, 0, 0.56))
-            self.key("hips", f + step_frames // 2, loc=(0, 0, 0.6))
-            self.key("spine", f, rot_deg=(6, 0, 4 * s))
-            f += step_frames
-            phase += 1
-        self.pose(end + 4)
+
+        def by_hand():
+            f, phase = start, 0
+            while f <= end:
+                s = 1 if phase % 2 == 0 else -1
+                self.key("legL", f, rot_deg=(28 * s, 0, 0))
+                self.key("legR", f, rot_deg=(-28 * s, 0, 0))
+                self.key("shoulderL", f, rot_deg=hold_rot if hold_arm == "L" else (-30 * s, 0, 4))
+                self.key("shoulderR", f, rot_deg=hold_rot if hold_arm == "R" else (30 * s, 0, -4))
+                self.key("hips", f, loc=(0, 0, 0.56))
+                self.key("hips", f + step_frames // 2, loc=(0, 0, 0.6))
+                self.key("spine", f, rot_deg=(6, 0, 4 * s))
+                f += step_frames
+                phase += 1
+            self.pose(end + 4)
+        # carrying: the library's carry walk (arms out in front), else the plain walk; the stride follows the
+        # root's real speed (world metres per second)
+        self.act("Walk_Carry_Loop" if hold_arm else "walk", start, end, fallback=by_hand,
+                 _walk=max(0.01, (to - frm).length))
 
     def wave(self, start: int, end: int, hand: str = "R"):
         sign = -1 if hand == "R" else 1
@@ -451,18 +675,22 @@ class Character:
         self.key(f"shoulder{hand}", end, rot_deg=(0, 0, 0))
 
     def talk(self, start: int, end: int):
-        """Mouth flaps + head nods + one gesturing arm."""
-        f, n = start, 0
-        while f < end:
-            self.key("mouth", f, scale=(0.9, 0.6, 1.0 + (1.2 if n % 2 == 0 else 0.0)))
-            self.key("head", f, rot_deg=(4 if n % 3 == 0 else -2, 0, 6 * math.sin(n)))
-            f += 5
-            n += 1
+        """'Explaining' while the narrator speaks: head nods + one gesturing arm, the mouth SHUT. A flapping
+        mouth under a third-person narrator read as Max saying the narration (the tunnel film)."""
+        self.key("mouth", start, scale=(0.7, 0.6, 1.0))
         self.key("mouth", end, scale=(0.7, 0.6, 1.0))
-        self.key("shoulderL", start, rot_deg=(0, 0, 0))
-        self.key("shoulderL", start + 10, rot_deg=(-55, 0, 20))
-        self.key("shoulderL", end - 8, rot_deg=(-45, 0, 30))
-        self.key("shoulderL", end, rot_deg=(0, 0, 0))
+
+        def by_hand():
+            f, n = start, 0
+            while f < end:
+                self.key("head", f, rot_deg=(4 if n % 3 == 0 else -2, 0, 6 * math.sin(n)))
+                f += 5
+                n += 1
+            self.key("shoulderL", start, rot_deg=(0, 0, 0))
+            self.key("shoulderL", start + 10, rot_deg=(-55, 0, 20))
+            self.key("shoulderL", end - 8, rot_deg=(-45, 0, 30))
+            self.key("shoulderL", end, rot_deg=(0, 0, 0))
+        self.act("talk", start, end, fallback=by_hand)    # motion-captured explaining gestures (mouth shut)
 
     def look(self, frame: int, yaw_deg: float, pitch_deg: float = 0):
         self.key("head", frame, rot_deg=(pitch_deg, 0, yaw_deg))

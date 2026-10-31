@@ -102,8 +102,21 @@ def plan_windows(film: dict, spans: list, seconds: float = None, spec=None) -> l
             b = f0 + (f1 - f0 + 1) * (j + 1) // n - 1
             out.append({"window": len(out) + 1, "beat": k + 1, "action": "+".join(acts), "part": f"{j + 1}/{n}",
                         "f0": a, "f1": b, "t0": (a - 1) / FPS, "t1": b / FPS, "shows": " ".join(shows),
-                        "text": beat.get("text", "")})
+                        "text": beat.get("text", ""), "hook": k == 0 and j == 0 and is_hook(acts, spec)})
     return out
+
+
+def is_hook(acts, spec) -> bool:
+    """A film's opening hook action (kind "hook": the payoff or the disaster replayed first)."""
+    return spec is not None and any(spec.ACTIONS.get(a, {}).get("kind") == "hook" for a in acts)
+
+
+HOOK_RULE = (". THIS IS THE FILM'S FIRST SECOND, THE HOOK: people scroll away in one second, so judge the START "
+             "still as the hook. It must show something surprising, spectacular or funny VISIBLY HAPPENING (the "
+             "disaster mid-way, the impossible result, a big reaction), big enough to read on a phone. A person "
+             "standing, pointing or walking next to an object is NOT enough, nor a calm establishing shot. If it "
+             "would not stop a thumb mid-scroll, that is fatal: put 'hook: <why>' in fatal_problems and give the "
+             "fix that makes the first second the most spectacular moment of the action")
 
 
 def sample_picks(w: dict) -> list[tuple[str, int]]:
@@ -210,13 +223,16 @@ SCORES = ("visual_match", "readability", "image_quality", "continuity")
 def _instructions(w, subject, previous):
     extra = " (plus the previous window's end frame, for continuity)" if previous else ""
     first, _, count = str(w.get("part") or "").partition("/")
-    if first == "1" and count.isdigit() and int(count) > 1:
+    if w.get("hook"):
+        # the cutaway route had no hook check (the director route did), and the tunnel film's hook was weak
+        extra += HOOK_RULE
+    elif first == "1" and count.isdigit() and int(count) > 1:
         # the film's first window of a beat is its setup shot (Max making his change), like the preview's
         # 1/8 still: "no clay core shown yet" rejected a correct setup
         extra += (". This is the FIRST part of its beat: the setup (Max making his change, close up). Never fault "
                   "the absence of the result, its labels or arrows, or the payoff here; judge only that the "
                   "setup is clear and on track")
-    if w.get("part") == "whole beat":
+    if w.get("part") == "whole beat" and not w.get("hook"):
         # Set previews: the stills sit at 1/8, 1/2 and 7/8 of the beat, and every beat opens on Max making his
         # change before the mechanism and its result are shown. Faulting the opening still for the payoff
         # rejected almost every beat of the first auto-built levee set.

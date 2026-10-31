@@ -83,7 +83,10 @@ def _credits_left(key: str):
 
 def elevenlabs_post(url: str, payload: dict, characters: int = 0, timeout: int = 60):
     """POST to ElevenLabs with the first configured key that has `characters` credits left, starting from the
-    key that worked last time; a 429 is retried once and an unusable key moves on to the next one."""
+    key that worked last time; a 429 is retried once and an unusable key moves on to the next one.
+    ELEVENLABS_DISABLED=1 refuses every call (test runs: the voice uses VOICE_ENGINE, effects the free libraries)."""
+    if os.getenv("ELEVENLABS_DISABLED") == "1":
+        raise RuntimeError("ElevenLabs is disabled (ELEVENLABS_DISABLED=1)")
     keys = elevenlabs_keys()
     if not keys:
         raise RuntimeError("No ElevenLabs key configured (ELEVENLABS_API_KEY, ELEVENLABS_API_KEY_2, ...)")
@@ -180,6 +183,9 @@ CHATTERBOX_PY = os.path.join(CHATTERBOX_DIR, ".venv", "Scripts" if os.name == "n
 # narration style -> (exaggeration, cfg_weight): more exaggeration = livelier delivery, lower cfg = looser pace
 CHATTERBOX_STYLES = {"energetic": (0.7, 0.4), "playful": (0.75, 0.4), "mysterious": (0.5, 0.5),
                      "calm": (0.4, 0.5), "dramatic": (0.8, 0.35)}
+# Chatterbox at these styles speaks ~3 words/s even with the beat pauses (the published films: ~2.4). Measured
+# on the tunnel narration: cfg_weight 0.3 changes nothing, exaggeration 0.5 slows to 2.71 but flattens the
+# delivery; a 0.92 tempo (VOICE_SPEED, as the Edge voice) keeps the lively read at 2.73 words/s.
 
 
 def _chatterbox_voiceover(spoken_script: str, voice: str) -> str:
@@ -212,7 +218,13 @@ def _chatterbox_voiceover(spoken_script: str, voice: str) -> str:
             lock.__exit__(None, None, None)
     if r.returncode != 0 or not os.path.isfile(out):
         raise RuntimeError((r.stderr or r.stdout)[-400:])
-    log.info("Narration voiced by Chatterbox (%s)", voice)
+    tempo = min(1.5, max(0.7, float(os.getenv("VOICE_SPEED") or 0.92)))
+    if abs(tempo - 1) > 0.005:
+        from agents.media import FFMPEG
+        slow = out[:-4] + "_tempo.wav"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", out, "-filter:a", f"atempo={tempo:.3f}", slow], check=True)
+        os.replace(slow, out)
+    log.info("Narration voiced by Chatterbox (%s, tempo %.2f)", voice, tempo)
     return out
 
 

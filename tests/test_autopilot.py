@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 from agents import autopilot as ap
@@ -94,6 +95,18 @@ class RenderRepairTests(_Env):
             self.assertEqual(os.environ["SCENE_VALIDATE"], "0")
         self.assertEqual((out, flagged), (self.video, True))
         self.assertEqual(len(calls), 2)
+
+    def test_an_attempt_that_fixes_nothing_ships_the_flagged_film(self):
+        # the floating-cabin film: 11 rejected windows before and after a repair round that re-rendered most of it
+        win = {"window": 1, "t0": 0, "t1": 3, "action": "plank", "fatal_problems": ["x"]}
+        rej = sv.SceneRejected([win, dict(win, window=2)], "r.json")
+        produce, calls = self._produce([rej, rej, self.video])
+        with patch.object(mf, "produce", produce), \
+                patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "6", "AUTOPILOT_ON_GIVE_UP": ""}), \
+                patch.object(ap, "_restore_first_backup", lambda s, r: None):
+            out, flagged = ap.stage_render(self.run, self.film)
+        self.assertEqual((out, flagged), (self.video, True))
+        self.assertEqual(len(calls), 3)                  # attempt, the same again, then the flagged finish
 
     def test_give_up_fail_mode_raises(self):
         rej = sv.SceneRejected([], "r.json")
@@ -226,8 +239,61 @@ class ScriptAndCheckTests(_Env):
             path = ap.stage_script(self.run, "cutaway", None, None)
         self.assertEqual(path, self.film)
         self.assertEqual(calls, [None, "heat_pump_story"])
-        build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4, assets=False)
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args, ("A cutaway home and ground loop.", "heat_pump_story"))
+        self.assertEqual((build.call_args.kwargs["rounds"], build.call_args.kwargs["assets"]), (4, False))
         self.assertEqual(self.run["generated_set"], "heat_pump_story")
+
+    def test_a_new_set_that_missed_full_acceptance_still_makes_the_film_from_its_draft(self):
+        from agents.showrunner import NoUnusedStorySets
+        calls = []
+        plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story", "build_brief": "brief"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            calls.append(set_id)
+            if set_id is None:
+                raise NoUnusedStorySets("all consumed")
+            return self.film
+
+        draft = {"accepted": False, "draft": True, "accepted_beats": 11, "beats": 13, "set": "heat_pump_story",
+                 "warnings": ["beat 4 [fail_dig]: Max too small"], "work": self.tmp}
+        with patch("agents.showrunner.run", write), patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "agent"}), \
+                patch("agents.showrunner.plan_new_story_set", return_value=plan), \
+                patch("agents.set_builder.build_story_set", return_value=draft):
+            path = ap.stage_script(self.run, "cutaway", None, None)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story"])
+        self.assertEqual(self.run["generated_set"], "heat_pump_story")
+
+    def _alongside(self, beats_valid):
+        from agents.showrunner import NoUnusedStorySets
+        calls = []
+        plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story", "build_brief": "brief"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            calls.append(set_id)
+            if set_id is None:
+                raise NoUnusedStorySets("all consumed")
+            return self.film
+
+        def build(brief, set_id, rounds=4, assets=False, on_designed=None):
+            on_designed(set_id)                       # the spec exists: the script starts alongside
+            return {"accepted": True, "set": set_id, "work": self.tmp}
+        spec = mock.MagicMock()
+        spec.validate.return_value = [] if beats_valid else ["story actions must appear in order"]
+        with patch("agents.showrunner.run", write), patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "agent"}),                 patch("agents.showrunner.plan_new_story_set", return_value=plan),                 patch("agents.set_builder.build_story_set", side_effect=build),                 patch("engine.sets.spec", return_value=spec), patch("importlib.reload", side_effect=lambda m: m):
+            path = ap.stage_script(self.run, "cutaway", None, None)
+        return path, calls
+
+    def test_the_script_is_written_while_the_set_is_built(self):
+        path, calls = self._alongside(beats_valid=True)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story"])        # once, during the build
+
+    def test_a_script_the_repairs_made_stale_is_written_again(self):
+        path, calls = self._alongside(beats_valid=False)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story", "heat_pump_story"])
 
     def test_an_exhausted_library_is_filmed_by_the_kit_without_any_agent(self):
         from agents.showrunner import NoUnusedStorySets

@@ -128,8 +128,16 @@ class Run:
         from agents.llm import tokens_used
         self.data["claude_tokens"] = tokens_used()
         tmp = self.path + ".tmp"
-        json.dump(self.data, open(tmp, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
-        os.replace(tmp, self.path)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(self.data, fh, indent=1, ensure_ascii=False)
+        for wait in (0.2, 0.5, 1, 2, 4, 0):
+            try:
+                os.replace(tmp, self.path)
+                return
+            except PermissionError:                   # Windows: an indexer / antivirus briefly holds the file
+                if not wait:
+                    raise
+                time.sleep(wait)
 
 
 # ------------------- helpers -------------------
@@ -183,6 +191,19 @@ def probe(path):
     """1080x1920 video, an audio stream, a sane duration."""
     from agents.media import vertical_short_problems
     return vertical_short_problems(path, 15, 180)[1]
+
+
+def contact_sheet(video):
+    """<video>_sheet.jpg: one frame every 4 s in a 6-column grid, to judge a whole film at a glance."""
+    from agents.media import FFMPEG
+    out = os.path.splitext(video)[0] + "_sheet.jpg"
+    try:
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", video, "-vf", "fps=1/4,scale=270:480,tile=6x5",
+                        "-frames:v", "1", out], check=True, capture_output=True, timeout=600)
+        return out
+    except (subprocess.SubprocessError, OSError) as exc:          # a missing sheet never fails a finished film
+        log.warning(f"[autopilot] contact sheet failed: {exc}")
+        return None
 
 
 def write_notes(video, film_json):
@@ -281,16 +302,23 @@ def stage_script(run, source, angle, set_id):
                         from agents.set_builder import build_story_set
                         run.event("set", "building and visually validating a new Max set",
                                   detail=f"{plan['subject']} ({plan['set_id']})")
+                        early = _Alongside(write, angle=use_angle, render=False, topic_hint=plan,
+                                           on_topic=remember_topic)
                         status = build_story_set(plan["build_brief"], plan["set_id"],
-                                                 rounds=_int("SET_BUILD_ROUNDS", 4), assets=bk)
-                    if not status.get("accepted"):
-                        raise GiveUp(f"new set '{plan['set_id']}' did not pass visual validation; "
-                                     f"continue it in {status.get('work')}")
+                                                 rounds=_int("SET_BUILD_ROUNDS", 4), assets=bk,
+                                                 on_designed=early.start if _enabled("SCRIPT_ALONGSIDE_SET", True)
+                                                 else None)
+                    _draft_or_give_up(run, status, plan["set_id"])
                     set_id = plan["set_id"]
                     run.set(generated_set=set_id, set=set_id, set_build=status)
-                    run.event("set", "new Max set accepted and registered", detail=set_id)
-                    path = write(angle=use_angle, render=False, set_id=set_id, topic_hint=plan,
-                                 on_topic=remember_topic)
+                    run.event("set", "new Max set accepted and registered" if status.get("accepted") else
+                              "new Max set registered as a draft (rejected scenes flagged)", detail=set_id)
+                    path = early.result(set_id) if not plan.get("storyboard") else None
+                    if path:
+                        run.event("script", "script written while the set was being built")
+                    else:
+                        path = write(angle=use_angle, render=False, set_id=set_id, topic_hint=plan,
+                                     on_topic=remember_topic)
             run.set(film=path)
             run.event("script", "script written", detail=os.path.basename(path))
             return path
@@ -378,11 +406,10 @@ def _explainer_script(run, angle, set_id):
                   detail=f"{plan['subject']} ({plan['set_id']})")
         status = build_explainer_set(plan["build_brief"], plan["set_id"], rounds=_int("SET_BUILD_ROUNDS", 4),
                                      hook_action=plan.get("hook_action"))
-    if not status.get("accepted"):
-        raise GiveUp(f"new explainer set '{plan['set_id']}' did not pass visual validation; "
-                     f"continue it in {status.get('work')}")
+    _draft_or_give_up(run, status, plan["set_id"])
     run.set(generated_set=plan["set_id"], set=plan["set_id"], set_build=status)
-    run.event("set", "new explainer set accepted and registered", detail=plan["set_id"])
+    run.event("set", "new explainer set accepted and registered" if status.get("accepted") else
+              "new explainer set registered as a draft (rejected scenes flagged)", detail=plan["set_id"])
     return explainer.write(angle, plan["set_id"], topic_hint=plan, on_topic=remember_topic)
 
 
@@ -437,6 +464,11 @@ def stage_render(run, film_json):
         except sv.SceneRejected as exc:
             # make_film already ran its fix rounds; out of rounds for this attempt
             run.event("render", "scenes still rejected after the fix rounds", detail=str(exc)[:400])
+            left = len(getattr(exc, "rejected", None) or []) or None
+            stuck = left is not None and run["scene_rejected"] is not None and left >= run["scene_rejected"]
+            run.set(scene_rejected=left)
+            if stuck:                                    # the last attempt fixed nothing: ship the flagged film
+                return _give_up(run, film_json, set_id, exc)
             if attempt < max_attempts and time.time() < deadline:
                 os.environ["SCENE_FIX_ATTEMPTS"] = "2"
                 continue
@@ -489,6 +521,58 @@ def stage_render(run, film_json):
                 time.sleep(30)
         if attempt >= max_attempts or time.time() > deadline:
             return _give_up(run, film_json, set_id, RuntimeError("out of render attempts"))
+
+
+class _Alongside:
+    """The script of a new set, written in a thread WHILE the set's preview and repair rounds run (it needs only
+    the designed spec): the ~10-15 min of drafting, critique and revision no longer wait for the set's
+    acceptance. result() keeps it only if it still fits the final spec (a repair can change the actions)."""
+
+    def __init__(self, write, **kwargs):
+        self.write, self.kwargs, self.thread, self.path, self.error = write, kwargs, None, None, None
+
+    def start(self, set_id):
+        import threading
+
+        def work():
+            try:
+                self.path = self.write(set_id=set_id, **self.kwargs)
+            except Exception as exc:                  # noqa: BLE001  written again after the build instead
+                self.error = exc
+        self.thread = threading.Thread(target=work, name="script-alongside-set", daemon=True)
+        self.thread.start()
+        log.info("[autopilot] writing the script alongside the set build")
+
+    def result(self, set_id):
+        if self.thread is None:
+            return None
+        self.thread.join()
+        if self.error is not None or not self.path:
+            log.warning(f"[autopilot] the early script failed ({str(self.error)[:200]}); writing it now")
+            return None
+        import importlib
+        from engine import sets
+        try:
+            spec = importlib.reload(sets.spec(set_id))
+            film = json.load(open(self.path, encoding="utf-8"))
+            problems = spec.validate(film["beats"])
+        except Exception as exc:                      # noqa: BLE001
+            problems = [str(exc)]
+        if problems:
+            log.warning(f"[autopilot] the set changed under the early script ({problems[:2]}); writing it again")
+            return None
+        return self.path
+
+
+def _draft_or_give_up(run, status, set_id):
+    """A new set that missed full acceptance still makes the film from its best reviewed draft (rejected scenes
+    become warnings; production repairs or flags them). Only a set that never rendered at all stops the run."""
+    if status.get("accepted"):
+        return
+    if not status.get("draft"):
+        raise GiveUp(f"new set '{set_id}' never rendered a reviewable draft; continue it in {status.get('work')}")
+    run.event("set", f"QUALITY WARNING: {status.get('accepted_beats')}/{status.get('beats')} beats accepted; "
+              "continuing with the best draft", detail="; ".join(status.get("warnings", []))[:600])
 
 
 def _give_up(run, film_json, set_id, exc):
@@ -574,6 +658,10 @@ def _cleanup_successful_work(film_json):
     work = os.path.realpath(os.path.join(output_root, name + "_work"))
     if os.path.commonpath((output_root, work)) != output_root or not work.endswith("_work"):
         raise RuntimeError(f"refusing to clean unexpected work path: {work}")
+    from engine.make_film import work_in_use
+    if work_in_use(work):                                # a manual --redo is using these frames right now
+        log.info(f"[autopilot] kept the render frames: make_film pid {work_in_use(work)} is using {work}")
+        return 0
     freed, seen_files = 0, set()
     for leaf in ("frames", "comp"):
         target = os.path.join(work, leaf)
@@ -632,6 +720,15 @@ def run(source="evolution", angle=None, set_id=None, resume_path=None):
             shutil.move(video, flagged_path)
             video = flagged_path
         notes = write_notes(video, film_json)
+        contact_sheet(video)
+        if _enabled("FILM_REVIEW", True):              # the whole film, sound off: quality warnings, never a stop
+            from agents.film_review import review
+            viewer = review(video, film_json)
+            if viewer:
+                r.set(viewer={"overall": viewer.get("overall"), "learned": viewer.get("learned"),
+                              "hook_stops_scroll": viewer.get("hook", {}).get("stops_scroll"),
+                              "unclear": [b["id"] for b in viewer.get("beats", []) if not b.get("clear")],
+                              "confusing": viewer.get("confusing", [])})
         if not flagged:
             _cleanup_successful_work(film_json)
         r.set(status="needs_review" if flagged else "done", video=video, notes=notes,

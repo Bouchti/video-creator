@@ -85,8 +85,15 @@ def _call_token_cap():
     except ValueError:
         cap = 3_000_000
     if token_budget():
-        cap = min(cap, max(0, token_budget() - tokens_used()))
+        # the set build may spend SET_BUILD_BUDGET_SHARE of the run's budget: the rest is kept for the script and the
+        # production scene reviews (the floating-cabin build spent all 7M on repairs and the run stopped with no film)
+        # (production scene repairs, outside build_set, may use the reserve)
+        share = float(os.getenv("SET_BUILD_BUDGET_SHARE") or 0.7) if _BUILDING[0] else 1.0
+        cap = min(cap, max(0, int(token_budget() * share) - tokens_used()))
     return cap
+
+
+_BUILDING = [False]          # build_set is running: its agent turns are held to SET_BUILD_BUDGET_SHARE
 
 
 def _kill_tree(p):
@@ -154,6 +161,10 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                             codex_unavailable, is_usage_limit, primary_reset, record_usage, subscription_env)
     check_budget("set builder")          # the costliest call in the pipeline: never start one over budget
     backend = active_backend()
+    # a REPAIR (the set's code already exists) writes only what changes, as a patch spliced in afterwards
+    patches = [(r, r[:-3] + "_patch.py") for r in (x.replace("\\", "/") for x in allowed)
+               if re.fullmatch(r"engine/sets/\w+\.py", r) and not r.endswith(("_spec.py", "_patch.py"))
+               and os.path.isfile(os.path.join(PROJECT_ROOT, r))]
     story_id = next((os.path.basename(f)[:-8] for f in allowed if f.endswith("_spec.py")), None)
     # measure=False: a repair turn inside the build loop, which measures every round for free; measuring
     # inside the turn re-sent the agent's ~90k context for every step after it
@@ -191,7 +202,9 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
                      f"files are written, run it {measures}")
         else:
             text += "You cannot run commands."
-        if kind != "codex" and not allow_edit:
+        if patches:
+            text += "".join(PATCH_RULE.format(set_file=a, patch_file=b) for a, b in patches)
+        elif kind != "codex" and not allow_edit:
             text += (" You have no Edit tool: to change a file you already wrote, Write it again in full, ONCE, "
                      "with every change included.")
         return text
@@ -305,6 +318,12 @@ def claude_agent(prompt: str, allowed: list, effort: str = "high", timeout: int 
             dst = os.path.join(PROJECT_ROOT, relative)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
+        for set_rel, patch_rel in patches:
+            src = os.path.join(workspace, os.path.normpath(patch_rel))
+            if os.path.isfile(src):
+                names = apply_patch(os.path.join(PROJECT_ROOT, os.path.normpath(set_rel)),
+                                    open(src, encoding="utf-8").read())
+                log.info(f"[set_builder] repair patch spliced into {set_rel}: {', '.join(names) or 'nothing'}")
         return str(out).strip()
 
 
@@ -408,7 +427,10 @@ those elements, as object-name prefixes the Blender module really uses (e.g. ["l
 >= 5% of the frame, not cut by an edge) before any reviewer looks. Each action may also have "extras":
 one sentence on what ELSE is visible (the running gag, the kids, Max's reaction). The script writer
 reads it to write jokes about what is really on screen; the reviewer does not require it. When you cut
-a gag from "shows", move it to "extras" if it is still on screen. It needs two hook actions, then rewind,
+a gag from "shows", move it to "extras" if it is still on screen. Each action also says where the shot IS,
+for its ambience sound: "ambience": "outdoor" (birds, wind), "water" (at the sea or a lake: lapping water),
+"underwater" (muffled water: the camera is below the surface), "indoor" (inside a building, a tunnel or a
+machine: no bed) or "none" (one bed played everywhere put birdsong under the sea). It needs two hook actions, then rewind,
 then a 7-10 action trial-and-error ladder that alternates visible failures with real engineering
 fixes and ends in a happy finale with Max's two children. Each action needs kind, shows and seconds.
 The validator must require one hook first, rewind second, and every STORY_ORDER action exactly once.
@@ -432,6 +454,9 @@ VISUAL AND SAFETY RULES:
 - Every failure must visibly happen; every fix must visibly answer it. Max is endearing, never harmed.
 - Do not render narration, captions, lettering, watermarks or title cards in Blender. Short physical
   labels and fact arrows are allowed only when they explain the mechanism.
+- A third-person narrator tells the story: nobody's mouth moves with the narration (no talk loops, no
+  lipsync, no repeated mouth keys); a mouth opens only for one shout or gasp. Max "explains" with head
+  nods and gestures (Character.talk now keeps the mouth shut).
 - Add only motivated diegetic sound events. Never add recurring transition whooshes.
 - Deterministic output: seed random generators. Blender 5.2 Python. Build everything before animation.
 - Hidden objects are excluded from evaluation; use toy.hide_tree/show helpers and keyframe visibility.
@@ -440,20 +465,76 @@ VISUAL AND SAFETY RULES:
   quality()) and rejects the set until they pass, before any reviewer looks at it:
   * Max is big and readable: in every beat he fills >= 18% of the frame height for at least 35% of the
     beat (aim for ~40% with studio.close_on whenever he acts). Wide shots only briefly, to establish.
+  * HUMAN SCALE: everything that must be read in a shot (the mechanism, its label, Max's reaction) sits
+    within ~10 m of Max, because a tall phone frame cannot show a 30 m structure and a 1.8 m man at once:
+    a sea tunnel built at full size left Max at 14% of the frame, labels at 1% and the key gap a thin line,
+    and 9 of 13 scenes failed. Max builds HIS OWN backyard-size version (his pool, his boat, his pumpkin);
+    a giant real-world version appears only as a scale model or number card in the finale.
   * The camera always moves: never still for more than 2.5 s (close_on swings, studio.orbit, push-ins).
   * Characters stand ON things: feet on a surface (no hovering), never inside props or each other.
+  * Max and the kids MOVE WITH MOTION CAPTURE: char.act(clip, f0, f1) for every body action (idle, talk, yes,
+    no, fold_arms, jump, dance, knocked, fall, get_up, push, pick_up, interact, throw, fix, crouch); idle, talk
+    and walk are motion-captured already. Key joints by hand (pose / key) only for what no clip does (pointing
+    at a thing, a tool stroke, look_at): those keys keep their joint and the clip blends around them. Raw pose
+    keys for whole-body motion read stiff (the tunnel film).
   * No flat colours: every surface bigger than ~3% of the frame has a real material (engine.studio /
     engine.textures: concrete, rock_grass, metal, paint, planks...). Realistic shapes, no grey primitives.
-  * Callout labels (studio.label) are >= 1.8% of the frame height per line and fully inside the frame.
+  * Callout labels (studio.label) are >= 1.8% of the frame height per line and fully inside the frame,
+    and never in the caption band (65-78% down the frame, centre), where the captions are burned in.
   * No flicker: no coplanar faces (offset touching surfaces >= 5 mm), no bump on squashed objects, no
     live booleans on moving parts (studio.carve once, or studio.section_clip).
   * No void: studio.world_floor + terrain blocks reaching well past every frame edge; no black band.
+- THE HOOK IS THE SPECTACLE ITSELF, ALREADY HAPPENING AT FRAME 1 (measured: the biggest moving thing must travel,
+  grow or burst by >= 10% of the view in the hook's first second and start moving in its first 10 frames; camera
+  moves do not count). The oil hook opened underground on gas arrows and erupted at 40% of the beat; the sandcastle
+  wave stood beside the castle for 5 s like a frozen wall. Make it rush in, hit within 0.5 s, burst and fall.
+- LIQUIDS: a jet, gusher, burst pipe, fountain or hose is studio.Jet(name, base, direction, speed, color)
+  .erupt(f0, f1, rise): a continuous core stream + a crown of small drops, never a stack of big balls (the oil
+  gusher read as black balls); a wave is a curling profile (st.prism) with a
+  foam lip, never a plain cylinder (the sandcastle's "blue sausage"); standing water is studio.Water. A SHEET of
+  running water (a slide, a spillway, a gutter, a weir) is a thin prism with studio.flowing_water(name, color,
+  along, speed): foam streaks racing downhill. Streams on it stay thin (radius <= 5 cm), drops small (<= 3 cm) and
+  few: the water-tower slide (a blue slab, ~40 balls, two 10 cm tubes on it, a fat curved jet off the end) read as
+  solid plastic.
+- PIPES CONNECT: every pipe run is one visible chain from source to outlet (tank -> downpipe -> trench -> riser ->
+  nozzle). In a cutaway keep the run in the section plane and bring it up through the ground where the viewer sees
+  it (a collar or cover plate); never turn it back into the soil at the trench end (it reads as a cut-off pipe).
+  A pipe between the ground and something that moves (a tank being raised) stretches with it (key its scale), never
+  a fixed-length rod riding on the tank (it poked down through the soil). An empty trench before the pipe is laid is
+  filled with soil.
+- MAGNIFIER INSETS: only studio.Inset (camera-facing, parented contents), only for a detail that supplements the
+  big visible mechanism, in medium / wide shots, beside the subject. The render hides it on frames where the camera
+  cuts it, so an inset above Max in his close-ups simply vanishes there.
+- ONE TEXT PER MOMENT: at most one 3D label per shot (two only if they name two parts side by side); the script's
+  2D stickers are dropped wherever a 3D label sits under them, and labels cut by the frame edge are hidden for
+  those frames, so a label placed near the edge in a close-up is lost.
+- CAMERAS THAT FOLLOW: studio.close_on / studio.frame_all follow a character in WORLD space; a camera helper of your own
+  must too: toy.world_location_at(char.root, f), never toy.value_at(char.root, "location", f), which is relative to
+  the parent (Max riding a rising house: the close shot filmed the top of his hat from metres away).
+- FACES: in a close-up on Max (>= 35% of the frame height) his face is toward the camera; never his back, the top
+  of his hat, or his face bent down into a bucket (the sandcastle misting / packing close-ups). Kneeling or bending
+  clips (fix, crouch, push, pick_up, plant) belong in medium / wide shots; in his close shot he works UPRIGHT
+  (talk + point at the work, a hand-keyed hammer stroke). The flood-house film opened four beats on a giant orange
+  hat (kneeling 'fix' under a close camera); the render now swaps such a clip for 'talk' while the camera is close.
+- TRAVEL MUST READ: when something travels (a house drifting off, a boat racing, a cart rolling away), show it whole
+  in a shot whose camera follows it at most HALF way (it crosses the frame) with fixed marks (posts, trees, the dock it
+  leaves) in view. A camera locked on the moving thing makes it look parked: the flood house "sailed away" in close
+  shots that followed the porch, and the viewer saw a man standing still.
+- NO DANGLING LINES: never show a cable, rope or hoist line without what holds it in the same shot (the water-tower
+  rise showed a crane cable with no crane: a stray black line across the picture). No crane in shot: no cable.
+- LABELS IN FRONT: a label sits on the camera side of the structure it names, never inside a frame of legs, braces
+  or arrows (LOAD PATH between the tower legs read as "OAD PAT"). The render pulls a hidden label forward, but
+  place it beside the structure in the first place.
 - WHAT THE REVIEWER CHECKS (it sees 3 stills per beat: at 1/8, 1/2 and 7/8 of the beat):
   * Every element the narration names (the machine, the label, the arrows, the kids' reaction) must be
     on screen at the beat's MIDDLE and at 7/8, not only between those moments. Keep labels and fact
     arrows up for >= 2 s and through the middle of their beat; keep them inside the frame.
   * Time of day must read in the SKY: dusk and night scenes key studio.key_sky(scene, f, ~1 / ~-5)
     together with the sun lamp, otherwise the sky stays bright blue.
+  * WATER the viewer looks into (a sea, a lake, a pool, a flooded dock) is studio.Water: see-through at
+    any size, blue, with a bright waterline on the cut face. Never a raw water_volume or Reservoir with a
+    density you picked, and never raise its density to make it bluer: the tunnel set's 5 m sea became a
+    solid blue wall that way.
   * An emptied reservoir uses studio.Reservoir.empty(f) (wet floor + puddle); a thin water sheet reads as
     a FULL basin. Refill with .fill(f).
   * Screens, monitors and displays show a picture (procedural shapes), never a blank glowing white.
@@ -714,6 +795,99 @@ def restore_methods(set_id, frozen) -> list:
     return restored
 
 
+PATCH_RULE = """
+HOW TO WRITE YOUR FIX (fast: rewriting the whole ~2,000-line set file took 10+ minutes per repair turn):
+do NOT rewrite {set_file}. Write ONE new file, {patch_file}, holding ONLY what changes:
+- `class Patch:` whose methods (indented as in the set class) REPLACE the set class's methods of the same
+  name, or are added to it;
+- module-level imports, constants and helper functions you add or change (the same name replaces the old one).
+The pipeline splices it into {set_file} and deletes it. Leave out everything that stays the same. The spec and
+the reference film are small: edit those directly if a problem needs it."""
+
+
+def _top_level(tree):
+    """{name: node} of a module's top-level functions, classes and single-name assignments."""
+    import ast
+    out = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            out[node.name] = node
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            out[node.targets[0].id] = node
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            out[node.target.id] = node
+    return out
+
+
+def _span(node):
+    return min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]), node.end_lineno
+
+
+def apply_patch(set_path, patch_src) -> list:
+    """Splice a repair patch into a set module (PATCH_RULE): its imports are added, its top-level functions,
+    classes and constants replace the same names (or go in before the set class), and the methods of its
+    `class Patch` replace the set class's methods of the same name (or are appended to the class).
+    Returns the names changed; raises RepairNotApplied when the result would not compile."""
+    import ast
+    src = open(set_path, encoding="utf-8").read()
+    try:
+        ptree = ast.parse(patch_src)
+    except SyntaxError as exc:
+        raise RepairNotApplied(f"the repair patch does not parse: {exc}") from exc
+    plines = patch_src.splitlines(keepends=True)
+
+    def text(node):
+        a, b = _span(node)
+        body = "".join(plines[a - 1:b])
+        return body if body.endswith("\n") else body + "\n"
+
+    def put(src, name, body, method):
+        lines = src.splitlines(keepends=True)
+        tree = ast.parse(src)
+        cls = next((n for n in tree.body if isinstance(n, ast.ClassDef) and n.name.endswith("Set")), None)
+        if method:
+            if cls is None:
+                raise RepairNotApplied("the set module has no *Set class to patch")
+            old = next((m for m in cls.body if isinstance(m, ast.FunctionDef) and m.name == name), None)
+            if old is not None:
+                a, b = _span(old)
+                return "".join(lines[:a - 1]) + body + "".join(lines[b:])
+            return "".join(lines[:cls.end_lineno]) + "\n" + body + "".join(lines[cls.end_lineno:])
+        old = _top_level(tree).get(name)
+        if old is not None:
+            a, b = _span(old)
+            return "".join(lines[:a - 1]) + body + "".join(lines[b:])
+        at = _span(cls)[0] - 1 if cls is not None else len(lines)
+        return "".join(lines[:at]) + body + "\n\n" + "".join(lines[at:])
+
+    changed = []
+    for node in ptree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            line = text(node)
+            if line.strip() not in {ln.strip() for ln in src.splitlines()}:
+                tree = ast.parse(src)
+                last = max((n.end_lineno for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))), default=0)
+                lines = src.splitlines(keepends=True)
+                src = "".join(lines[:last]) + line + "".join(lines[last:])
+                changed.append(line.strip())
+        elif isinstance(node, ast.ClassDef) and node.name == "Patch":
+            for m in node.body:
+                if isinstance(m, ast.FunctionDef):
+                    src = put(src, m.name, text(m), method=True)
+                    changed.append(m.name)
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign)):
+            name = next(iter(_top_level(ast.Module(body=[node], type_ignores=[]))), None)
+            if name:
+                src = put(src, name, text(node), method=False)
+                changed.append(name)
+    try:
+        compile(src, set_path, "exec")
+    except SyntaxError as exc:
+        raise RepairNotApplied(f"the patched set does not compile: {exc}") from exc
+    open(set_path, "w", encoding="utf-8").write(src)
+    return changed
+
+
 def _example_spec():
     p = os.path.join(PROJECT_ROOT, "engine", "sets", "pool_story_spec.py")
     return open(p, encoding="utf-8").read() if os.path.isfile(p) else ""
@@ -821,8 +995,12 @@ VISUAL RULES (the reference look: a clean, bright, semi-realistic diorama sliced
 - Every hidden mechanism is VISIBLE (arrows for pressure, water level, flow stripes in clear pipes,
   layers separating). Show the correct component being installed and then doing its job; no disasters.
 - Short 3D labels and fact arrows only where they explain the mechanism, >= 1.8% of the frame
-  height per line, fully inside the frame, up for >= 2 s and through the middle of their beat.
+  height per line, fully inside the frame, up for >= 2 s and through the middle of their beat, never in
+  the caption band (65-78% down the frame, centre).
 - No narration, captions, lettering, watermarks or title cards in Blender.
+- A third-person narrator tells the story: nobody's mouth moves with the narration (no talk loops, no
+  lipsync, no repeated mouth keys); a mouth opens only for one shout or gasp. Max "explains" with head
+  nods and gestures (Character.talk now keeps the mouth shut).
 - No flat colours on big surfaces (engine.studio / engine.textures materials), no coplanar faces
   (offset touching surfaces >= 5 mm), no live booleans on moving parts (studio.carve once, or
   studio.section_clip), no void (studio.world_floor + terrain past every frame edge).
@@ -1052,7 +1230,13 @@ def static_checks(set_id, story=False, explainer=False) -> list:
                    + ("e += [f'action {a!r} needs \"must_see\": a list of 1-4 object-name prefixes the viewer must see' "
                       "for a, v in sp.ACTIONS.items() if v.get('kind') != 'rewind' and not ("
                       "isinstance(v.get('must_see'), list) and 1 <= len(v['must_see']) <= 4 "
-                      "and all(isinstance(x, str) and x for x in v['must_see']))]; " if story else "")
+                      "and all(isinstance(x, str) and x for x in v['must_see']))]; "
+                      # ... and where the shot is, for its ambience bed (agents/sfx.AMBIENCES; older sets without
+                      # it get one read from "shows")
+                      "from agents.sfx import AMBIENCES; "
+                      "e += [f'action {a!r}: \"ambience\" must be one of {sorted(AMBIENCES)} (where the shot is)' "
+                      "for a, v in sp.ACTIONS.items() if 'ambience' in v and v['ambience'] not in AMBIENCES]; "
+                      if story else "")
                    if story or explainer else "")
     film_path = _film_file(set_id)
     code = (f"import json; from engine.sets import {set_id}_spec as sp; "
@@ -1069,12 +1253,58 @@ def static_checks(set_id, story=False, explainer=False) -> list:
         py_compile.compile(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), doraise=True)
     except py_compile.PyCompileError as exc:
         errs.append(f"builder does not compile: {exc.msg}")
-    if not errs:
+    errs += mouth_problems(open(os.path.join(PROJECT_ROOT, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read())
+    if not errs and not (story or explainer):           # (story / explainer scripts: hard_checks sized it already)
+        from agents.showrunner import word_budget
         film = json.load(open(film_path, encoding="utf-8"))
         words = sum(len(b["text"].split()) for b in film["beats"])
-        if not 120 <= words <= 200:
-            errs.append(f"reference script has {words} words; aim for 140-190")
+        lo, hi = word_budget(set_id)
+        if not lo <= words <= hi:
+            errs.append(f"reference script has {words} words; aim for {lo}-{hi} (this voice's pace)")
     return errs
+
+
+def mouth_problems(src) -> list:
+    """A narrator speaks every line, so a mouth that flaps along reads as the character saying the narration
+    (the tunnel film's Max did, through max.talk). One open key for a shout or gasp is fine; lipsync to the
+    narrator's voice and mouth keys inside a loop are not."""
+    import ast
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []                                       # (the compile check reports it)
+    out = []
+
+    def names(node):
+        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+    def timed(loop):
+        """A loop over TIME (a while, a range of frames) flaps a mouth; one over the kids (one gasp each) does not.
+        `loop` is None outside loops, else (in_time_loop, loop variable names)."""
+        return loop is not None and loop[0]
+
+    def visit(node, loop):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+                name, args = child.func.attr, child.args
+                if name == "lipsync":
+                    out.append(f"line {child.lineno}: lipsync() moves a mouth with the NARRATOR's voice; a narrated "
+                               "film has no speaking characters (use head nods / gestures)")
+                elif (name == "key" and loop is not None and args and isinstance(args[0], ast.Constant)
+                      and args[0].value == "mouth"
+                      and (timed(loop) or (len(args) > 1 and names(args[1]) & loop[1]))):
+                    out.append(f"line {child.lineno}: mouth keys in a loop flap the mouth under the narration; open "
+                               "the mouth once for a shout or gasp")
+            inner = loop
+            if isinstance(child, ast.While):
+                inner = (True, set())
+            elif isinstance(child, ast.For):
+                ranged = (isinstance(child.iter, ast.Call) and isinstance(child.iter.func, ast.Name)
+                          and child.iter.func.id == "range")
+                inner = ((loop is not None and loop[0]) or ranged, (loop[1] if loop else set()) | names(child.target))
+            visit(child, inner)
+    visit(tree, None)
+    return out
 
 
 def fake_timings(film: dict, path: str):
@@ -1157,11 +1387,21 @@ def preview_render(set_id, work) -> str:
         return ""
     for p in glob.glob(os.path.join(work, "preview_*.png")):
         os.remove(p)
+    # the measured gates (a second Blender staging the same scene, CPU only) run WHILE the stills render on
+    # the GPU: one after the other they cost 3-5 min each per round
+    ahead = None
+    if story and os.getenv("SET_BUILD_QA", "1") == "1":
+        import threading
+        ahead = threading.Thread(target=_measure_ahead, args=(set_id, work, fingerprint), daemon=True)
+        ahead.start()
     try:
         _run_blender([BLENDER, "--background", "--factory-startup", "--python", runner, "--", film_json, timings,
                       work, "--preview"], env=preview_env)
     except RuntimeError as exc:
         return str(exc)[-4000:]
+    finally:
+        if ahead is not None:
+            ahead.join()
     if not _complete_preview(work, film, spec):
         return "preview renderer completed without producing all three stills for every renderable beat"
     tmp = manifest_path + ".tmp"
@@ -1209,10 +1449,34 @@ def look_problem(work):
     return (f"The whole set looks washed out next to the channel's published films: median colourfulness "
             f"{median:.0f} (the published pool / boat / pumpkin films measure 47-57; needs >= {LOOK_MIN:.0f}). "
             f"Greyest beats: {worst}. Fix it SET-WIDE in the shared world code, not beat by beat: saturated, "
-            "clean toy colours on the big surfaces (no large grey or beige planes), CLEAR water with a crisp "
-            "waterline and a bright blue tint (no fog or haze filling the frame), a blue sky with white clouds "
+            "clean toy colours on the big surfaces (no large grey or beige planes), see-through water (studio.Water: "
+            "never raise a water density or add haze to make it bluer: that made the tunnel's sea a solid wall), a blue sky with white clouds "
             "above the surface, warm sunlight, and the characters and key objects the most colourful things "
             "in frame. Keep every object, action and timing as they are.")
+
+
+def _measure_ahead(set_id, work, fingerprint):
+    """The --qa measurement of the scene the preview is rendering, into work/qa.json under its fingerprint
+    (qa_check then reuses it). In its own folder: both Blender runs write events.json. Never raises: a failed
+    measurement here is simply run again by qa_check."""
+    from engine.make_film import BLENDER, _run_blender
+    out = os.path.join(work, "qa_ahead")
+    os.makedirs(out, exist_ok=True)
+    try:
+        if os.path.exists(os.path.join(out, "qa.json")):
+            os.remove(os.path.join(out, "qa.json"))
+        log.info("[set_builder] measuring the staged scene alongside the preview render")
+        _run_blender([BLENDER, "--background", "--factory-startup", "--python",
+                      os.path.join(PROJECT_ROOT, "engine", "films", "cutaway_film.py"), "--", _film_file(set_id),
+                      os.path.join(work, "timings.json"), out, "--qa"],
+                     env={**os.environ, "QA_STEP": os.getenv("QA_STEP") or "9"})
+        rep = json.load(open(os.path.join(out, "qa.json"), encoding="utf-8"))
+        rep["fingerprint"] = fingerprint
+        tmp = os.path.join(work, "qa.json.tmp")
+        json.dump(rep, open(tmp, "w", encoding="utf-8"), indent=1)
+        os.replace(tmp, os.path.join(work, "qa.json"))
+    except Exception as exc:                            # noqa: BLE001
+        log.info(f"[set_builder] the early measurement did not finish ({str(exc)[-200:]}); measuring after")
 
 
 def qa_check(set_id, work, strict=False) -> dict:
@@ -1325,7 +1589,8 @@ def review_preview(set_id, work) -> list:
 
     from agents import scene_validator as sv
     spec = importlib.reload(importlib.import_module(f"engine.sets.{set_id}_spec"))
-    review_backend = sv._backend()
+    from agents.llm import active_backend
+    review_backend = active_backend()          # (reviews run on the one shared backend, agents/llm.py)
     film = json.load(open(_film_file(set_id), encoding="utf-8"))
     spans = json.load(open(os.path.join(work, "timings.json")))["beats"]
     review_dir = os.path.join(work, "review")
@@ -1365,7 +1630,8 @@ def review_preview(set_id, work) -> list:
             continue
         w = {"window": k + 1, "beat": k + 1, "action": "+".join(acts), "part": "whole beat",
              "f0": sp["start"] + 1, "f1": sp["end"] + 1, "t0": sp["start"] / 30, "t1": (sp["end"] + 1) / 30,
-             "shows": " ".join(spec.ACTIONS.get(a, {}).get("shows", "") for a in acts), "text": beat["text"]}
+             "shows": " ".join(spec.ACTIONS.get(a, {}).get("shows", "") for a in acts), "text": beat["text"],
+             "hook": k == 0 and sv.is_hook(acts, spec)}
         stills = sorted(glob.glob(os.path.join(work, f"preview_{k + 1:02d}_*_[abc].png")))
         if len(stills) < 3:
             reports.append({**w, "valid": False, "fatal_problems": ["preview stills missing for this beat"],
@@ -1460,7 +1726,10 @@ def register(set_id, collection="EVOLUTION"):
 # ------------------- the build loop -------------------
 
 def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = False,
-              explainer: bool = False, hook_action: str = None, assets: bool = False) -> dict:
+              explainer: bool = False, hook_action: str = None, assets: bool = False, on_designed=None) -> dict:
+    """Design (or continue) a set, then render previews, review and repair it round by round.
+    on_designed(set_id) is called once, as soon as the set's files first pass the static checks (the spec is
+    complete): the script can be written from then on, alongside the preview and repair rounds."""
     suffix = "_explainer" if explainer else "_story" if story else "_evolution"
     set_id = set_id or slug(subject, 28) + suffix
     files = _files(set_id)
@@ -1492,101 +1761,134 @@ def build_set(subject: str, set_id: str = None, rounds: int = 4, story: bool = F
         fix_windows = 3
     undo, idle = None, 0               # undo: the agent's own version, if a method restore broke the build
     rnd = 0
-    while rnd < max_rounds:
-        rnd += 1
-        status["rounds"] = rnd
-        errs = static_checks(set_id, story=story, explainer=explainer)
-        if errs and story and all('needs "must_see"' in e for e in errs) and backfill_must_see(set_id):
+    from agents.llm import BudgetExceeded
+    _BUILDING[0] = True
+    try:
+        while rnd < max_rounds:
+            rnd += 1
+            status["rounds"] = rnd
             errs = static_checks(set_id, story=story, explainer=explainer)
-        if not errs and explainer and hook_action:
-            errs += _hook_check(set_id, hook_action)
-        if errs:
-            log.info(f"[set_builder] round {rnd}: {len(errs)} static problem(s); sending back to Claude")
-            claude_agent(fix_prompt(set_id, "\n".join(f"- {e}" for e in errs),
-                                    "The set's files fail the pipeline's static checks."), files)
-            continue
-        log.info(f"[set_builder] round {rnd}: preview render (3 stills per beat)")
-        err = preview_render(set_id, work)
-        if err and undo is not None:
-            # the accepted beats' methods were put back after the last repair and no longer fit the shared
-            # code the agent changed: take the agent's version as it wrote it (no paid turn needed)
-            log.info(f"[set_builder] round {rnd}: restored accepted-beat methods broke the build; keeping the "
-                     "repair as the agent wrote it")
-            open(set_path, "w", encoding="utf-8").write(undo)
-            undo = None
-            continue
-        undo = None
-        if err:
-            tb = err[err.rfind("Traceback"):] if "Traceback" in err else err
-            log.info(f"[set_builder] round {rnd}: Blender error; sending the traceback to Claude:\n{tb[-800:]}")
-            claude_agent(fix_prompt(set_id, f"Blender crashed while building or rendering the set:\n{err}",
-                                    "The preview render failed."), files)
-            continue
-        reports = review_preview(set_id, work)
-        sheet = contact_sheet(work, os.path.join(work, f"contact_round{rnd}.png"))
-        rejected = [r for r in reports if not r.get("valid")]
-        log.info(f"[set_builder] round {rnd}: {len(reports) - len(rejected)}/{len(reports)} beats accepted"
-                 + (f" (contact sheet: {sheet})" if sheet else ""))
-        look = look_problem(work) if story else ""
-        if look and status.get("look_repairs", 0) < LOOK_ROUNDS:
-            # the look is a whole-set property: one set-wide turn before any beat repair (beat fixes on a murky
-            # world only polished actions nobody could see clearly)
-            status["look_repairs"] = status.get("look_repairs", 0) + 1
-            max_rounds = max(max_rounds, rnd + 1)
-            log.info(f"[set_builder] round {rnd}: set-wide look repair {status['look_repairs']}/{LOOK_ROUNDS}: "
-                     f"{look[:160]}")
-            claude_agent(fix_prompt(set_id, look, "The set's overall look does not match the channel."), files)
-            continue
-        if look:
-            log.warning(f"QUALITY WARNING: [set_builder] the set still looks washed out after {LOOK_ROUNDS} "
-                        f"look repairs; continuing")
-        if not rejected:
-            register(set_id, "EXPLAINER" if explainer else "AVAILABLE" if story else "EVOLUTION")
-            status.update(accepted=True, contact_sheet=sheet)
-            source = "explainer" if explainer else "cutaway" if story else "evolution"
-            log.info(f"[set_builder] ACCEPTED: '{set_id}' is registered. Make a video with:\n"
-                     f"  python main.py --source {source} --set {set_id}")
-            return status
-        accepted = len(reports) - len(rejected)
-        # repairs take a few windows per turn, so every rejected window needs its turn before the round
-        # limit can end the build (the token budget, not the round count, bounds what it costs)
-        max_rounds = max(max_rounds, rnd + -(-len(rejected) // fix_windows) + patience)
-        if accepted > best:
-            best, best_reports, stale = accepted, reports, 0
-            _snapshot(files, best_dir)
-        else:
-            stale += 1
-            if accepted < best:
-                log.info(f"[set_builder] round {rnd}: worse than the best draft ({best} accepted); rolling back")
-                _restore(files, best_dir)
-                reports = best_reports
-                rejected = [r for r in reports if not r.get("valid")]
-        if rnd >= rounds and stale >= patience:
-            break
-        if rnd < max_rounds:
-            keep = [r["action"] for r in reports if r.get("valid")]
-            frozen = freeze_methods(set_id, [a for k in keep for a in k.split("+")])
-            try:
-                # one full rewrite instead of a dozen one-line edits, each of which re-sent the agent's whole
-                # context (~60k): repair turns hit their cap mid-way; accepted beats stay frozen regardless
-                fix_scenes(set_id, rejected, allowed=files, keep=keep, max_windows=fix_windows,
-                           allow_edit=os.getenv("SET_FIX_EDIT_TOOL", "0") == "1", measure=False)
-                idle = 0
-            except RepairNotApplied as exc:
-                idle += 1
-                if idle >= 2:                      # twice in a row: the same inputs would only repeat it
-                    raise
-                log.warning(f"[set_builder] round {rnd}: the repair changed nothing ({str(exc)[:160]}); "
-                            "trying again next round")
+            if errs and story and all('needs "must_see"' in e for e in errs) and backfill_must_see(set_id):
+                errs = static_checks(set_id, story=story, explainer=explainer)
+            if not errs and explainer and hook_action:
+                errs += _hook_check(set_id, hook_action)
+            if errs:
+                log.info(f"[set_builder] round {rnd}: {len(errs)} static problem(s); sending back to Claude")
+                claude_agent(fix_prompt(set_id, "\n".join(f"- {e}" for e in errs),
+                                        "The set's files fail the pipeline's static checks."), files)
                 continue
-            agent_version = open(set_path, encoding="utf-8").read()
-            restored = restore_methods(set_id, frozen)
-            if restored:
-                undo = agent_version
-                log.info(f"[set_builder] kept the accepted beats as they were: put back {', '.join(restored)}")
+            if on_designed is not None:
+                try:
+                    on_designed(set_id)
+                except Exception as exc:                   # noqa: BLE001  the script is written after the build then
+                    log.warning(f"[set_builder] could not start the script alongside the build: {exc}")
+                on_designed = None
+            log.info(f"[set_builder] round {rnd}: preview render (3 stills per beat)")
+            err = preview_render(set_id, work)
+            if err and undo is not None:
+                # the accepted beats' methods were put back after the last repair and no longer fit the shared
+                # code the agent changed: take the agent's version as it wrote it (no paid turn needed)
+                log.info(f"[set_builder] round {rnd}: restored accepted-beat methods broke the build; keeping the "
+                         "repair as the agent wrote it")
+                open(set_path, "w", encoding="utf-8").write(undo)
+                undo = None
+                continue
+            undo = None
+            if err:
+                tb = err[err.rfind("Traceback"):] if "Traceback" in err else err
+                log.info(f"[set_builder] round {rnd}: Blender error; sending the traceback to Claude:\n{tb[-800:]}")
+                claude_agent(fix_prompt(set_id, f"Blender crashed while building or rendering the set:\n{err}",
+                                        "The preview render failed."), files)
+                continue
+            reports = review_preview(set_id, work)
+            sheet = contact_sheet(work, os.path.join(work, f"contact_round{rnd}.png"))
+            rejected = [r for r in reports if not r.get("valid")]
+            log.info(f"[set_builder] round {rnd}: {len(reports) - len(rejected)}/{len(reports)} beats accepted"
+                     + (f" (contact sheet: {sheet})" if sheet else ""))
+            look = look_problem(work) if story else ""
+            if look and status.get("look_repairs", 0) < LOOK_ROUNDS:
+                # the look is a whole-set property: one set-wide turn before any beat repair (beat fixes on a murky
+                # world only polished actions nobody could see clearly)
+                status["look_repairs"] = status.get("look_repairs", 0) + 1
+                max_rounds = max(max_rounds, rnd + 1)
+                log.info(f"[set_builder] round {rnd}: set-wide look repair {status['look_repairs']}/{LOOK_ROUNDS}: "
+                         f"{look[:160]}")
+                claude_agent(fix_prompt(set_id, look, "The set's overall look does not match the channel."), files)
+                continue
+            if look:
+                log.warning(f"QUALITY WARNING: [set_builder] the set still looks washed out after {LOOK_ROUNDS} "
+                            f"look repairs; continuing")
+            if not rejected:
+                register(set_id, "EXPLAINER" if explainer else "AVAILABLE" if story else "EVOLUTION")
+                status.update(accepted=True, contact_sheet=sheet)
+                source = "explainer" if explainer else "cutaway" if story else "evolution"
+                log.info(f"[set_builder] ACCEPTED: '{set_id}' is registered. Make a video with:\n"
+                         f"  python main.py --source {source} --set {set_id}")
+                return status
+            accepted = len(reports) - len(rejected)
+            # repairs take a few windows per turn, so every rejected window needs its turn before the round
+            # limit can end the build (the token budget, not the round count, bounds what it costs)
+            max_rounds = max(max_rounds, rnd + -(-len(rejected) // fix_windows) + patience)
+            if accepted > best:
+                best, best_reports, stale = accepted, reports, 0
+                _snapshot(files, best_dir)
+            else:
+                stale += 1
+                if accepted < best:
+                    log.info(f"[set_builder] round {rnd}: worse than the best draft ({best} accepted); rolling back")
+                    _restore(files, best_dir)
+                    reports = best_reports
+                    rejected = [r for r in reports if not r.get("valid")]
+            if rnd >= rounds and stale >= patience:
+                break
+            if rnd < max_rounds:
+                keep = [r["action"] for r in reports if r.get("valid")]
+                frozen = freeze_methods(set_id, [a for k in keep for a in k.split("+")])
+                try:
+                    # one full rewrite instead of a dozen one-line edits, each of which re-sent the agent's whole
+                    # context (~60k): repair turns hit their cap mid-way; accepted beats stay frozen regardless
+                    fix_scenes(set_id, rejected, allowed=files, keep=keep, max_windows=fix_windows,
+                               allow_edit=os.getenv("SET_FIX_EDIT_TOOL", "0") == "1", measure=False)
+                    idle = 0
+                except RepairNotApplied as exc:
+                    idle += 1
+                    if idle >= 2:                      # twice in a row: the same inputs would only repeat it
+                        if best_reports is not None:   # ...so the best draft goes on (below)
+                            break
+                        raise
+                    log.warning(f"[set_builder] round {rnd}: the repair changed nothing ({str(exc)[:160]}); "
+                                "trying again next round")
+                    continue
+                agent_version = open(set_path, encoding="utf-8").read()
+                restored = restore_methods(set_id, frozen)
+                if restored:
+                    undo = agent_version
+                    log.info(f"[set_builder] kept the accepted beats as they were: put back {', '.join(restored)}")
+    except BudgetExceeded as exc:
+        if best_reports is None:                # nothing reviewed yet: there is no draft to hand over
+            raise
+        # out of build budget: the best reviewed draft goes on (repairs stop, the run never does)
+        log.warning(f"QUALITY WARNING: [set_builder] the set build budget is spent ({str(exc)[:160]}); "
+                    "handing over the best draft")
+    finally:
+        _BUILDING[0] = False
     status["contact_sheet"] = os.path.join(work, f"contact_round{status['rounds']}.png")
-    log.warning(f"[set_builder] NOT accepted after {status['rounds']} rounds: '{set_id}' stays a draft (not registered). "
-                f"See {os.path.join(work, 'build_review.json')}; run again to continue improving it.")
+    if best_reports is not None:
+        # the run goes on with the best reviewed draft (a run that built a whole set and then stopped made no
+        # film at all): its rejected scenes are warnings, and production repairs or flags them
+        _restore(files, best_dir)
+        register(set_id, "EXPLAINER" if explainer else "AVAILABLE" if story else "EVOLUTION")
+        warnings = [f"beat {r['beat']} [{r['action']}]: "
+                    + "; ".join(str(x) for x in (r.get("fatal_problems") or r.get("problems")
+                                                 or [r.get("reason", "rejected")])[:2])
+                    for r in best_reports if not r.get("valid")]
+        status.update(draft=True, warnings=warnings, accepted_beats=best, beats=len(best_reports))
+        log.warning(f"QUALITY WARNING: [set_builder] '{set_id}' NOT fully accepted after {status['rounds']} rounds "
+                    f"({best}/{len(best_reports)} beats): continuing with its best draft (registered). Rejected:\n  "
+                    + "\n  ".join(warnings))
+        return status
+    log.warning(f"[set_builder] NOT accepted after {status['rounds']} rounds and no draft ever rendered: '{set_id}' "
+                f"stays unregistered. See {os.path.join(work, 'build_review.json')}; run again to continue it.")
     return status
 
 
@@ -1756,10 +2058,11 @@ def _compiled_storyboard(set_id):
     return None
 
 
-def build_story_set(subject: str, set_id: str = None, rounds: int = 4, assets: bool = False) -> dict:
+def build_story_set(subject: str, set_id: str = None, rounds: int = 4, assets: bool = False,
+                    on_designed=None) -> dict:
     """Build, visually validate and register a new Max cutaway story set (assets: whole objects from BlenderKit,
     the cutaway-bk route)."""
-    return build_set(subject, set_id=set_id, rounds=rounds, story=True, assets=assets)
+    return build_set(subject, set_id=set_id, rounds=rounds, story=True, assets=assets, on_designed=on_designed)
 
 
 def main():

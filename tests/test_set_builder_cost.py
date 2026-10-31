@@ -44,9 +44,19 @@ class CostTests(unittest.TestCase):
         self.assertEqual(spent["cache_read_input_tokens"], 5_000_000)
 
     def test_the_call_cap_never_exceeds_what_is_left_of_the_run_budget(self):
-        with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1500000", "SET_BUILDER_CALL_TOKENS": "3000000"}), \
+        with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "1500000", "SET_BUILDER_CALL_TOKENS": "3000000",
+                                     "SET_BUILD_BUDGET_SHARE": "1"}), \
                 patch.object(llm, "tokens_used", return_value=1_200_000):
             self.assertEqual(sb._call_token_cap(), 300_000)
+
+    def test_the_set_build_keeps_a_reserve_for_the_script_and_the_render(self):
+        # the floating-cabin build spent the whole 7M budget on repairs and the run stopped with no film
+        with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "7000000", "SET_BUILDER_CALL_TOKENS": "3000000",
+                                     "SET_BUILD_BUDGET_SHARE": ""}), \
+                patch.object(llm, "tokens_used", return_value=4_500_000), patch.object(sb, "_BUILDING", [True]):
+            self.assertEqual(sb._call_token_cap(), 400_000)          # 70 % of 7M = 4.9M for the build
+        with patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "7000000", "SET_BUILDER_CALL_TOKENS": "3000000"}),                 patch.object(llm, "tokens_used", return_value=4_500_000), patch.object(sb, "_BUILDING", [False]):
+            self.assertEqual(sb._call_token_cap(), 2_500_000)        # production repairs use the reserve
 
     def test_codex_out_of_quota_stops_instead_of_using_claude(self):
         files = ["engine/sets/demo_story_spec.py", "engine/sets/demo_story.py", "engine/films/demo_story.json"]
