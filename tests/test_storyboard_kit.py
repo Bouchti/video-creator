@@ -24,6 +24,13 @@ class ValidateTests(unittest.TestCase):
         problems = sbm.validate(sb_)
         self.assertTrue(any("needs ['core']" in p for p in problems), problems)
 
+    def test_two_mistakes_are_not_enough(self):
+        sb_ = copy.deepcopy(sbm.LEVEE)
+        sb_["steps"] = sb_["steps"][:7] + [sb_["steps"][-1]]  # setup, three pairs in the reference
+        del sb_["steps"][5:7]                                  # remove one fail/fix pair: only two remain
+        problems = sbm.validate(sb_)
+        self.assertTrue(any("at least 3 distinct mistakes" in p for p in problems), problems)
+
     def test_events_are_refused_on_barrier_shapes_the_kit_was_not_built_for(self):
         sb_ = copy.deepcopy(sbm.LEVEE)
         sb_["steps"] = sb_["steps"][:3] + [sb_["steps"][7], sb_["steps"][8], sb_["steps"][9]]   # piping on a wide wall
@@ -38,8 +45,13 @@ class ValidateTests(unittest.TestCase):
                "hooks": [{"id": "hook_a", "step": "promise"}]}
         problems = " | ".join(sbm.validate(sb_))
         for needle in ("5-11", "needs the barrier built first", "over 18 characters", "followed by the fix",
-                       "must replay a fail step"):
+                       "must replay a failure"):
             self.assertIn(needle, problems)
+
+    def test_a_hook_cannot_spoil_the_happy_ending(self):
+        sb_ = copy.deepcopy(sbm.LEVEE)
+        sb_["hooks"] = [{"id": "happy_hook", "step": "finale"}]
+        self.assertTrue(any("never the happy ending" in p for p in sbm.validate(sb_)))
 
 
 class CompileTests(unittest.TestCase):
@@ -56,8 +68,15 @@ class CompileTests(unittest.TestCase):
         for a, v in ns["ACTIONS"].items():
             if v["kind"] != "rewind":
                 self.assertTrue(v["must_see"] and v["shows"], a)
+        for step in sbm.LEVEE["steps"]:
+            if step["kind"] == "fail":
+                self.assertTrue(set(("kb_fail_flood", "kb_duck", "kb_drench")) <=
+                                set(ns["ACTIONS"][step["id"]]["must_see"]))
         film = json.load(open(os.path.join(root, "engine", "films", f"{set_id}.json"), encoding="utf-8"))
         self.assertEqual(ns["validate"](film["beats"]), [])
+        self.assertEqual((film["beats"][0]["video"], film["beats"][1]["video"]), ("epilogue", "rewind"))
+        self.assertTrue(110 <= sum(len(b["text"].split()) for b in film["beats"]) <= 140)
+        self.assertEqual((film["beat_pause"], film["tail"]), (0.35, 1.5))
         builder = open(os.path.join(root, "engine", "sets", f"{set_id}.py"), encoding="utf-8").read()
         self.assertIn("class KitTestStorySet(EmbankmentSet)", builder)
 

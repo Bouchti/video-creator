@@ -109,6 +109,14 @@ class RenderRepairTests(_Env):
             with self.assertRaises(ap.GiveUp):
                 ap.stage_render(self.run, self.film)
 
+    def test_overlong_voice_stops_without_a_render_retry(self):
+        produce, calls = self._produce([mf.FilmTooLong("narration is still 70s")])
+        with patch.object(mf, "produce", produce):
+            with self.assertRaisesRegex(ap.GiveUp, "70s"):
+                ap.stage_render(self.run, self.film)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("65-second cap", self.run["events"][-1]["what"])
+
     def test_network_error_is_retried(self):
         produce, calls = self._produce([Exception("ElevenLabs failed (key1): 503 busy"), self.video])
         with patch.object(mf, "produce", produce):
@@ -117,6 +125,13 @@ class RenderRepairTests(_Env):
 
 
 class ScriptAndCheckTests(_Env):
+    def test_final_probe_enforces_the_65_second_cap(self):
+        info = {"streams": [{"codec_type": "video", "width": 1080, "height": 1920},
+                            {"codec_type": "audio"}], "format": {"duration": "65.001"}}
+        result = type("Result", (), {"stdout": json.dumps(info)})()
+        with patch.object(ap.subprocess, "run", return_value=result):
+            self.assertEqual(ap.probe(self.video), ["duration 65.00s is outside 15-65 s"])
+
     def test_unknown_ai_reset_stops_instead_of_sleeping_for_an_hour(self):
         from agents.showrunner import UsageLimit
         with self.assertRaisesRegex(ap.GiveUp, "sleeping blindly"):
@@ -174,6 +189,39 @@ class ScriptAndCheckTests(_Env):
                 patch.object(mf, "produce", side_effect=AssertionError("must not rerender")):
             self.assertEqual(ap.stage_check(self.run, self.video, self.film), self.video)
         normalize.assert_called_once_with(self.video)
+
+
+class FilmLengthTests(_Env):
+    def test_kit_films_disable_every_2d_sticker(self):
+        self.assertIsNone(mf._overlay({"overlay": {"type": "none"}}))
+        kit_spec = type("Spec", (), {"KIT": "embankment"})()
+        with patch("engine.sets.spec", return_value=kit_spec):
+            self.assertTrue(mf._kit_film({"set": "kit_story"}))
+
+    def test_voice_is_regenerated_faster_when_it_can_fit(self):
+        with patch.object(mf, "get_duration", side_effect=[66.0, 64.0]), \
+                patch.object(mf, "generate_voiceover", return_value=("faster.mp3", 64.0)) as voice, \
+                patch.object(mf, "_replace_file"):
+            self.assertEqual(mf._fit_cap("voice.mp3", "spoken text", {"tail": 1.0}), 64.0)
+        voice.assert_called_once_with("spoken text", voice="energetic")
+
+    def test_voice_that_cannot_fit_at_natural_speed_is_rejected(self):
+        with patch.object(mf, "get_duration", side_effect=[80.0, 70.0]), \
+                patch.object(mf, "generate_voiceover", return_value=("faster.mp3", 70.0)), \
+                patch.object(mf, "_replace_file"):
+            with self.assertRaises(mf.FilmTooLong):
+                mf._fit_cap("voice.mp3", "spoken text", {"tail": 1.0})
+
+    def test_encoded_file_is_the_final_length_authority(self):
+        with patch.object(mf, "get_duration", return_value=65.01):
+            with self.assertRaises(mf.FilmTooLong):
+                mf._assert_file_cap("final.mp4")
+
+    def test_encoded_file_rejects_a_truncated_video_stream(self):
+        with patch.object(mf, "get_duration", return_value=59.35), \
+                patch.object(mf, "_stream_durations", return_value={"video": 4.07, "audio": 59.35}):
+            with self.assertRaisesRegex(RuntimeError, "video stream is only 4.07s"):
+                mf._assert_file_cap("final.mp4")
 
     def test_cutaway_forwards_set_and_does_not_retry_consumed_subject(self):
         from agents.showrunner import NoUnusedStorySets

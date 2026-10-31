@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agents import claude_cli
-from agents.voice import credit_status, elevenlabs_keys
+from agents.voice import FREE_VOICES, chatterbox_available, credit_status, elevenlabs_keys, kokoro_available
 
 from .config import PipelineConfig
 from .models import ProjectManifest
@@ -22,6 +22,14 @@ def _tool_ok(tool: str) -> bool:
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _edge_available() -> bool:
+    try:
+        import edge_tts  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def run_preflight(
@@ -67,11 +75,18 @@ def run_preflight(
     # credits; checking anyway refused a six-shot redo once the keys ran low.
     rendered = (Path(manifest.project_dir) / "audio" / "narration.mp3").is_file()
     checks["narration_reused"] = rendered
+    # generate_voiceover falls back to a free voice when no ElevenLabs key can speak (VOICE_FALLBACK);
+    # refusing the run here stopped an unattended video at its first GPU step. Kokoro and Chatterbox fall
+    # back to the next free voice in turn, so any one of them being installed is enough.
+    edge_fallback = (os.getenv("VOICE_PROVIDER") or "auto").strip().lower() != "elevenlabs" and (
+        os.getenv("VOICE_FALLBACK") or "edge").strip().lower() in FREE_VOICES and (
+        _edge_available() or chatterbox_available() or kokoro_available())
+    voice_problems: list[str] = []
     if manifest.narration_enabled and narration.strip() and not rendered:
         keys = elevenlabs_keys()
         checks["elevenlabs_keys"] = len(keys)
         if not keys:
-            problems.append("No ElevenLabs key is configured")
+            voice_problems.append("No ElevenLabs key is configured")
         else:
             required = len(narration)
             statuses = [(name, credit_status(key)) for name, key in keys]
@@ -82,9 +97,13 @@ def run_preflight(
             ]
             usable = [status for _, status in statuses if status["valid"]]
             if not usable:
-                problems.append("No ElevenLabs key passed the subscription/permission check")
+                voice_problems.append("No ElevenLabs key passed the subscription/permission check")
             elif all(int(status["remaining"] or 0) < required for status in usable):
-                problems.append(f"No ElevenLabs key has the {required} characters required for narration")
+                voice_problems.append(f"No ElevenLabs key has the {required} characters required for narration")
+    if voice_problems and edge_fallback:
+        checks["voice"] = "free voice fallback: " + "; ".join(voice_problems)
+    else:
+        problems.extend(voice_problems)
 
     report = {"valid": not problems, "checks": checks, "problems": problems}
     if problems:

@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from agents.script import build_script_tool
 from local_video.assembly import (
@@ -381,6 +381,19 @@ class NarrationFitTests(unittest.TestCase):
                                  config=config, script=sample_script())
         return config, project
 
+    def test_a_voice_off_the_planned_length_is_retimed_within_limits(self):
+        """The slow Edge voice turned a 65 s plan into an 82 s video; the channel wants 61-65 s."""
+        with tempfile.TemporaryDirectory() as folder:
+            config, project = self._project(folder, duration=65)
+            runner = QueueRunner(config, backends={})
+            narration = Path(folder) / "narration.mp3"
+            subprocess.run([config.ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:duration=70",
+                            "-c:a", "libmp3lame", str(narration)], check=True)
+            fitted = runner._fit_narration_length(project, narration, 70.0)
+            self.assertAlmostEqual(62.5, fitted, delta=0.3)        # 70 s -> the 62.5 s target (65 s plan)
+            self.assertTrue(any(e["event"] == "narration_retimed" for e in project.events))
+            self.assertEqual(61.0, runner._fit_narration_length(project, narration, 61.0))  # inside the window
+
     def test_long_narration_extends_the_timeline_instead_of_being_cut(self):
         with tempfile.TemporaryDirectory() as folder:
             config, project = self._project(folder)
@@ -463,9 +476,39 @@ class MiniMaxStartupTests(unittest.TestCase):
                 config.minimax_url = "http://127.0.0.1:8190"
                 return True, config.minimax_url
 
-            with patch("local_video.queue.ensure_minimax", side_effect=started):
+            with patch("local_video.queue.ensure_minimax", side_effect=started), \
+                    patch("local_video.queue.clear_orphaned_jobs", return_value="") as cleared:
                 runner._prepare_minimax(project)
             self.assertEqual("http://127.0.0.1:8190", runner.backends["minimax"].client.base_url)
+            cleared.assert_called_once()
+
+    def test_a_job_left_by_a_dead_run_is_interrupted_or_the_server_restarted(self):
+        """A run killed mid-keyframe left ComfyUI "running" at 0% GPU; the next run timed out behind it."""
+        from local_video import freevideo
+
+        def server(queues):
+            def get(url, timeout):
+                return MagicMock(json=MagicMock(return_value=queues.pop(0) if len(queues) > 1 else queues[0]))
+            return get
+
+        busy = {"queue_running": [[1, "orphan", {}]], "queue_pending": []}
+        idle = {"queue_running": [], "queue_pending": []}
+        config = make_test_config(tempfile.gettempdir(), minimax_url="http://fake.invalid:8190")
+        with patch.object(freevideo.requests, "get", side_effect=server([idle])), \
+                patch.object(freevideo.requests, "post") as post:
+            self.assertEqual("", freevideo.clear_orphaned_jobs(config))
+            post.assert_not_called()
+        with patch.object(freevideo.requests, "get", side_effect=server([busy, idle])), \
+                patch.object(freevideo.requests, "post") as post:
+            self.assertIn("interrupted", freevideo.clear_orphaned_jobs(config))
+            self.assertEqual({"http://fake.invalid:8190/queue", "http://fake.invalid:8190/interrupt"},
+                             {c.args[0] for c in post.call_args_list})
+        with patch.object(freevideo.requests, "get", side_effect=server([busy])), \
+                patch.object(freevideo.requests, "post"), patch.object(freevideo.time, "sleep"), \
+                patch.object(freevideo, "stop_freevideo_server") as stop, \
+                patch.object(freevideo, "ensure_minimax", return_value=(True, "http://fake.invalid:8190")):
+            self.assertEqual("restarted a stuck server", freevideo.clear_orphaned_jobs(config, wait_seconds=0))
+            stop.assert_called_once_with(8190)
 
     def test_ram_cap_is_saved_once_with_a_backup(self):
         from local_video import freevideo
@@ -494,6 +537,19 @@ class MiniMaxStartupTests(unittest.TestCase):
             self.assertFalse(available)
             self.assertIn("machine.json", reason)
             popen.assert_not_called()
+
+    def test_server_finds_the_engine_package_of_a_launcher_managed_install(self):
+        from local_video.freevideo_serve import engine_source
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.assertEqual(root, engine_source(root))         # no machine.json: the root itself
+            source = root / "launcher" / "source" / "2026.10.23"
+            (source / "freevideo_engine").mkdir(parents=True)
+            (root / "machine.json").write_text(json.dumps({"source": str(source)}), encoding="utf-8")
+            self.assertEqual(source, engine_source(root))
+            (root / "freevideo_engine").mkdir()
+            self.assertEqual(root, engine_source(root))         # a standalone install keeps its own package
 
 
 class ComfyPollingTests(unittest.TestCase):
@@ -889,7 +945,7 @@ class QueueTests(unittest.TestCase):
             adapter.client = client
             text = adapter.workflow(shot, Path(folder) / "frame.png")["1"]["inputs"]["text"]
         lead, rest = text.split(FIRST_FRAME_LINE)
-        self.assertTrue(lead.endswith("9:16 vertical frame. "))      # right after the opening framing
+        self.assertTrue(lead.endswith("9:16 vertical frame, the picture filling it edge to edge. "))      # right after the opening framing
         plain = plain_description(shot.prompt)
         self.assertNotIn("integrated_multimodal_description", plain)
         self.assertNotIn("overall_soundscape", plain)
@@ -902,6 +958,130 @@ class QueueTests(unittest.TestCase):
         self.assertEqual("35mm documentary look of a period reconstruction, muted grade",
                          generator_text("35mm documentary look of an illustrative period reconstruction, muted grade"))
         self.assertEqual("a radar dish at a ground station", generator_text("a radar dish at a ground station (illustrative)"))
+
+    def test_an_empty_sea_shot_gets_only_its_own_world(self):
+        """Hegdahl run shot-004: an empty open-sea shot was told about "every room", Hegdahl's listeners and
+        a "cell wall" palette, and MiniMax drew a split frame with two men talking in a cabin."""
+        from local_video.planner import _continuity, period_line
+        script = {
+            "characters": [{"name": "Doug Hegdahl", "look": "young sailor"}],
+            "color_palette": ("blue-gray steel and sea green for ship deck, sea surface, and open sea; dusty "
+                              "beige and faded gray for holding room, prison yard, and cell wall"),
+            "screen_geography": "Hegdahl usually occupies frame left facing right; his movement follows "
+                                "left-to-right, while listeners occupy frame right facing him.",
+            "beats": [{"text": "a", "visual": {"description": "Wide shot: a gray ship at sea", "scene": "open sea"}},
+                      {"text": "b", "visual": {"description": "Medium shot: Hegdahl in the yard",
+                                               "scene": "prison yard"}}],
+        }
+        sea, yard = (_continuity(script, "35mm", "pow", index) for index in (0, 1))
+        self.assertEqual("blue-gray steel and sea green", sea["palette"])
+        self.assertEqual("dusty beige and faded gray", yard["palette"])
+        self.assertEqual("", sea["screen_geography"])
+        self.assertIn("Hegdahl usually occupies frame left", yard["screen_geography"])
+        line = period_line({"period": "1967"})
+        for word in ("room", "never", "modern"):
+            self.assertNotIn(word, line)
+
+    def test_a_person_in_a_story_spanning_years_must_change_clothes(self):
+        """The Hegdahl video wore one sailor uniform through two years of captivity to the homecoming."""
+        from agents.evaluator import wardrobe_feedback
+        script = {"spoken_script": "He spent two years in captivity before his release.",
+                  "characters": [{"name": "Doug Hegdahl", "look": "young sailor in a navy jumper"}]}
+        self.assertIn("Doug Hegdahl never changes clothes", wardrobe_feedback(script))
+        script["characters"][0]["look_changes"] = [{"from_beat": 5, "look": "worn gray prison clothing"}]
+        self.assertIsNone(wardrobe_feedback(script))
+        self.assertIsNone(wardrobe_feedback({"spoken_script": "The volcano erupted on Tuesday.",
+                                             "characters": [{"name": "Ada", "look": "keeper"}]}))
+
+    def test_the_last_beat_ends_on_a_question_to_the_viewer(self):
+        """The Zanzibar and Hegdahl scripts ended on a statement; the channel ends every video on a question."""
+        from agents.evaluator import question_feedback
+        statement = {"beats": [{"text": "All because one prince skipped asking permission."}]}
+        self.assertIn("NO CLOSING QUESTION", question_feedback(statement))
+        bait = {"beats": [{"text": "It took 38 minutes. Comment your guess?"}]}
+        self.assertIn("NO CLOSING QUESTION", question_feedback(bait))
+        good = {"beats": [{"text": "It took 38 minutes. Would you have surrendered?"}]}
+        self.assertIsNone(question_feedback(good))
+
+    def test_the_hook_lands_in_three_seconds(self):
+        """The Hegdahl hook took 3.98 s to say and the first frame carried no headline."""
+        from agents.captions import hook_event
+        from agents.evaluator import hook_feedback, hook_seconds
+        self.assertAlmostEqual(4.0, hook_seconds("Doug Hegdahl carried about 256 prisoners' identities home."), 1)
+        long_hook = {"beats": [{"text": "Doug Hegdahl carried about 256 prisoners' identities home."}]}
+        self.assertIn("HOOK TOO LONG", hook_feedback(long_hook))
+        self.assertIsNone(hook_feedback({"beats": [{"text": "He memorized 256 prisoners' names."}]}))
+        event = hook_event("The Sailor Who Memorized About 256 POW Identities")
+        self.assertTrue(event.startswith("Dialogue: 1,0:00:00.00,0:00:03.00,Hook,"))
+        self.assertIn(r"\N", event)                                    # wrapped by hand: WrapStyle 2
+        self.assertIn("256", event)
+
+    def test_a_resumed_or_retaken_prompt_keeps_the_beats_end_state(self):
+        """Hegdahl run: every resume dropped "By the end of the clip" from every unfinished shot."""
+        from local_video.queue import _rebuilt_prompt, _retake_prompt
+        script = sample_script()
+        script["beats"][0]["visual"]["continuity_out"] = "The keeper stands at the open door, lamp raised."
+        project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                 config=make_test_config(tempfile.mkdtemp()), script=script)
+        shot = project.shots[0]
+        self.assertIn("By the end of the clip: The keeper stands at the open door", shot.prompt)
+        rebuilt = _rebuilt_prompt(shot, shot.subject_action, shot.camera_action, project.script)
+        self.assertIn("By the end of the clip: The keeper stands at the open door", rebuilt)
+        retake = _retake_prompt(shot, "Medium shot: the keeper climbs the last stairs with a brass lamp "
+                                      "held high, lit from the window.", True, project.script)
+        self.assertIn("By the end of the clip: The keeper stands at the open door", retake)
+
+    def test_the_story_period_reaches_both_generators(self):
+        """2026-10-29: a "location-neutral" 1967 holding room came out as a clean modern hallway."""
+        from local_video.keyframes import keyframe_prompt
+        from local_video.planner import generator_text, story_period
+        script = sample_script()
+        script["description"] = "Doug Hegdahl went overboard in 1967 and became a prisoner."
+        self.assertEqual("1967", story_period(script))
+        self.assertEqual("", story_period({"description": "A volcano grows."}))
+        self.assertEqual("a bare interior", generator_text("a bare, location-neutral interior"))
+        project = create_project("pow", 60, "35mm", "auto", narration_enabled=False,
+                                 config=make_test_config(tempfile.mkdtemp()), script=script)
+        shot = project.shots[0]
+        self.assertIn("Period: 1967", shot.prompt)
+        flux = keyframe_prompt(shot)
+        self.assertIn("Period: 1967", flux)
+        self.assertNotIn("modern", flux.lower())
+
+    def test_a_character_named_by_surname_alone_is_still_cast(self):
+        """2026-10-29: "Doug Hegdahl" once, then "Hegdahl" in 15 beats that all planned with no cast."""
+        from local_video.planner import beat_cast
+        script = {"characters": [{"name": "Doug Hegdahl"}, {"name": "The Major"}, {"name": "Anna Hegdahl"}],
+                  "beats": [{"visual": {"description": "Close-up: Hegdahl's face by the wall"}},
+                            {"visual": {"description": "Wide shot: Doug waits; a major storm rolls in"}},
+                            {"visual": {"description": "Medium shot: The Major pins a badge on Anna"}}]}
+        names = [[c["name"] for c in beat_cast(script, i)] for i in range(3)]
+        self.assertEqual([], names[0])                     # "Hegdahl" is shared by two characters
+        self.assertEqual(["Doug Hegdahl"], names[1])       # "major" in lower case is not The Major
+        self.assertEqual(["The Major", "Anna Hegdahl"], names[2])
+        script["characters"].pop()
+        self.assertEqual(["Doug Hegdahl"], [c["name"] for c in beat_cast(script, 0)])
+        # Named but off-frame: the Hegdahl run drew him walking into a shot built around his absence
+        script["beats"].append({"visual": {"description": "Medium shot: prisoners gathered, one extending an open "
+                                                          "palm toward Hegdahl's off-frame position"}})
+        self.assertEqual([], beat_cast(script, 3))
+
+    def test_generator_text_keeps_the_subject_the_label_introduces(self):
+        """2026-10-29 Hegdahl run: "reconstruction of X," lost X, the subject, in 11 of 22 prompts."""
+        from local_video.planner import generator_text
+        self.assertEqual(
+            "Medium shot: Doug Hegdahl seated frame left at a bare table, facing three officials.",
+            generator_text("Medium shot: illustrative reconstruction of Doug Hegdahl seated frame left at a bare "
+                           "table, facing three officials."))
+        self.assertEqual(
+            "Close-up: a heavy wooden door swings shut.",
+            generator_text("Close-up: illustrative, location-neutral reconstruction of captivity beginning: "
+                           "a heavy wooden door swings shut."))
+        self.assertEqual("Close-up: the remembered list, a row of faces.",
+                         generator_text("Close-up: illustrative physical stand-in for the remembered list, "
+                                        "a row of faces."))
+        self.assertEqual("Wide shot: the camera pulls back from his face.",
+                         generator_text("Wide shot: illustrative reconstruction pulls back from his face."))
 
     def test_a_close_up_carries_no_screen_geography(self):
         script = sample_script()
@@ -1084,6 +1264,32 @@ class ValidationTests(unittest.TestCase):
                                   require_visual_qc=False)
             self.assertNotIn("ElevenLabs", str(raised.exception))
 
+    def test_empty_voice_credits_fall_back_to_the_edge_voice_instead_of_stopping_the_run(self):
+        """The unattended Zanzibar run stopped at preflight: no ElevenLabs key had 847 characters left."""
+        class MissingBackend:
+            @staticmethod
+            def available():
+                return False, "offline"
+
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            manifest = ProjectManifest(
+                id="test", concept="test", duration_seconds=60, visual_style="film",
+                preferred_backend="auto", project_dir=folder, script={"spoken_script": "x" * 847},
+            )
+            with patch("local_video.preflight._tool_ok", return_value=True), \
+                    patch("local_video.preflight.elevenlabs_keys", return_value=[("k", "key")]), \
+                    patch("local_video.preflight.credit_status", return_value={"valid": True, "remaining": 0}):
+                with patch.dict(os.environ, {"VOICE_FALLBACK": "edge", "VOICE_PROVIDER": "auto"}):
+                    with self.assertRaisesRegex(RuntimeError, "No configured video backend") as raised:
+                        run_preflight(manifest, config, {"minimax": MissingBackend(), "wan": MissingBackend()},
+                                      require_visual_qc=False)
+                self.assertNotIn("ElevenLabs", str(raised.exception))
+                with patch.dict(os.environ, {"VOICE_FALLBACK": "none"}):
+                    with self.assertRaisesRegex(RuntimeError, "847 characters"):
+                        run_preflight(manifest, config, {"minimax": MissingBackend(), "wan": MissingBackend()},
+                                      require_visual_qc=False)
+
     def test_minimax_output_audio_is_physically_removed(self):
         with tempfile.TemporaryDirectory() as folder:
             config = make_test_config(folder)
@@ -1146,6 +1352,57 @@ class ValidationTests(unittest.TestCase):
             with patch("local_video.validation.ffprobe", return_value=probe):
                 with self.assertRaisesRegex(ValueError, "exactly 1 / 1"):
                     validate_final(video, config, 60)
+
+
+class FrameBarTests(unittest.TestCase):
+    """Hegdahl shot-004 was accepted as a ship in a strip between black bars; shot-020 had white ones."""
+
+    @staticmethod
+    def _frames(top=0, bottom=0, fill=None, seed=1):
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        frames = []
+        for _ in range(6):
+            frame = rng.integers(40, 200, (960, 544), dtype=np.uint8)
+            if fill is not None:
+                frame[:top] = fill
+                frame[960 - bottom:] = fill
+            frames.append(frame)
+        return frames
+
+    def test_black_and_white_bars_are_measured(self):
+        from local_video.validation import bar_problem, frame_bars
+        black = frame_bars(self._frames(300, 300, 0))
+        self.assertAlmostEqual(0.62, black["letterbox"], delta=0.03)
+        self.assertIn("letterboxed", bar_problem(black))
+        self.assertIn("letterboxed", bar_problem(frame_bars(self._frames(250, 250, 255))))
+
+    def test_a_dark_scene_or_one_dark_edge_is_not_a_bar(self):
+        import numpy as np
+        from local_video.validation import bar_problem, frame_bars
+        rng = np.random.default_rng(2)
+        night = [rng.integers(0, 40, (960, 544), dtype=np.uint8) for _ in range(6)]
+        self.assertEqual("", bar_problem(frame_bars(night)))
+        self.assertEqual("", bar_problem(frame_bars(self._frames(300, 0, 0))))   # a dark ceiling only
+
+    def test_an_accepted_letterboxed_clip_is_generated_again(self):
+        from local_video import queue as queue_module
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            project = create_project("desert city", 60, "35mm nocturne", "auto", narration_enabled=False,
+                                     config=config, script=sample_script())
+            for number, shot in enumerate(project.shots[:2]):
+                clip = Path(project.project_dir) / "shots" / f"{shot.id}.mp4"
+                clip.parent.mkdir(parents=True, exist_ok=True)
+                clip.write_bytes(b"mp4")
+                shot.status, shot.output = "accepted", str(clip.relative_to(project.project_dir))
+            boxed = {"letterbox": 0.5, "pillarbox": 0.0}
+            clean = {"letterbox": 0.0, "pillarbox": 0.0}
+            with patch.object(queue_module, "bar_metrics", side_effect=[boxed, clean]):
+                QueueRunner(config, backends={})._requeue_boxed_clips(project, None)
+            self.assertEqual("pending", project.shots[0].status)
+            self.assertEqual("accepted", project.shots[1].status)
+            self.assertTrue(any(e["event"] == "boxed_clips_requeued" for e in project.events))
 
 
 class AssemblyTests(unittest.TestCase):
@@ -1218,9 +1475,10 @@ class AssemblyTests(unittest.TestCase):
                 narration=Path(folder) / "narration.wav",
             )
             graph = command[command.index("-filter_complex") + 1]
-            self.assertIn("apad=whole_dur=60.000000[narr]", graph)
-            self.assertNotIn("asplit", graph)
+            self.assertIn("asplit=2[narr][ambside]", graph)
+            self.assertIn("[amb][ambside]sidechaincompress", graph)    # the sound bed ducks under the voice
             self.assertNotIn("[side]", graph)
+            self.assertNotIn("[music]", graph)
 
     def test_mix_creates_sidechain_when_music_is_present(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1239,8 +1497,9 @@ class AssemblyTests(unittest.TestCase):
                 music=Path(folder) / "music.wav",
             )
             graph = command[command.index("-filter_complex") + 1]
-            self.assertIn("asplit=2[narr][side]", graph)
+            self.assertIn("asplit=3[narr][side][ambside]", graph)
             self.assertIn("[music][side]sidechaincompress", graph)
+            self.assertIn("[amb][ambside]sidechaincompress", graph)
 
     def test_ffmpeg_command_has_exact_timeline_and_delivery_settings(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1277,7 +1536,30 @@ class AssemblyTests(unittest.TestCase):
             self.assertIn("30", final)
 
 
+REJECTED = {"semantic_review": {"valid": False, "visual_match": 4, "fatal_problems": ["wrong blocking"]}}
+
+
 class KeyframeTests(unittest.TestCase):
+    def test_a_crash_or_restart_never_retires_the_keyframe(self):
+        """Hegdahl run shot-001: an interrupted take counted as a keyframe failure and the retakes went text-only."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            first = keyframes.keyframe_path(project, project.shots[0])
+            first.parent.mkdir(parents=True)
+            first.write_bytes(b"png")
+            current = keyframes.keyframe_id(first)
+            project.shots[0].attempts = [
+                {"status": "failed", "keyframe": current, "validation": REJECTED},
+                {"status": "failed", "keyframe": current, "error": "generation process ended"},
+            ]
+            self.assertEqual(first, keyframes.usable_keyframe(project, project.shots[0]))
+            # rejected only for too little motion: the opening frame was right, so it stays
+            static = {"semantic_review": {"valid": False, "visual_match": 8, "continuity": 8,
+                                          "story_progression": 4, "fatal_problems": []}}
+            project.shots[0].attempts = [{"status": "failed", "keyframe": current, "validation": static}] * 3
+            self.assertEqual(first, keyframes.usable_keyframe(project, project.shots[0]))
+
     def _project(self, folder):
         project = create_project("desert city", 60, "35mm nocturne", "auto", narration_enabled=False,
                                  config=make_test_config(folder), script=sample_script())
@@ -1306,7 +1588,7 @@ class KeyframeTests(unittest.TestCase):
             first.parent.mkdir(parents=True)
             first.write_bytes(b"png")
             self.assertEqual(first, runner._reference_for(project, 0))
-            project.shots[0].attempts = [{"status": "failed", "keyframe": True}] * 2
+            project.shots[0].attempts = [{"status": "failed", "keyframe": True, "validation": REJECTED}] * 2
             self.assertIsNone(runner._reference_for(project, 0))     # the last takes go text-only
 
     def test_missing_checkpoint_skips_keyframes_without_gpu_work(self):
@@ -1317,6 +1599,417 @@ class KeyframeTests(unittest.TestCase):
                     patch.object(keyframes.ComfyClient, "submit") as submit:
                 self.assertEqual(0, keyframes.prepare_keyframes(project, make_test_config(folder)))
             submit.assert_not_called()
+
+    def test_a_regenerated_keyframe_does_not_inherit_earlier_failures(self):
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            first = keyframes.keyframe_path(project, project.shots[0])
+            first.parent.mkdir(parents=True)
+            first.write_bytes(b"png")
+            old = keyframes.keyframe_id(first)
+            project.shots[0].attempts = [{"status": "failed", "keyframe": old, "validation": REJECTED}] * 2
+            self.assertIsNone(keyframes.usable_keyframe(project, project.shots[0]))
+            first.write_bytes(b"a new, reviewed png")
+            self.assertEqual(first, keyframes.usable_keyframe(project, project.shots[0]))
+            # legacy records (keyframe: True) count only against a keyframe that existed when they started
+            project.shots[0].attempts = [{"status": "failed", "keyframe": True, "validation": REJECTED,
+                                          "started_at": first.stat().st_mtime - 60}] * 2
+            self.assertEqual(first, keyframes.usable_keyframe(project, project.shots[0]))
+            project.shots[0].attempts = [{"status": "failed", "keyframe": True, "validation": REJECTED,
+                                          "started_at": first.stat().st_mtime + 60}] * 2
+            self.assertIsNone(keyframes.usable_keyframe(project, project.shots[0]))
+
+    def _run_gate(self, folder, reviews, openings=(0,), project=None, calls=None, staged="", wait=None, **options):
+        from local_video import keyframes
+        project = project or self._project(folder)
+        target = keyframes.keyframe_path(project, project.shots[0])
+        prompts = []
+        calls = calls if calls is not None else []
+
+        def review(path, shot, identities=None, outfits=None, subjects=None):
+            calls.append((shot.id, list(identities or [])))
+            return reviews.pop(0)
+
+        def submit(graph):
+            prompts.append(graph["2"]["inputs"]["text"])
+            return f"p{len(prompts)}"
+
+        def fit(raw, path, config):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"png")
+
+        config = make_test_config(folder, minimax_url="http://127.0.0.1:8190")
+        with patch.object(keyframes, "has_checkpoint", return_value=True), \
+                patch.object(keyframes, "fresh_openings", return_value=list(openings)), \
+                patch("local_video.upscale.stop_idle_freevideo_worker"), \
+                patch.object(keyframes.ComfyClient, "submit", side_effect=submit), \
+                patch.object(keyframes.ComfyClient, "wait", side_effect=wait or (lambda prompt_id: {})), \
+                patch.object(keyframes.ComfyClient, "download", side_effect=lambda item, path: path), \
+                patch.object(keyframes.ComfyClient, "free_memory"), \
+                patch.object(keyframes, "_image_item", return_value={}), \
+                patch.object(keyframes, "_fit", side_effect=fit), \
+                patch.object(keyframes, "_restaged", return_value=staged), \
+                patch("local_video.visual_review.review_keyframe", side_effect=review), \
+                patch("local_video.visual_review.describe_identity", return_value="age 21, dark crew cut"), \
+                patch("local_video.visual_review.describe_subject", return_value="tan shaggy dog, dark muzzle"):
+            made = keyframes.prepare_keyframes(project, config, **options)
+        return made, target, prompts
+
+    def test_a_keyframe_breaking_the_blocking_is_retaken_with_the_correction(self):
+        rejected = {"valid": False, "score": 4, "fatal_problems": ["two officials, not three"],
+                    "problems": [], "correction": "Hegdahl seated at frame left; three officials at frame right."}
+        with tempfile.TemporaryDirectory() as folder:
+            made, target, prompts = self._run_gate(folder, [rejected, {"valid": True, "score": 8}])
+            self.assertEqual(1, made)
+            self.assertTrue(target.is_file())
+            self.assertEqual(2, len(prompts))
+            self.assertNotIn("three officials at frame right", prompts[0])
+            self.assertIn("Composition: Hegdahl seated at frame left", prompts[1])
+
+    def test_the_best_take_with_only_soft_misses_is_kept(self):
+        soft = {"valid": False, "score": 7.0, "anatomy": 8, "fatal_problems": [], "problems": ["skin slightly smooth"],
+                "correction": ""}
+        fatal = {"valid": False, "score": 6.0, "fatal_problems": ["two officials, not three"], "problems": [],
+                 "correction": ""}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "2"}):
+            made, target, prompts = self._run_gate(folder, [soft, fatal])
+            self.assertEqual(1, made)
+            self.assertTrue(target.is_file())
+            self.assertFalse(target.with_suffix(".best.png").exists())
+
+    def test_fast_mode_keeps_the_best_sound_take_when_every_take_had_a_fatal_problem(self):
+        """Zanzibar shot-011 lost its keyframe to a watch dial's numerals and became an unplanned text-only clip."""
+        numerals = {"valid": False, "score": 7.0, "anatomy": 8, "realism": 7, "fatal_problems": ["numerals on the dial"],
+                    "problems": [], "correction": ""}
+        twisted = {"valid": False, "score": 8.0, "anatomy": 3, "fatal_problems": ["extra fingers"],
+                   "problems": [], "correction": ""}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "2"}):
+            made, target, _ = self._run_gate(folder, [numerals, twisted], keep_flawed=True)
+            self.assertEqual(1, made)
+            self.assertTrue(target.is_file())
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "2"}):
+            made, target, _ = self._run_gate(folder, [dict(numerals), dict(twisted)])
+            self.assertEqual(0, made)                       # the classic flow still drops it
+
+    def test_a_take_with_broken_anatomy_is_never_kept_as_the_best(self):
+        """Hegdahl run shot-022: a head turned backwards on its body scored 6.0 and was kept."""
+        twisted = {"valid": False, "score": 6.0, "anatomy": 3, "fatal_problems": [], "problems": ["head turned"],
+                   "correction": ""}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "1"}):
+            made, target, prompts = self._run_gate(folder, [twisted])
+            self.assertEqual(0, made)
+            self.assertFalse(target.exists())
+
+    def test_the_first_passed_frame_of_a_character_anchors_every_later_one(self):
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            for shot in project.shots[:3]:
+                shot.cast = ["Ada"]
+            calls = []
+            made, target, prompts = self._run_gate(
+                folder, [{"valid": True, "score": 8}, {"valid": True, "score": 8}], openings=(0, 2),
+                project=project, calls=calls)
+            self.assertEqual(2, made)
+            anchor = keyframes.identity_anchor_path(project, "Ada")
+            self.assertTrue(anchor.is_file())
+            self.assertEqual("age 21, dark crew cut", project.settings["identity_anchors"]["Ada"]["appearance"])
+            self.assertEqual([], calls[0][1])                       # the first frame has nothing to match yet
+            self.assertEqual([("Ada", anchor)], calls[1][1])        # the next is reviewed against it
+            self.assertNotIn("dark crew cut", prompts[0])
+            self.assertIn("Look: Ada: age 21, dark crew cut", prompts[1])
+
+    def test_a_different_person_fails_the_identity_floor(self):
+        """2026-10-29: a man of ~40 passed against a 21-year-old anchor when identity was only a clause."""
+        from local_video import visual_review
+        with tempfile.TemporaryDirectory() as folder:
+            still = Path(folder) / "k.png"
+            import cv2, numpy as np
+            cv2.imwrite(str(still), np.zeros((64, 36, 3), dtype=np.uint8))
+            shot = Shot(id="s", index=1, duration_frames=90, prompt="", negative_prompt="", seed=1,
+                        subject_action="Close-up: Ada by the wall", continuity={}, cast=["Ada"])
+            answer = {"composition_match": 8, "realism": 8, "anatomy": 8, "identity_match": 4,
+                      "fatal_problems": [], "problems": [], "correction": ""}
+            with patch.object(visual_review, "review_enabled", return_value=True), \
+                    patch.object(visual_review.ai_router, "ask", return_value=answer):
+                matched = visual_review.review_keyframe(still, shot, [("Ada", still)])
+                unanchored = visual_review.review_keyframe(still, shot, [])
+            self.assertFalse(matched["valid"])
+            self.assertIn("identity_match 4", matched["fatal_problems"][0])
+            self.assertTrue(unanchored["valid"])                 # no reference: identity is not judged
+
+    def test_a_named_shot_keeps_the_right_face_over_text_only(self):
+        """Hegdahl run shot-016: every take missed the blocking, so text-only drew a stranger."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "1"}):
+            project = self._project(folder)
+            for shot in project.shots[:3]:
+                shot.cast = ["Ada"]
+            anchor = keyframes.identity_anchor_path(project, "Ada")
+            anchor.parent.mkdir(parents=True)
+            anchor.write_bytes(b"png")
+            project.settings["identity_anchors"] = {"Ada": {"path": str(anchor.relative_to(project.project_dir)),
+                                                            "appearance": "age 21"}}
+            blocked = {"valid": False, "score": 6.0, "anatomy": 8, "identity_match": 8,
+                       "fatal_problems": ["no second prisoner beside him"], "problems": [], "correction": ""}
+            stranger = dict(blocked, identity_match=4, score=7.0)
+            made, target, prompts = self._run_gate(folder, [stranger, blocked, blocked], project=project)
+            self.assertEqual(1, made)                    # named: 1 + 2 takes; the right face is kept
+            self.assertTrue(target.is_file())
+            self.assertFalse(target.with_suffix(".likeness.png").exists())
+
+    def test_the_wardrobe_follows_the_latest_accepted_shot(self):
+        """Hegdahl run: a sage sailor uniform, a gray top and a green jumpsuit for the same captivity."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            project.script["characters"] = [{"name": "Ada", "look": "keeper",
+                                             "look_changes": [{"from_beat": 4, "look": "rain gear"}]}]
+            for shot in project.shots[:5]:
+                shot.cast = ["Ada"]
+            frame = Path(project.project_dir) / "frames" / "s1.png"
+            frame.parent.mkdir(parents=True)
+            frame.write_bytes(b"png")
+            project.shots[0].status, project.shots[0].last_frame = "accepted", "frames/s1.png"
+            calls = []
+
+            def describe(path, name, lock):
+                calls.append(name)
+                return "gray wool sweater, bare head"
+
+            self.assertEqual({"Ada": "gray wool sweater, bare head"},
+                             keyframes.wardrobe_for(project, project.shots[2], describe))
+            keyframes.wardrobe_for(project, project.shots[1], describe)
+            self.assertEqual(["Ada"], calls)                        # described once, then cached
+            self.assertEqual({}, keyframes.wardrobe_for(project, project.shots[4], describe))  # new look
+            self.assertIn("Ada wears exactly: gray wool sweater, bare head",
+                          keyframes.keyframe_prompt(project.shots[2], {}, {"Ada": "gray wool sweater, bare head"}))
+
+    def test_a_retired_keyframe_is_redrawn_once(self):
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            old = keyframes.keyframe_path(project, project.shots[0])
+            old.parent.mkdir(parents=True)
+            old.write_bytes(b"stern stare")
+            project.shots[0].attempts = [{"status": "failed", "keyframe": keyframes.keyframe_id(old),
+                                          "validation": REJECTED}] * 2
+            made, target, prompts = self._run_gate(folder, [{"valid": True, "score": 8}], project=project)
+            self.assertEqual(1, made)
+            self.assertEqual(b"png", target.read_bytes())          # a fresh, reviewed frame
+            self.assertEqual(["shot-001"], project.settings["keyframes_redone"])
+            self.assertTrue(any((Path(project.project_dir) / "superseded" / "keyframes-retired").iterdir()))
+
+    def test_a_retired_keyframe_is_redrawn_at_most_the_redraw_limit(self):
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_REDRAWS": "2"}):
+            project = self._project(folder)
+            old = keyframes.keyframe_path(project, project.shots[0])
+            old.parent.mkdir(parents=True)
+            old.write_bytes(b"stern stare")
+            project.shots[0].attempts = [{"status": "failed", "keyframe": keyframes.keyframe_id(old),
+                                          "validation": REJECTED}] * 2
+            project.settings["keyframes_redone"] = ["shot-001", "shot-001"]
+            made, target, prompts = self._run_gate(folder, [], project=project)
+            self.assertEqual(0, made)
+            self.assertEqual(b"stern stare", target.read_bytes())   # the limit is spent: kept, not redrawn
+
+    def test_two_missed_first_frames_are_restaged_by_the_shot_doctor(self):
+        """Hegdahl shot-020: three officials across a table from him failed fifteen first frames."""
+        missed = {"valid": False, "score": 5, "fatal_problems": ["two officials, not three"], "problems": [],
+                  "correction": "three officials at frame right"}
+        with tempfile.TemporaryDirectory() as folder:
+            made, target, prompts = self._run_gate(
+                folder, [missed, missed, {"valid": True, "score": 8}],
+                staged="Medium shot: Hegdahl near the camera, three officials behind him along the table")
+            self.assertEqual(1, made)
+            self.assertIn("Composition: three officials at frame right", prompts[1])
+            self.assertIn("Composition: Medium shot: Hegdahl near the camera", prompts[2])
+
+    def test_a_letterboxed_first_frame_is_rejected_without_a_review(self):
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "2"}), \
+                patch.object(keyframes, "bar_metrics", side_effect=[{"letterbox": 0.5, "pillarbox": 0.0},
+                                                                    {"letterbox": 0.0, "pillarbox": 0.0}]):
+            calls = []
+            made, target, prompts = self._run_gate(folder, [{"valid": True, "score": 9}], calls=calls)
+            self.assertEqual(1, made)
+            self.assertEqual(1, len(calls))                    # only the full-frame take reached the reviewer
+            self.assertIn("filling the whole vertical frame", prompts[1])
+
+    def test_before_any_accepted_shot_the_identity_anchor_sets_the_wardrobe(self):
+        """Hegdahl run: keyframes drawn in one batch dressed him gray-green in shots 1, 3, 6, navy elsewhere."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            for shot in project.shots[:4]:
+                shot.cast = ["Ada"]
+            anchor = keyframes.identity_anchor_path(project, "Ada")
+            anchor.parent.mkdir(parents=True)
+            anchor.write_bytes(b"png")
+            project.settings["identity_anchors"] = {"Ada": {"path": str(anchor.relative_to(project.project_dir)),
+                                                            "shot": "shot-001", "appearance": "age 21"}}
+            describe = MagicMock(return_value="navy work shirt, bare head")
+            self.assertEqual({"Ada": "navy work shirt, bare head"},
+                             keyframes.wardrobe_for(project, project.shots[3], describe))
+            keyframes.wardrobe_for(project, project.shots[2], describe)
+            self.assertEqual(1, describe.call_count)          # described once, then cached
+
+    def test_the_keyframe_names_a_travelling_subject_s_front_edge_and_a_face_s_mechanics(self):
+        """Hegdahl shot-004: three ships drawn bow-on for "steaming right"; shot-006: a stern stare for vacant."""
+        from local_video import keyframes
+        from local_video.planner import _heading
+        self.assertEqual("right", _heading("a gray ship steaming on, its long white wake trailing toward frame left"))
+        self.assertEqual("left", _heading("a truck drives toward frame left"))
+        self.assertEqual("right", _heading("the dog sprints at full speed from frame left to frame right"))
+        self.assertEqual("right", _heading("the dog bounds from frame left past the marker toward frame right"))
+        self.assertEqual("right", _heading("the Greek column in khaki uniforms marches right in a side-on file"))
+        self.assertEqual("right", _heading("boots stamp in step across the ruts from left to right"))
+        self.assertEqual("", _heading("he turns his head to the right side"))
+        with tempfile.TemporaryDirectory() as folder:
+            shot = self._project(folder).shots[0]
+            shot.subject_action = ("Wide shot: the dog on the ridge footpath; below on the valley road the column "
+                                   "marches right in a side-on file.")
+            prompt = keyframes.keyframe_prompt(shot)
+            self.assertNotIn("Seen side-on", prompt)        # a marching group is never pushed sideways
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            shot = project.shots[0]
+            shot.subject_action = "Wide shot: a gray ship steaming on, its wake trailing behind it toward frame left."
+            self.assertIn("its front points to the right edge of the picture", keyframes.keyframe_prompt(shot))
+            shot.subject_action = "Close-up: Ada holds a deliberately vacant expression against the wall."
+            prompt = keyframes.keyframe_prompt(shot)
+            self.assertIn("Photograph of a slack-jawed, dumbfounded face, mouth wide open", prompt)
+            self.assertNotIn("front points", prompt)
+
+    def test_the_keyframe_turns_a_named_character_the_way_the_screen_geography_does(self):
+        """Hegdahl faced the camera or frame left in shots 6, 20 and 21: the lock never reached FLUX."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            shot = self._project(folder).shots[0]
+            shot.cast = ["Doug Hegdahl"]
+            shot.continuity = {**shot.continuity, "screen_geography": "Hegdahl occupies frame left facing right; "
+                                                                      "listeners face him from frame right."}
+            shot.subject_action = "Medium shot: Hegdahl seated at a bare table."
+            self.assertIn("Doug Hegdahl is turned toward the right edge of the picture",
+                          keyframes.keyframe_prompt(shot))
+            shot.subject_action = "Close-up: Hegdahl looks straight into the camera."
+            self.assertNotIn("turned toward", keyframes.keyframe_prompt(shot))
+
+    def test_a_wedged_server_is_restarted_and_the_remaining_keyframes_continue(self):
+        """Stray-dog shot-014: CUDA out of memory left ComfyUI running a dead job; keyframes simply stopped."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            waits = iter([TimeoutError("ComfyUI prompt p timed out after 300 seconds"), {}, {}])
+
+            def wait(prompt_id):
+                value = next(waits)
+                if isinstance(value, Exception):
+                    raise value
+                return value
+
+            with patch("local_video.freevideo.recover_server", return_value="restarted a dead server") as cleared:
+                made, target, prompts = self._run_gate(
+                    folder, [{"valid": True, "score": 8}, {"valid": True, "score": 8}], openings=(0, 2), wait=wait)
+            self.assertEqual(2, made)          # the interrupted take ran again, and the next keyframe was drawn
+            self.assertEqual(3, len(prompts))
+            cleared.assert_called_once()
+
+    def test_a_crash_mid_take_leaves_no_unreviewed_candidate_as_the_keyframe(self):
+        """The stray-dog hook's rejected candidate stayed on disk after a crash and the next run opened on it."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "2"}):
+            missed = {"valid": False, "score": 5, "fatal_problems": ["runs at the camera"], "problems": [],
+                      "correction": ""}
+            project = self._project(folder)
+            with self.assertRaises(IndexError):          # the second take's review crashes mid-take
+                self._run_gate(folder, [missed], project=project)
+            self.assertFalse(keyframes.keyframe_path(project, project.shots[0]).exists())
+
+    def test_the_first_accepted_frame_of_a_recurring_animal_anchors_its_look(self):
+        """The stray-dog video's dog was golden, then fox-like, then a shepherd: nothing locked its look."""
+        from local_video import keyframes
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            project.script["recurring_objects"] = ["The dog: a medium shaggy tan dog with no collar"]
+            for index in (0, 2):
+                project.shots[index].subject_action = "Wide shot: the tan dog trots along the plaza."
+            made, target, prompts = self._run_gate(
+                folder, [{"valid": True, "score": 8}, {"valid": True, "score": 8}], openings=(0, 2), project=project)
+            self.assertEqual(2, made)
+            anchor = project.settings["subject_anchors"]["The dog"]
+            self.assertEqual("tan shaggy dog, dark muzzle", anchor["card"])
+            self.assertNotIn("looks exactly like this", prompts[0])        # nothing to match yet
+            self.assertIn("The dog looks exactly like this: tan shaggy dog, dark muzzle", prompts[1])
+
+    def test_substances_and_destroyed_subjects_are_never_locked(self):
+        """The molasses card put a giant tank into every street; the intact tank stood behind its own wreckage."""
+        from local_video.keyframes import recurring_subjects
+        with tempfile.TemporaryDirectory() as folder:
+            project = self._project(folder)
+            project.script["recurring_objects"] = ["The tank: a riveted steel tank", "The molasses: thick brown syrup"]
+            shot = project.shots[0]
+            shot.subject_action = "Wide shot: the riveted tank stands full of dark molasses."
+            self.assertEqual(["The tank"], list(recurring_subjects(project, shot)))
+            shot.subject_action = "Close-up: torn and bent steel plates from the tank lie twisted in the yard."
+            self.assertEqual([], list(recurring_subjects(project, shot)))
+
+    def test_a_soft_miss_is_accepted_at_once_instead_of_after_more_takes(self):
+        """7 of 120 stray-dog takes passed outright; the soft misses were kept anyway, after 2-4 more takes."""
+        soft = {"valid": False, "score": 6.67, "anatomy": 8, "realism": 6, "composition_match": 6,
+                "fatal_problems": [], "problems": ["loose blocking"], "correction": ""}
+        with tempfile.TemporaryDirectory() as folder:
+            made, target, prompts = self._run_gate(folder, [soft])
+            self.assertEqual(1, made)
+            self.assertEqual(1, len(prompts))
+
+    def test_a_frame_heading_the_wrong_way_is_flipped_from_the_reviewers_heading(self):
+        """Direction was 42% of the stray-dog keyframe rejections; the flip no longer waits on the reviewer's guess."""
+        from local_video import keyframes
+        wrong = {"valid": False, "score": 6.0, "anatomy": 8, "fatal_problems": ["the dog runs left"], "problems": [],
+                 "correction": "", "subject_heading": "left", "mirror_fixes": False}
+        with tempfile.TemporaryDirectory() as folder, patch.object(keyframes, "_mirror") as mirror:
+            project = self._project(folder)
+            project.shots[0].subject_action = "Wide shot: the dog sprints from frame left to frame right."
+            made, target, prompts = self._run_gate(folder, [wrong, {"valid": True, "score": 8}], project=project)
+            self.assertEqual(1, made)
+            self.assertEqual(1, len(prompts))
+            mirror.assert_called_once_with(target)
+
+    def test_a_frame_wrong_only_in_its_facing_is_mirrored_instead_of_redrawn(self):
+        """Hegdahl shot-021 faced frame left in three FLUX takes against a lock facing right."""
+        from local_video import keyframes
+        facing = {"valid": False, "score": 6.0, "fatal_problems": ["faces frame left"], "problems": [],
+                  "correction": "", "mirror_fixes": True}
+        with tempfile.TemporaryDirectory() as folder, patch.object(keyframes, "_mirror") as mirror:
+            calls = []
+            made, target, prompts = self._run_gate(folder, [facing, {"valid": True, "score": 8}], calls=calls)
+            self.assertEqual(1, made)
+            self.assertEqual(1, len(prompts))                 # no second FLUX take
+            self.assertEqual(2, len(calls))                    # the mirrored frame was reviewed again
+            mirror.assert_called_once_with(target)
+
+    def test_a_change_the_action_states_overrides_the_identity_card(self):
+        """Hegdahl run shot-016: "hair grown noticeably longer" fought the card's short hair every take."""
+        from local_video.keyframes import _card_for, keyframe_takes
+        card = "Apparent age about 22 years; short light-brown hair swept up on top; clean-shaven; lean oval face"
+        self.assertEqual(card, _card_for(card, "Medium shot: Hegdahl listens at the wall"))
+        self.assertEqual("Apparent age about 22 years; clean-shaven; lean oval face",
+                         _card_for(card, "Medium shot: Hegdahl, his hair grown noticeably longer"))
+        self.assertEqual("Apparent age about 22 years; lean oval face",
+                         _card_for(card, "Close-up: Hegdahl's hair longer and a short beard"))
+        with patch.dict(os.environ, {"KEYFRAME_TAKES": "3"}):
+            self.assertEqual(5, keyframe_takes(named=True))
+            self.assertEqual(3, keyframe_takes())
+
+    def test_a_keyframe_rejected_in_every_take_is_dropped(self):
+        rejected = {"valid": False, "score": 3, "fatal_problems": ["wrong room"], "problems": [], "correction": ""}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"KEYFRAME_TAKES": "2"}):
+            made, target, prompts = self._run_gate(folder, [rejected, rejected])
+            self.assertEqual(0, made)
+            self.assertFalse(target.exists())          # the shot generates from text, not a known-bad frame
+            self.assertEqual(2, len(prompts))
 
 
 class DegradationGuardTests(unittest.TestCase):
@@ -1481,7 +2174,7 @@ class WritersCameraChoiceTests(unittest.TestCase):
         from local_video.planner import _camera_plan
         for chosen, expected in (("push_in", "push-in"), ("pull_out", "pull-back"),
                                  ("pan_left", "pan left"), ("pan_right", "pan right"),
-                                 ("rise", "rising"), ("orbit", "orbit")):
+                                 ("rise", "rising"), ("orbit", "orbit"), ("locked_off", "locked-off")):
             with self.subTest(chosen=chosen):
                 move, _ = _camera_plan("a volcano across the strait", 3, chosen=chosen)
                 self.assertIn(expected, move)
@@ -1491,15 +2184,16 @@ class WritersCameraChoiceTests(unittest.TestCase):
         expected = CAMERA_MOVES[3 % len(CAMERA_MOVES)]
         move, _ = _camera_plan("a volcano across the strait", 3)
         self.assertEqual(expected, move)
+        # an unknown choice holds still: the rotation once orbited a seated briefing out of frame
         move, _ = _camera_plan("a volcano across the strait", 3, chosen="not_a_move")
-        self.assertEqual(expected, move)
+        self.assertEqual("locked-off static camera", move)
 
     def test_the_writers_vocabulary_is_fully_translated(self):
         """planner.CAMERA_MOVES is 8 prose phrases, the screenplay enum is 6 different values, so
         the two could never match by accident: every enum value needs an explicit phrase."""
-        from agents.animate import CAMERA_MOVES as SCHEMA_MOVES
+        from agents.script import LOCAL_AI_VISUAL_SCHEMA
         from local_video.planner import _MOVE_PHRASE
-        self.assertEqual(set(SCHEMA_MOVES), set(_MOVE_PHRASE))
+        self.assertEqual(set(LOCAL_AI_VISUAL_SCHEMA["properties"]["camera"]["enum"]), set(_MOVE_PHRASE))
 
     def test_an_explicit_composition_cue_still_wins(self):
         """A macro or low-angle cue describes where the camera IS, so it sets the move and framing."""
@@ -1538,6 +2232,17 @@ class KeyframeStyleTests(unittest.TestCase):
         prompt = keyframe_prompt(self._shot())
         self.assertNotIn("Visual style:", prompt)
         self.assertIn("a dark volcanic cone across a strait", prompt)
+
+    def test_flux_is_never_told_what_to_leave_out(self):
+        """FLUX reads "no markings or writing visible" as a request for markings and writing."""
+        from local_video.keyframes import keyframe_prompt
+        shot = self._shot()
+        shot.subject_action = ("Close-up: illustrative reconstruction of a heavy door swinging shut, camera inside "
+                               "the room, no markings or writing visible")
+        prompt = keyframe_prompt(shot)
+        self.assertIn("Subject: Close-up: a heavy door swinging shut, camera inside the room.", prompt)
+        for word in ("illustrative", "markings", "writing", "no text", "watermark"):
+            self.assertNotIn(word, prompt.lower())
 
 
 class VolcanoRejectionCauseTests(unittest.TestCase):
@@ -1606,6 +2311,41 @@ class VolcanoRejectionCauseTests(unittest.TestCase):
         self.assertIsNone(continuation_source(labels, 3, None, scales))
         self.assertEqual(continuation_source(labels, 3), 2)     # without scales it would continue
 
+    def test_the_final_review_samples_the_middles_of_shots_never_a_crossfade(self):
+        """A frame taken mid-dissolve between two flag shots was rejected as a ghosted double exposure."""
+        from local_video.visual_review import _shot_middles
+        manifest = type("M", (), {"shots": [type("S", (), {"duration_frames": 90})() for _ in range(10)]})()
+        middles = _shot_middles(manifest)
+        self.assertEqual(9, len(middles))
+        for ratio in middles:
+            self.assertAlmostEqual(0.5, (ratio * 900 / 90) % 1, places=6)   # halfway into its shot
+
+    def test_an_end_state_never_brings_in_a_flag_the_shot_does_not_show(self):
+        """'marches right toward the Bulgarian flag' in the end state put a flag into a flagless march mid-clip."""
+        from local_video.planner import construct_prompt
+        prompt = construct_prompt(
+            subject_action="Wide shot: the Greek column marches away from the camera up the dusty valley road.",
+            camera_action="locked-off static camera", ambience="wind", continuity={}, framing="24mm wide frame",
+            backend="minimax",
+            handoff="Dust is still rising from the column as it marches toward the Bulgarian flag; the ridge stays hazy")
+        self.assertNotIn("flag", prompt.lower())
+        self.assertIn("Dust is still rising from the column as it marches", prompt)
+
+    def test_the_palette_carries_colours_never_the_sides_flags(self):
+        """A Bulgarian flag rose over the Greek camp in every take: the palette named both flags."""
+        from local_video.planner import colours_only
+        palette = ("Dusty ochre, sun-bleached khaki and pale sky blue, with small accents from the Greek "
+                   "blue-and-white flag and the Bulgarian white-green-red flag")
+        self.assertEqual("Dusty ochre, sun-bleached khaki and pale sky blue", colours_only(palette))
+        self.assertEqual("", colours_only("with accents from the Bulgarian white-green-red flag"))
+
+    def test_a_close_up_opens_only_on_a_close_frame(self):
+        """Hegdahl shot-021 came out bald and still medium on two takes from shot-020's medium frame."""
+        labels = [("briefing room", "day")] * 3
+        self.assertIsNone(continuation_source(labels, 1, None, [None, "close", "close"]))   # medium -> close
+        self.assertEqual(1, continuation_source(labels, 2, None, [None, "close", "close"]))  # close -> close
+        self.assertEqual(0, continuation_source(labels, 1, None, ["close", None, None]))     # close -> medium
+
     def test_one_side_never_opens_on_the_other_sides_frame(self):
         from local_video.planner import beat_objects, _object_name
         script = {"recurring_objects": [
@@ -1625,6 +2365,22 @@ class VolcanoRejectionCauseTests(unittest.TestCase):
         self.assertEqual(continuation_source(labels, 2, None, None, objects), 0)  # back to its own ship
         self.assertEqual(continuation_source(labels, 3, None, None, objects), 2)
         self.assertIsNone(continuation_source(labels, 1, None, None, objects))
+
+    def test_a_calm_shot_carries_neither_another_objects_name_nor_its_later_states(self):
+        """Molasses shot-003: "molasses tank" brought in the rolling molasses, and the tank's "split open
+        from beat 13" went into the calm shot's prompt; MiniMax erupted the tank mid-clip."""
+        from local_video.planner import _named_here, _object_name, beat_objects
+        tank = ("The molasses tank: a squat riveted steel tank streaked with brown drips; intact through beat 12, "
+                "split open from beat 13, torn plates after")
+        script = {"recurring_objects": [tank, "The molasses: glossy near-black liquid moving as a rolling mass"],
+                  "beats": [{"visual": {"scene": "yard", "light": "day", "description": d}} for d in (
+                      "Wide shot: the huge molasses tank stands in the yard, a gull gliding past.",
+                      "Close-up: molasses seeps from a seam at the tank base.",
+                  )]}
+        self.assertEqual(["the molasses tank"], [_object_name(item) for item in beat_objects(script, 0)])
+        self.assertEqual(2, len(beat_objects(script, 1)))
+        named = _named_here(tank, "the molasses tank stands in the yard")
+        self.assertEqual(["The molasses tank: a squat riveted steel tank streaked with brown drips"], named)
 
     def test_the_keyframe_leads_with_camera_position_and_light(self):
         from local_video.keyframes import keyframe_prompt
@@ -1673,7 +2429,195 @@ class QualityFloorTests(unittest.TestCase):
         import inspect
         from local_video import visual_review
         source = inspect.getsource(visual_review.review_clip)
-        self.assertIn('os.getenv("LOCAL_VIDEO_ALLOW_QUALITY_FLOOR", "0") == "1" and quality_floor(', source)
+        self.assertIn('os.getenv("LOCAL_VIDEO_ALLOW_QUALITY_FLOOR", "0") == "1"', source)
+        self.assertIn('getattr(shot, "index", 1) != 0 and quality_floor(', source)   # never for the hook
+
+    def test_the_shot_doctor_builds_its_real_prompt_and_reads_the_answer(self):
+        """A stray '+' in the prompt crashed every doctor call and with it every keyframe of an unattended run;
+        each other test mocked examine() and never built the prompt."""
+        from local_video import shot_doctor
+        with tempfile.TemporaryDirectory() as folder:
+            shot = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                  config=make_test_config(folder), script=sample_script()).shots[1]
+            shot.continuity = {**shot.continuity, "screen_geography": "the keeper always faces right"}
+            asked = {}
+
+            def ask(system, prompt, schema, model=None, images=None):
+                asked["prompt"] = prompt
+                return {"risks": ["the door leaves frame"], "camera": "locked_off", "start_frame_fits": True,
+                        "description": "Medium shot: the keeper stands at frame left by the open door, lamp raised."}
+
+            with patch.object(shot_doctor.ai_router, "ask", side_effect=ask):
+                result = shot_doctor.examine(shot, "the door is shut", None, {"Ada": "gray wool sweater"},
+                                             failed="the door left the frame")
+            self.assertEqual("locked-off static camera", result["camera"])
+            for part in ("the keeper always faces right", "WARDROBE LOCK for Ada", "the door left the frame",
+                         "the door is shut"):
+                self.assertIn(part, asked["prompt"])
+
+    def test_a_replanned_first_take_cancels_the_early_render_made_from_the_old_plan(self):
+        """Hegdahl shot-022 was planned blind at run start and opened on a frame that could not become it."""
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            runner = QueueRunner(make_test_config(folder), backends={})
+
+            def replan(manifest, shots):
+                manifest.shots[1].prompt = "replanned from the real first frame"
+
+            with patch.object(runner, "_doctor_shots", side_effect=replan) as doctor, \
+                    patch.object(runner, "_cancel_speculation") as cancel:
+                runner._recheck_first_take(project, 1)
+            doctor.assert_called_once_with(project, {2})
+            cancel.assert_called_once()
+            with patch.object(runner, "_doctor_shots"), patch.object(runner, "_cancel_speculation") as cancel:
+                runner._recheck_first_take(project, 1)           # unchanged plan: the early render is kept
+            cancel.assert_not_called()
+
+    def test_the_shot_doctor_sets_the_first_take_and_is_cached(self):
+        from local_video import queue as queue_module, shot_doctor
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            runner = QueueRunner(make_test_config(folder), backends={})
+            runner.visual_reviewer = queue_module.review_clip
+            calls = []
+            fix = {"camera": "locked-off static camera", "risks": ["push-in crops the door"],
+                   "description": "Medium shot: the keeper stands at frame left by the open door, lamp raised; "
+                                  "the door swings shut and meets its frame."}
+
+            def examine_all(jobs, workers=4):
+                calls.append(len(jobs))
+                return [fix for _ in jobs]
+
+            with patch.object(shot_doctor, "examine_all", side_effect=examine_all):
+                runner._doctor_shots(project)
+                first = project.shots[0]
+                self.assertEqual("locked-off static camera", first.camera_action)
+                self.assertIn("the door swings shut and meets its frame", first.prompt)
+                self.assertIn("Static shot", first.prompt)
+                runner._doctor_shots(project)                       # a resume re-applies the cache
+            self.assertEqual([len(project.shots)], calls)
+            project.shots[1].attempts = [{"status": "failed", "validation": {"semantic_review": {"valid": False}}}]
+            project.settings["shot_doctor"].pop(project.shots[1].id)
+            with patch.object(shot_doctor, "examine_all", side_effect=examine_all):
+                runner._doctor_shots(project)
+            self.assertEqual([len(project.shots)], calls)            # reviewed shots keep reviewer retakes
+
+    def test_a_shot_whose_inherited_frame_does_not_fit_opens_fresh(self):
+        """Hegdahl shot-010 continued from a face close-up and failed six times as a group medium shot."""
+        from local_video.keyframes import fresh_openings
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            for shot in project.shots:
+                shot.scene, shot.light = "plaza", "dusk"
+            runner = QueueRunner(make_test_config(folder), backends={})
+            self.assertEqual(0, runner._reference_source(project, 1))
+            self.assertNotIn(1, fresh_openings(project))
+            project.settings["open_fresh"] = [project.shots[1].id]
+            self.assertIsNone(runner._reference_source(project, 1))
+            self.assertIn(1, fresh_openings(project))
+
+    def test_a_retake_whose_inherited_frame_does_not_fit_gets_its_own_now(self):
+        """Hegdahl shot-014 (alone) inherited a frame with another prisoner; the retake redraws it mid-run."""
+        from local_video import keyframes, queue as queue_module, shot_doctor
+        from local_video.backends import MiniMaxAdapter
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            for shot in project.shots:
+                shot.scene, shot.light = "plaza", "dusk"
+            inherited = Path(project.project_dir) / "frames" / "s1-last.png"
+            inherited.parent.mkdir(parents=True)
+            inherited.write_bytes(b"two men")
+            project.shots[0].status, project.shots[0].last_frame = "accepted", "frames/s1-last.png"
+            shot = project.shots[1]
+            shot.attempts = [{"status": "failed", "validation": {"semantic_review": {
+                "valid": False, "fatal_problems": ["a second man is in frame"], "problems": []}}}]
+            runner = QueueRunner(make_test_config(folder), backends={"minimax": MagicMock(spec=MiniMaxAdapter)})
+            runner.visual_reviewer = queue_module.review_clip
+            seen = []
+
+            def examine(shot_, end, reference, outfits=None, failed=""):
+                seen.append(reference)
+                fits = reference != inherited
+                return {"camera": "locked-off static camera", "risks": [], "start_frame_fits": fits,
+                        "description": "Medium shot: the keeper alone at frame left, pacing toward frame right."}
+
+            def draw(manifest, config, selected=None):
+                path = keyframes.keyframe_path(manifest, manifest.shots[1])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"alone")
+
+            with patch.object(shot_doctor, "examine", side_effect=examine), \
+                    patch.object(queue_module, "prepare_keyframes", side_effect=draw):
+                runner._retake(project, 1, shot, "Show him alone.", inherited)
+            self.assertEqual(inherited, seen[0])
+            self.assertEqual(keyframes.keyframe_path(project, shot), seen[1])     # re-planned on the new frame
+            self.assertIn(shot.id, project.settings["open_fresh"])
+            self.assertEqual(keyframes.keyframe_path(project, shot), runner._reference_for(project, 1))
+
+    def test_a_retake_is_doctored_against_its_own_failure(self):
+        from local_video import queue as queue_module, shot_doctor
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            runner = QueueRunner(make_test_config(folder), backends={})
+            runner.visual_reviewer = queue_module.review_clip
+            shot = project.shots[0]
+            shot.attempts = [{"status": "failed", "validation": {"semantic_review": {
+                "valid": False, "fatal_problems": ["extras are clones of the keeper"], "problems": []}}}]
+            seen = {}
+
+            def examine(shot_, end, reference, outfits=None, failed=""):
+                seen["failed"] = failed
+                return {"camera": "locked-off static camera", "risks": ["clones"],
+                        "description": "Medium shot: the keeper stands at frame left; three gray-haired fishermen "
+                                       "in brown coats stand at frame right, the same three in every frame."}
+
+            with patch.object(shot_doctor, "examine", side_effect=examine):
+                prompt = runner._retake(project, 0, shot, "Make the extras look different.", None)
+            self.assertIn("extras are clones of the keeper", seen["failed"])
+            self.assertIn("Make the extras look different.", seen["failed"])
+            self.assertIn("three gray-haired fishermen in brown coats", prompt)
+            self.assertIn("Static shot", prompt)
+
+    def test_the_reviewer_judges_staging_against_the_plan_it_was_rendered_from(self):
+        """Hegdahl shot-010: every take staged as planned (a row) was rejected for not being a semicircle."""
+        import cv2, numpy as np
+        from local_video import visual_review
+        with tempfile.TemporaryDirectory() as folder:
+            clip = Path(folder) / "c.mp4"
+            writer = cv2.VideoWriter(str(clip), cv2.VideoWriter_fourcc(*"mp4v"), 30, (36, 64))
+            for _ in range(10):
+                writer.write(np.zeros((64, 36, 3), dtype=np.uint8))
+            writer.release()
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            shot = project.shots[0]
+            project.settings["shot_doctor_take"] = {shot.id: "Medium shot: listeners in a row at frame right."}
+            seen = {}
+            answer = {name: 8 for name in ("visual_match", "continuity", "image_quality", "anatomy", "immersion",
+                                           "story_progression")}
+            answer.update(fatal_problems=[], problems=[], revision_prompt="")
+            with patch.object(visual_review, "review_enabled", return_value=True), \
+                    patch.object(visual_review.ai_router, "ask",
+                                 side_effect=lambda system, prompt, schema, **k: seen.update(p=prompt) or answer):
+                visual_review.review_clip(clip, shot, None, project)
+            self.assertIn("as planned for this take (judge staging, layout and camera against this): Medium shot: "
+                          "listeners in a row", seen["p"])
+            self.assertIn("Beat as written in the script", seen["p"])
+
+    def test_a_reset_shot_gets_a_new_seed(self):
+        """The regenerated Hegdahl hook came back frame-for-frame identical: same seed, keyframe, prompt."""
+        from local_video.project import reset_shot
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("lighthouse", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            before = project.shots[0].seed
+            after = reset_shot(project.project_dir, 1, make_test_config(folder)).shots[0].seed
+            self.assertNotEqual(before, after)
 
 
 class RetakeCorrectionTests(unittest.TestCase):
@@ -1787,3 +2731,14 @@ class RedoFlagTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FlawedKeyframeTests(unittest.TestCase):
+    def test_a_weird_take_is_never_kept_as_the_flawed_fallback(self):
+        """Potsdam shot-018 kept 'a red pom-pom ... reads as a surreal artifact' on the king's head."""
+        from local_video.keyframes import _WEIRD
+        self.assertTrue(_WEIRD.search("A red pom-pom on a headband reads as a surreal artifact"))
+        self.assertTrue(_WEIRD.search("Visible text: a sign reading CENTRAL"))
+        self.assertTrue(_WEIRD.search("Overall CGI/rendered look"))
+        self.assertFalse(_WEIRD.search("Officer wears a peaked cap instead of a black tricorn"))
+        self.assertFalse(_WEIRD.search("Watch dial shows Roman numerals"))

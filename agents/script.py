@@ -131,7 +131,21 @@ LOCAL_AI_VISUAL_SCHEMA = {
             "description": "Production-ready description of one physical three-second shot, starting with its "
                            "shot size ('Wide shot:', 'Medium shot:', 'Close-up:' or 'Extreme close-up:'): "
                            "named character, action, connected location, recurring props, composition, "
-                           "lighting, and depth. No dialogue or text.",
+                           "lighting, and depth. No dialogue or text. The frame is a tall 9:16 phone "
+                           "frame: at most two people side by side; a group (officials across a table, a "
+                           "line of prisoners) is staged in depth, one person near the camera and the "
+                           "others behind, never spread in a row across the frame. Someone visibly DOES "
+                           "something in the shot (speaks with a hand marking points, writes, leans in): "
+                           "people who only listen, sit or wait render as a frozen frame. A subject crossing "
+                           "the frame is seen side-on in profile, its front toward the edge it heads for, "
+                           "never from behind or head-on: the first frame fixes its direction for the clip. "
+                           "A column, crowd or herd on the move marches AWAY from the camera up its road (or "
+                           "toward it), never across the tall frame side-on: 13 first frames of a column "
+                           "crossing failed, while marching away passed first time. Its side shows through its "
+                           "uniforms and where its road leads, never a carried flag (the image model plants it "
+                           "on a loose pole beside the column). Prefer motion toward or away from the camera or "
+                           "past a still landmark; a side-to-side crossing only for a lone subject and only when "
+                           "crossing a line is the point (direction was 42% of first-frame rejections).",
         },
         "continuity_out": {
             "type": "string",
@@ -139,9 +153,10 @@ LOCAL_AI_VISUAL_SCHEMA = {
         },
         "camera": {
             "type": "string",
-            "enum": list(CAMERA_MOVES),
+            "enum": [*CAMERA_MOVES, "locked_off"],
             "description": "One motivated camera move that follows the current action or moves toward "
-                           "or away from what is already in frame; never one that reveals something new.",
+                           "or away from what is already in frame; never one that reveals something new. "
+                           "locked_off when the action itself is the motion or a group must stay framed.",
         },
         "transition": {
             "type": "string",
@@ -264,7 +279,9 @@ def build_script_tool(num_beats: int, min_words: int, max_words: int, mode: str 
             },
             "color_palette": {
                 "type": "string",
-                "description": "A restrained recurring color palette for every shot; a clause meant for one place names that place's `scene` label.",
+                "description": "A restrained recurring color palette for every shot; a clause meant for one place "
+                               "names that place's `scene` label. Colours only, never objects: a flag named here "
+                               "appears in every shot, the enemy's over your own camp included.",
             },
             "screen_geography": {
                 "type": "string",
@@ -357,8 +374,11 @@ SYSTEM_PROMPT_HEAD = """You are an elite viral content director. Your videos hit
 
 ═══ VOICEOVER NARRATION ═══
 - Match the requested word count (it sets the video length).
-- HOOK (beat 1, first 2 seconds): state the single most astonishing fact or OUTCOME of the story, in
-  plain words, as a cold open ("In 585 BC, the sun vanished mid-battle and two armies stopped a war.").
+- HOOK (beat 1, spoken in under 3 seconds = at most 8 spoken words, a number counting as the words it
+  is said with): the reason a scrolling viewer STOPS. Its words open a curiosity gap — a paradox,
+  danger or impossible stake the viewer needs resolved ("He fell off his ship. It saved 256 men." /
+  "The sun vanished mid-battle. Both armies quit."), never a summary or a title read aloud ("Doug
+  Hegdahl carried 256 identities home" is a summary). A longer beat 1 is rejected in code before review.
   Never open with scene-setting or background ("two armies, one river..."): ~37% of viewers swipe
   away in the first seconds when the hook only sets the scene. Beat 2 then starts the story
   ("Here's how it happened.").
@@ -445,8 +465,11 @@ The video generator must never create narration, dialogue, subtitles, cards, dia
 1. Write one causal story, not a montage: each beat must happen because of the previous beat and must
    visibly move the protagonist toward the ending. Give the story a clear goal, obstacle, escalation,
    climax, and concrete payoff. Do not use disconnected mystery images or unexplained random objects.
-   Beat 1 is a COLD OPEN: it shows the story's most astonishing moment (the payoff image, e.g. the
-   eclipse above both armies) while its words state the outcome. Give it the SAME `scene` and `light`
+   Beat 1 is a COLD OPEN and the HOOK: it shows the story's most gripping, high-stakes moment ALREADY
+   IN MOTION in its first frame (the eclipse swallowing the sun above both armies, a sailor plunging
+   off a night deck into black sea), while its words open the curiosity gap. Never a calm frame: no
+   aftermath, no one seated, standing or talking, no establishing view, no object at rest; those
+   lose the viewer in the first second. Give it the SAME `scene` and `light`
    labels as the later beat where that moment really happens, and do not name it a flashback. From
    beat 2 on, keep events strictly chronological: no other flash-forward, no flashbacks; beat 2 starts
    at the beginning of the story ("Here's how it happened.").
@@ -487,6 +510,8 @@ The video generator must never create narration, dialogue, subtitles, cards, dia
    close framing, never two people merely standing near each other. For this
    mode, do not end on a generic cliffhanger. Never introduce a new person, creature, object, or threat
    in the final beats merely as a twist; the payoff must come from elements established earlier.
+   The last beat's narration ENDS with one short question to the viewer (13 words at most) that the
+   story lets them answer or argue about; never ask them to comment, like, subscribe or follow.
 8. This pipeline defaults to DOCUMENTARY mode. Never invent a discovery, person, place, quotation,
    artifact, scientific mechanism, or historical event. Fiction is allowed only when the request is
    explicitly marked [FICTION]; the title, narration and description must clearly label it as fiction.
@@ -508,7 +533,8 @@ labels, logos, or written numbers.
 
 1. Build an evidence-led visual journey around the REAL SUBJECT, not a fictional protagonist. The
    subject may be a spacecraft, sample, machine, structure, natural process, animal, or place. Beat 1
-   is a cold-open glimpse of the strongest real outcome; beat 2 begins the explanation. After that,
+   is the HOOK: the most dramatic real moment of the subject, already in motion in its first frame
+   (the launch, the collapse, the eruption), never a calm view of it; beat 2 begins the explanation. After that,
    progress causally from origin/input through process/evidence to the final factual payoff.
 2. `characters` should be [] unless the supplied evidence names a real person whose presence is
    essential. Never invent named presenters, scientists, archaeologists, witnesses, technicians, or
@@ -529,13 +555,23 @@ labels, logos, or written numbers.
    software captions. Show quantities through physical groupings only when reliable generation is
    plausible; otherwise show the real object or process the number describes.
 7. The ending payoff is a clear final view of the real subject, completed mechanism, or combined
-   evidence—not a handshake, human gesture, invented celebration, or fictional decision.
+   evidence—not a handshake, human gesture, invented celebration, or fictional decision. When a real
+   person carries the story, the last beats SHOW the hook's claim happening, readable with the sound
+   off: for a sailor who memorized 256 names, him reciting with lips moving and fingers keeping count
+   while an official writes fast, not him merely seated near listeners (that ending was rejected as
+   a payoff never shown). The last beat's narration ENDS with one short question to the viewer (13
+   words at most) that the facts let them answer or argue about; never ask them to comment, like,
+   subscribe or follow.
 8. The production bible is object-led: `story_premise` states the factual question and answer;
    `protagonist_goal` names the physical process/evidence trail; `stakes` explains why it matters;
    `ending_payoff` names the final factual reveal; `recurring_objects` locks the subject's appearance.
 9. Do not invent a discovery, person, place, quotation, artifact, experiment, scientific mechanism,
    or historical event. When the evidence cannot support a scene, simplify to a neutral illustrative
-   view of the supported object instead of filling the gap with fiction.
+   view of the supported object instead of filling the gap with fiction. Neutral means UNNAMED, not
+   generic or new: a stand-in must still read at a glance as the right kind of place in the right era,
+   through its materials and wear (a 1960s prison cell: rough stained concrete, an iron-banded or barred
+   door, a worn plank bunk; not "a plain wooden door" and "a bench", which renders as a clean modern
+   room). Never write "location-neutral" or "generic" in a visual; describe the place instead.
 10. EVERY VISUAL MUST BE FILMABLE BY THIS GENERATOR. Accuracy binds the narration; the shots must
    also be renderable, or the clip is rejected and the shot becomes a frozen still. Therefore:
    - Do not name a real vehicle, vessel, craft, spacecraft or instrument in a visual. Describe it
@@ -594,8 +630,9 @@ labels, logos, or written numbers.
    lava flow on the next flank" kept the first flow and drifted onto a hillside on every take, a
    rise "to reveal the lava front" pulled back until the front was a speck, and an orbit barely
    turned. So:
-   - `camera` is `push_in` or `pull_out` for a still subject. Use `pan_left`/`pan_right` only to
-     follow something that moves, and never use `rise` or `orbit`.
+   - `camera` is `push_in` or `pull_out` for a still subject, and `locked_off` when the action itself
+     is the motion or a group must stay framed (a seated briefing orbited its officials out of frame).
+     Use `pan_left`/`pan_right` only to follow something that moves, and never use `rise` or `orbit`.
    - Whatever the shot is about must be in its first frame. To show a new subject, cut to it: give
      it its own beat whose description shows it from the start.
    - Say where the camera stands in every description: "at eye level on the shore", "from a boat
@@ -626,6 +663,18 @@ labels, logos, or written numbers.
      "a yellow banner with a black double-headed eagle"), and repeat that marking in every
      description that shows that side. Show both sides in one shot only when the beat is about
      them meeting.
+   - A national flag is the version viewers recognize today when it was also in use then, described
+     by its exact geometry: "nine equal horizontal blue and white stripes with a white cross on a blue
+     square in the top-left corner" for Greece, "three equal horizontal stripes, top to bottom: white,
+     green, red" for Bulgaria. "A blue flag with a white cross" was drawn as a Scandinavian
+     off-centre cross, and "a white, green and red tricolour" as white, red, green: other countries.
+   - A side's flag appears only where that side is: on its post or building, its pole planted in the
+     ground. Never a lone flag standing in empty land or in the sky to say "this is their side", and
+     never one carried by marching troops (the image model plants it on a loose pole beside them): a
+     Bulgarian flag alone in a field beside the Greek column, and a Greek flag floating on a pole that
+     reached nothing, made no sense to viewers.
+   - Screen geography fixes the sides when both appear in one shot. A column marching away up its road
+     toward the other side is exempt: that is the direction the image model draws reliably.
    - Keep movable things out of `location`. "A broad river with sailing ships on the water" puts
      extra ships, flying whatever flag the generator likes, into every shot of that river, including
      the one about a single ship. The location is the place only; each beat names what is in it.
@@ -639,6 +688,21 @@ labels, logos, or written numbers.
      description is the violent reaction ("the cannonball slams into the iron kettle, which bursts
      sideways in a spray of broth and dented iron"), not the calm aftermath. Objects only, never
      a person hit.
+16. A REAL PERSON'S STORY READS WITH THE SOUND OFF. A video about a sailor held for two years was
+   rejected after rendering: he wore the same uniform from the ship through captivity to the
+   homecoming, his fall overboard was only a cap on a deck and ripples, the fellow prisoners were
+   young in one shot and old men in the next, and the ending showed paperwork, not his memory. So:
+   - Clothes follow the story's time. When it spans months or years or a change of circumstance
+     (capture, prison, release, homecoming), give the person a `look_changes` entry at the beat
+     where each change starts (worn prison clothing during captivity, a fresh uniform or civilian
+     clothes on return), never one outfit for the whole span.
+   - The turning-point event is shown happening, filmably and without harm: the moment of losing
+     footing at the rail and dropping toward the water seen from a distance, not only the empty
+     rail afterwards. Aftermath shots may follow it, never replace it.
+   - A recurring anonymous group (fellow prisoners, officials, crew) gets one `recurring_objects`
+     entry fixing its look (ages, hair, clothing colours) that every description showing it
+     repeats word for word.
+   - The payoff (rule 7) shows the person doing the thing the hook promised.
 
 """
 

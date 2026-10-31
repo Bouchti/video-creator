@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import re
 import subprocess
@@ -18,6 +19,8 @@ from .config import MAX_CLIP_STRETCH, MAX_TRANSITION_SECONDS, PipelineConfig, re
 from .models import ProjectManifest
 from .upscale import upscale_clips
 
+log = logging.getLogger("pipeline")
+
 
 def _run(command: list[str], timeout: int, label: str) -> None:
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
@@ -28,6 +31,20 @@ def _run(command: list[str], timeout: int, label: str) -> None:
 def _ffmpeg_escape(path: str | Path) -> str:
     value = str(Path(path).resolve()).replace("\\", "/")
     return value.replace(":", "\\:").replace("'", "\\'").replace("[", "\\[").replace("]", "\\]")
+
+
+# Natural grade plus fine temporal grain: reads as camera footage, not a smooth AI render. "film" (opt-in via
+# LOCAL_VIDEO_GRADE) also lifts the blacks, mutes colour, softens and vignettes; tried as the default on
+# 2026-10-31, the final review then called the Lake Tanganyika cut "hazy, over-graded, dreamy".
+GRADES = {
+    "plain": "eq=contrast=1.03:saturation=0.96,noise=alls=5:allf=t+u",
+    "film": ("curves=all='0/0.05 0.5/0.5 1/0.95',eq=contrast=1.02:saturation=0.88,gblur=sigma=0.5,"
+             "unsharp=5:5:0.35,vignette=PI/5,noise=alls=8:allf=t+u"),
+}
+
+
+def grade() -> str:
+    return GRADES.get(os.getenv("LOCAL_VIDEO_GRADE", "plain").strip().lower(), GRADES["plain"])
 
 
 def build_video_command(
@@ -71,9 +88,7 @@ def build_video_command(
             f"trim=duration={output_duration:.6f},setpts=PTS-STARTPTS,"
             f"scale=1080:1920:force_original_aspect_ratio=increase:flags={config.upscale_filter},"
             "crop=1080:1920,setsar=1,"
-            # Natural grade plus fine temporal grain: reads as camera footage, not a smooth AI render.
-            "eq=contrast=1.03:saturation=0.96,noise=alls=5:allf=t+u"
-            f"[v{index}]"
+            f"{grade()}[v{index}]"
         )
     current = "v0"
     elapsed = accepted[0].duration_seconds
@@ -139,18 +154,23 @@ def build_mix_command(
         music_index = 3 if narration else 2
         command += ["-stream_loop", "-1", "-i", str(music)]
     filters = ["[0:a]aresample=48000,volume=0.8[amb]", "[1:a]aresample=48000,volume=0.75[fx]"]
-    mix = ["[amb]", "[fx]"]
+    mix = ["[fx]"]
     if narration_index is not None:
         narration_filter = (
             f"[{narration_index}:a]aresample=48000,loudnorm=I=-18:TP=-1.5:LRA=9,"
             f"apad=whole_dur={manifest.duration_seconds:.6f}"
         )
+        # The sound bed dips under the voice and comes back in its pauses, like the music: at a fixed
+        # level the Ghost Army effects (2026-10-31) were "exaggerated" against the narration.
         if music_index is not None:
-            narration_filter += ",asplit=2[narr][side]"
+            narration_filter += ",asplit=3[narr][side][ambside]"
         else:
-            narration_filter += "[narr]"
+            narration_filter += ",asplit=2[narr][ambside]"
         filters.append(narration_filter)
-        mix.append("[narr]")
+        filters.append("[amb][ambside]sidechaincompress=threshold=0.03:ratio=4:attack=30:release=450[ambducked]")
+        mix += ["[ambducked]", "[narr]"]
+    else:
+        mix.append("[amb]")
     if music_index is not None:
         volume = float(os.getenv("MUSIC_VOLUME", "0.12"))
         filters.append(f"[{music_index}:a]aresample=48000,volume={volume:.4f}[music]")
@@ -306,6 +326,15 @@ def spoken_words(
     return snap_to_script(heard, script) if script else heard
 
 
+def opening_hook(manifest: ProjectManifest) -> str:
+    """An optional headline over the first ~3 s (the script's title). Off by default: a title is not a
+    hook; the hook is beat 1's own moment and line. LOCAL_VIDEO_HOOK_TITLE=1 turns it on.
+    """
+    if os.getenv("LOCAL_VIDEO_HOOK_TITLE", "0").strip() != "1":
+        return ""
+    return str(manifest.script.get("video_title") or "").strip()
+
+
 def create_captions(
     narration: Path,
     output_dir: Path,
@@ -315,10 +344,11 @@ def create_captions(
     total_duration: float | None = None,
     script: str = "",
     words: list[dict[str, Any]] | None = None,
+    hook: str = "",
 ) -> tuple[Path | None, Path | None, list[dict[str, Any]]]:
     if words is None:
         words = spoken_words(transcribe_with_whisper(str(narration)), beats, total_duration, script)
-    ass = Path(words_to_ass(words, str(output_dir / "captions.ass"))) if word_highlight else None
+    ass = Path(words_to_ass(words, str(output_dir / "captions.ass"), hook=hook)) if word_highlight else None
     srt = None
     if export_srt or not word_highlight:
         srt = output_dir / "captions.srt"
@@ -376,7 +406,14 @@ def assemble_project(
         if fit_shots_to_speech(manifest, words):
             manifest.record("timeline_fitted_to_speech")
     _run(build_video_command(manifest, silent_video, config, upscale_clips(manifest, config)), 1800, "Video assembly")
-    _run(build_ambience_command(manifest, ambience, config), 900, "Ambience assembly")
+    from . import sound
+    try:
+        designed = sound.render(manifest, ambience)
+    except Exception as exc:                 # the video never fails on its sound bed
+        log.warning("Designed sound unavailable (%s); silent ambience", exc)
+        designed = False
+    if not designed:
+        _run(build_ambience_command(manifest, ambience, config), 900, "Ambience assembly")
     whoosh_times, pop_times = authored_effect_times(manifest)
     build_fx_track(manifest.duration_seconds, whoosh_times, pop_times, str(effects))
     _run(build_mix_command(manifest, ambience, effects, soundtrack, config, narration_path, music_path), 600, "Audio mix")
@@ -390,6 +427,7 @@ def assemble_project(
             bool(manifest.captions.get("export_srt", True)),
             bool(manifest.captions.get("word_highlight", True)),
             words=words,
+            hook=opening_hook(manifest),
         )
     burn = (captions_ass or captions_srt) if manifest.captions.get("burn_in", True) else None
     _run(build_final_command(silent_video, soundtrack, final, manifest.duration_seconds, config, burn), 1800, "Final render")

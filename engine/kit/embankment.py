@@ -554,6 +554,13 @@ class EmbankmentSet:
         self.pile_z = Chan(self.pile, self.pile, "location", 2, 0.0)     # used up: it sinks into the ground
         self.duck = duck_model()
         self.duck_loc = _vec_chans(self.duck, "location", (0, 0, 0))
+        # Shared end-of-failure payoff: regardless of the mechanism, the lawn is visibly underwater and
+        # the duck sails into it. This lives in the kit, so a planner cannot accidentally omit the disaster.
+        flood = toy.material("kb_fail_flood_water", toy.srgb("#49AEE8"), roughness=0.08, transmission=0.25,
+                             alpha=0.78)
+        self.fail_flood = toy.box("kb_fail_flood", (7.2, 4.2, 0.055), (4.2, 2.1, 0.045), mat=flood, bevel=0.02)
+        st.no_shadow(self.fail_flood)
+        toy.hide_tree(self.fail_flood, 1, True)
         self.squirrel = squirrel_model()
         self.squirrel_loc = _vec_chans(self.squirrel, "location", (0, 0, 0))
         toy.hide_tree(self.squirrel, 1, True)
@@ -571,8 +578,18 @@ class EmbankmentSet:
             self.max.auto_blink(1, self.total + 600, seed=11)
             self.max.hold(self.shovel, "R")
             self.shovel.location = (0, -0.04, 0.28)
+            # Blue drops are parented to Max, so they remain wrapped around him at every event location.
+            wet = toy.material("kb_drench_water", toy.srgb("#8AD8FF"), roughness=0.05, transmission=0.3,
+                               alpha=0.9)
+            self.drench = toy.empty("kb_drench", (0, 0, 0), self.max.root)
+            for k, (x, y, z) in enumerate(((-0.35, -0.08, 1.65), (0.34, -0.1, 1.55), (-0.28, -0.16, 1.15),
+                                            (0.3, -0.17, 1.02), (-0.18, -0.2, 0.72), (0.16, -0.2, 0.62))):
+                toy.sphere(f"kb_drench_drop_{k}", 0.075, (x, y, z), scale=(0.55, 0.45, 1.8), mat=wet,
+                           parent=self.drench)
+            toy.hide_tree(self.drench, 1, True)
         else:
             self.max = _Absent()
+            self.drench = None
         self.kids = []                                # the family stays: scale and life in the yard
         for k, look in enumerate(KID_LOOKS):
             kid = Character(f"Kid{k + 1}", look)
@@ -639,8 +656,10 @@ class EmbankmentSet:
             ch.set(f, v)
         self._key_level(f, f, g.level(state["level"], prof if state["barrier"] else "steep"), instant=True)
         self._weather(f, state["weather"])
-        for o in (self.boil, self.bags, self.sheet, self.jet, self.splash, self.marker):
+        for o in (self.boil, self.bags, self.sheet, self.jet, self.splash, self.marker, self.fail_flood):
             toy.hide_tree(o, f, True)
+        if self.drench is not None:
+            toy.hide_tree(self.drench, f, True)
         for group in self.flows.values():
             for root in group:
                 toy.hide_tree(root, f, True)
@@ -848,6 +867,8 @@ class EmbankmentSet:
         if self.sb.get("gag") == "duck":
             self._duck_float(m0 + 1, t(0.08))
         getattr(self, f"_ev_{ev_name}")(m0, e, t, prof)
+        if ev["outcome"] == "fail" and self.hero:
+            self._failure_payoff(t, e, spot, prof)
         # the result and the reaction, inside the same shot
         if ev["outcome"] == "fail":
             if ev_name in ("burrow_piping", "underseep_boil"):
@@ -870,6 +891,28 @@ class EmbankmentSet:
         else:
             self._frame(step, g.focus(ev_name, prof), ev_name, prof, m0, r0 - 1, k)
         self._frame(step, g.result_focus(ev_name, prof), ev_name, prof, r0, e, k + 1, label_from=r0 + 2)
+
+    def _failure_payoff(self, t, e, spot, prof):
+        """One shared, unmistakable ending for every mistake: flooded yard, incoming duck, drenched Max."""
+        # The measured gate samples the mechanism midpoint and 7/8: the disaster is established by the
+        # midpoint, then held through the final reaction instead of flashing on only at the last frame.
+        flood = t(0.08)
+        toy.hide_tree(self.fail_flood, flood, False)
+        toy.hide_tree(self.fail_flood, e + 1, True)
+        # Sail the duck beside Max after any event-specific gag has finished.
+        toy.hide_tree(self.duck, flood, False)
+        # Put the duck clearly inside the flooded yard, not on the toe or the foreground cut face. The
+        # deeper y position keeps blue water visible around it in the final reaction shot.
+        yard_toe = g.berm_outline()[1][0] if self.state["berm"] else g.toes(prof)[1] + 0.7
+        duck_x = max(spot[0] - 0.2, yard_toe + 0.25)
+        duck_y = max(spot[1] + 0.65, 1.35)
+        for ch, value in zip(self.duck_loc, (duck_x, duck_y, 0.14)):
+            ch.move(t(0.58), t(0.76), value)
+        toy.hide_tree(self.drench, t(0.10), False)
+        toy.hide_tree(self.drench, e + 1, True)
+        events.add(t(0.58), "water_rush", duration=max(4, e - t(0.58)), gain=0.45)
+        events.add(t(0.72), "splash", gain=0.7)
+        events.add(t(0.76), "quack", gain=0.65)
 
     def _on_ground(self, spot, prof):
         """A standing spot moved onto whatever is built there now (the berm), unless it is on the crest."""

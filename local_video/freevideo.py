@@ -9,6 +9,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import requests
+
 from config.paths import get_log_file
 
 from .config import PipelineConfig, env_int, probe_node
@@ -110,3 +112,54 @@ def ensure_minimax(config: PipelineConfig) -> tuple[bool, str]:
         log.info("FreeVideo is up on %s", url)
     config.minimax_url = url
     return True, url
+
+
+def recover_server(config: PipelineConfig) -> str:
+    """Bring a dead or stuck FreeVideo back. Returns what was done, "" if nothing was needed, or
+    "restart failed: ..." when it stays down."""
+    if not (config.minimax_url and probe_node(config.minimax_url, "FreeVideoGenerate")):
+        # ComfyUI aborted inside FLUX ("Fatal Python error: Aborted") and the process was gone.
+        available, detail = ensure_minimax(config)
+        return "restarted a dead server" if available else f"restart failed: {detail}"
+    return clear_orphaned_jobs(config)
+
+
+def stop_freevideo_server(port: int) -> None:
+    """Kill the ComfyUI server FreeVideo runs on this port (both its launcher and its engine process)."""
+    if os.name == "nt":
+        command = ["powershell", "-NoProfile", "-Command",
+                   "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*ComfyUI*main.py*' "
+                   f"-and $_.CommandLine -like '*--port {port}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId "
+                   "-Force }"]
+    else:
+        command = ["pkill", "-f", f"ComfyUI/main.py.*--port {port}"]
+    subprocess.run(command, capture_output=True, timeout=60)
+
+
+def clear_orphaned_jobs(config: PipelineConfig, wait_seconds: float = 30.0) -> str:
+    """Clear ComfyUI work no run owns; restart a server that cannot be interrupted. Returns what was done.
+
+    Called while this run holds the GPU lock, so any job already queued or running belongs to a run
+    that died. A run killed in the middle of a FLUX keyframe left one "running" at 0% GPU, and the next
+    run's first keyframe waited out the full 300 s timeout behind it.
+    """
+    url = config.minimax_url
+    try:
+        queue = requests.get(f"{url}/queue", timeout=10).json()
+        if not (queue.get("queue_running") or queue.get("queue_pending")):
+            return ""
+        requests.post(f"{url}/queue", json={"clear": True}, timeout=10)
+        requests.post(f"{url}/interrupt", json={}, timeout=10)
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            if not requests.get(f"{url}/queue", timeout=10).json().get("queue_running"):
+                return "interrupted a job left by an earlier run"
+            time.sleep(1)
+    except (requests.RequestException, ValueError):
+        return ""
+    log.warning("ComfyUI is stuck on a job left by an earlier run; restarting FreeVideo")
+    stop_freevideo_server(int(url.rsplit(":", 1)[-1]))
+    time.sleep(3)
+    config.minimax_url = ""
+    available, detail = ensure_minimax(config)
+    return "restarted a stuck server" if available else f"restart failed: {detail}"

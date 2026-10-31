@@ -40,6 +40,22 @@ REFERENCE_LINES = {
     "finale": "Now every fix works together, the river rises, and the yard stays dry. Which fix would you build?",
 }
 
+# Zero-cost preview narration: short, plain sentences that exercise every beat while staying inside the
+# production 65-second budget. New worlds may provide their own mapping; storyboard.reference_film has a
+# concise generic fallback.
+REFERENCE_BEATS = {
+    "calm": "Max promised his kids the yard would stay dry forever.",
+    "seep_slump": "Sand has wide gaps, so river water leaked through and collapsed it.",
+    "seep_blocked": "A packed clay core closed those gaps and stopped the leak.",
+    "underseep_boil": "Then buried sand carried pressure underneath, bursting through the lawn.",
+    "underseep_relieved": "A heavy berm and relief wells released that hidden pressure safely.",
+    "overtop_scour": "Next, water crossed the low crest and gouged the bare slope.",
+    "freeboard_holds": "Max raised the crest, then added grass and protective rock.",
+    "burrow_piping": "One squirrel tunnel became a muddy jet that carried soil away.",
+    "burrow_sealed": "Packed repairs and regular checks stopped small holes becoming breaches.",
+    "storm_holds": "Now every fix holds, and the trampoline stays dry. Which mistake surprised you?",
+}
+
 
 def worlds() -> tuple:
     """Every world the kit can film: the embankment and each verified world in engine/kit/worlds."""
@@ -171,6 +187,9 @@ STEP_KINDS = ("setup", "fail", "fix", "finale")
 REACTIONS = {"fail": "shrug", "fix": "cheer", "setup": "point", "finale": "cheer"}
 GAGS = ("duck", "none")
 LABEL_MAX = 18                     # characters in a beat's 3D label
+# Every Max-story failure ends on the same readable disaster payoff. The storyboard compiler adds these
+# names to fail-beat must_see gates, so a kit regression cannot silently lose one of them.
+HERO_FAILURE_MUST_SEE = ("kb_fail_flood", "kb_duck", "kb_drench")
 
 # Seconds an action needs on screen (min, max): setup part + mechanism part.
 SECONDS = {"setup": (3, 6), "fail": (5, 9), "fix": (5, 9), "finale": (4, 7), "hook": (3, 5)}

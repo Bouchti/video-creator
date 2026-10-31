@@ -53,7 +53,8 @@ class VarietyFeedbackTests(unittest.TestCase):
                 patch("agents.evaluator.has_all_keys", return_value=(True, [])), \
                 patch("agents.evaluator.length_feedback", return_value=None), \
                 patch("agents.evaluator.evaluate_script",
-                      side_effect=lambda script, **k: judged.append(script) or {"verdict": "PASS"}):
+                      side_effect=lambda script, **k: judged.append(script) or {"verdict": "PASS"}), \
+                patch("agents.evaluator.question_feedback", return_value=None):
             result = evaluate_with_retry("topic", max_retries=5, mode="local-ai")
         self.assertEqual(len(judged), 1)                  # the monotone draft never reached it
         self.assertIn("Close-up", result["beats"][1]["visual"]["description"])

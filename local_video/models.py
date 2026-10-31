@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -14,6 +15,10 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
+# Keyframes are drawn and reviewed on several threads at once: every change to a manifest made from a
+# worker thread, and every save, holds this lock (a save serializing a dict another thread is growing
+# raises "dictionary changed size during iteration").
+MANIFEST_LOCK = threading.RLock()
 
 
 def utc_now() -> str:
@@ -123,8 +128,9 @@ class ProjectManifest:
     error: str | None = None
 
     def record(self, event: str, **details: Any) -> None:
-        self.events.append({"at": utc_now(), "event": event, **details})
-        self.updated_at = utc_now()
+        with MANIFEST_LOCK:
+            self.events.append({"at": utc_now(), "event": event, **details})
+            self.updated_at = utc_now()
 
     def set_state(self, state: ProjectState | str, **details: Any) -> None:
         self.state = state.value if isinstance(state, ProjectState) else str(state)
@@ -148,21 +154,23 @@ class ProjectManifest:
     def save(self, path: str | Path | None = None) -> Path:
         target = Path(path) if path else Path(self.project_dir) / "project.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        self.updated_at = utc_now()
-        fd, temporary = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=target.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(self.to_dict(), stream, indent=2, ensure_ascii=False)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            _replace_with_retry(temporary, target)
-        except Exception:
+        with MANIFEST_LOCK:          # held to the end: a slower save must not overwrite a newer one
+            self.updated_at = utc_now()
+            data = self.to_dict()
+            fd, temporary = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=target.parent)
             try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-            raise
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                    json.dump(data, stream, indent=2, ensure_ascii=False)
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                _replace_with_retry(temporary, target)
+            except Exception:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+                raise
         return target
 
 

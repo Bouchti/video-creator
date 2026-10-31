@@ -20,19 +20,20 @@ from agents.media import get_duration
 from agents.voice import generate_voiceover
 from config.paths import PROJECT_ROOT
 
+from . import fast
 from .assembly import assemble_project
 from .backends import BackendAdapter, GenerationResult, MiniMaxAdapter, _remove_generated_audio, build_backends
-from .freevideo import ensure_minimax
-from .keyframes import prepare_keyframes, usable_keyframe
+from .freevideo import clear_orphaned_jobs, ensure_minimax, recover_server
+from .keyframes import fresh_openings, keyframe_id, prepare_keyframes, usable_keyframe, wardrobe_for
 from .config import PipelineConfig, resolve_within
-from .models import ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
+from .models import MANIFEST_LOCK, ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
 from .planner import (
     MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, _continuity, construct_prompt, continuation_source, framing_for, framing_scale, payoff_of,
-    reseed, shot_objects,
+    reseed, shot_objects, beat_handoff, _names_cast,
 )
-from .project import load_project
+from .project import load_project, requeue_shot
 from .preflight import run_preflight
-from .validation import extract_last_frame, ffprobe, media_metadata, validate_clip, validate_final
+from .validation import bar_metrics, bar_problem, extract_last_frame, ffprobe, media_metadata, validate_clip, validate_final
 from .visual_review import review_clip, review_final_video
 
 log = logging.getLogger("pipeline")
@@ -49,6 +50,17 @@ class QueueBusyError(RuntimeError):
 
 class VisualReviewRejected(ValueError):
     """A usable render that failed the director's story/continuity review."""
+
+
+class ReviewerUnavailable(RuntimeError):
+    """The clip reviewer is out of budget or usage: no take can be judged, so the run stops resumably.
+
+    The Ghost Army run (2026-10-31) hit CLAUDE_TOKEN_BUDGET at shot 10 and went on "rejecting" every
+    unreviewed take; each remaining shot would have burned four MiniMax takes and ended as a still.
+    """
+
+
+_REVIEWER_OUT = ("BudgetExceeded", "UsageLimit")
 
 
 class FileLock(AbstractContextManager):
@@ -199,8 +211,18 @@ def _prompt_for_backend(shot, backend: str):
     return shot
 
 
-def _rebuilt_prompt(shot, description: str, camera: str) -> str:
-    """A fresh H3 prompt for this shot around a new description, from the fields the shot keeps."""
+def _rebuilt_prompt(shot, description: str, camera: str, script: dict | None = None) -> str:
+    """A fresh H3 prompt for this shot around a new description, from the fields the shot keeps.
+
+    With the script it keeps what planning had: the beat's own end state (`continuity_out`) and
+    whether the story tracks its cast. Without it, every resume rebuilt prompts from the action's
+    last sentence, which the prompt already holds, so "By the end of the clip" vanished from every
+    resumed shot (Hegdahl run, 2026-10-29) and a cast-free shot lost "none of the named characters".
+    """
+    beats = (script or {}).get("beats") if isinstance((script or {}).get("beats"), list) else []
+    planned = script is not None and 0 <= shot.index < len(beats)
+    handoff = (beat_handoff(script, shot.index) if planned else "") or payoff_of(shot.subject_action)
+    tracks_cast = _names_cast(script) if script is not None else bool(shot.cast)
     return construct_prompt(
         subject_action=description,
         camera_action=camera,
@@ -208,13 +230,13 @@ def _rebuilt_prompt(shot, description: str, camera: str) -> str:
         continuity=shot.continuity or {},
         framing=framing_for(shot.subject_action, camera),
         backend="wan" if WAN_SUFFIX in shot.prompt else "minimax",
-        cast_names=list(shot.cast) or None,
+        cast_names=list(shot.cast) if tracks_cast else None,
         light=shot.light,
-        handoff=payoff_of(shot.subject_action),
+        handoff=handoff,
     )
 
 
-def _retake_prompt(shot, correction: str, has_reference: bool) -> str:
+def _retake_prompt(shot, correction: str, has_reference: bool, script: dict | None = None) -> str:
     """The next take: the reviewer's corrected description of the shot, as a clean H3 prompt.
 
     Retakes used to stack orders ("DIRECTOR'S RETAKE", the review note, then the whole first
@@ -227,10 +249,10 @@ def _retake_prompt(shot, correction: str, has_reference: bool) -> str:
     correction = correction.strip()
     # A short note ("Keep the regulator visible.") amends the beat; a full description replaces it.
     description = correction if len(correction) >= 60 else f"{shot.subject_action} {correction}".strip()
-    return _rebuilt_prompt(shot, description, shot.camera_action)
+    return _rebuilt_prompt(shot, description, shot.camera_action, script)
 
 
-def _repair_prompt(shot) -> str:
+def _repair_prompt(shot, script: dict | None = None) -> str:
     """The last take for a shot every normal take failed: hold on its end state, with no move.
 
     On the 2026-10-27 volcano run MiniMax ignored every reveal it was given: a pan to "another"
@@ -241,7 +263,7 @@ def _repair_prompt(shot) -> str:
     held = (f"{payoff_of(shot.subject_action)} The framing, distance and angle stay exactly the same "
             "in every frame; the only motion is natural motion inside the scene, such as water, "
             "smoke, steam, cloud or light.")
-    return _rebuilt_prompt(shot, held, "locked-off static camera")
+    return _rebuilt_prompt(shot, held, "locked-off static camera", script)
 
 
 def _is_infrastructure_failure(exc: Exception) -> bool:
@@ -281,6 +303,12 @@ class QueueRunner:
         self.progress = progress
         self._speculation: dict[str, Any] | None = None
         self._selected: set[int] | None = None
+        # Fast mode (see fast.py): a wall-clock deadline for the whole pipeline, set per run.
+        self._fast = False
+        # Planned stills (LOCAL_VIDEO_PLANNED_STILLS=1) is the only mode that trades quality for the deadline:
+        # fewer takes, flawed keyframes kept, stills for rejected clips. The default never does.
+        self._rushed = False
+        self._deadline: float | None = None
 
     def _emit(self, manifest: ProjectManifest, backend: str | None = None, error: str | None = None) -> None:
         done = completed_shots(manifest)
@@ -321,6 +349,8 @@ class QueueRunner:
 
     @staticmethod
     def _reference_source(manifest: ProjectManifest, index: int) -> int | None:
+        if manifest.shots[index].id in manifest.settings.get("open_fresh", []):
+            return None              # the shot doctor found the inherited frame cannot become this shot
         return continuation_source(
             [(s.scene.lower(), s.light.lower()) for s in manifest.shots], index, [s.cast for s in manifest.shots],
             [framing_scale(s.subject_action) for s in manifest.shots],
@@ -344,25 +374,48 @@ class QueueRunner:
                 return candidate
         return usable_keyframe(manifest, manifest.shots[index])
 
+    def _recheck_first_take(self, manifest: ProjectManifest, index: int) -> None:
+        """Pre-flight a shot again on the frame it will really open on, now that its source is accepted.
+
+        The run-start pre-flight sees no frame for a continuation whose source is not accepted yet:
+        Hegdahl shot-022 opened blind on shot-021's one-official close-up for a beat with three officials
+        and a stack of pages, and was rejected for exactly that. Free when the plan is unchanged.
+        """
+        shot = manifest.shots[index]
+        planned = (shot.prompt, self._reference_for(manifest, index))
+        try:
+            self._doctor_shots(manifest, {index + 1})
+        except Exception as exc:
+            log.warning("Shot doctor recheck for %s skipped: %s", shot.id, exc)
+        if (shot.prompt, self._reference_for(manifest, index)) != planned:
+            self._cancel_speculation(manifest, "the shot doctor replanned it from its real first frame")
+
     def _generate_shot(self, manifest: ProjectManifest, index: int) -> bool:
         shot = manifest.shots[index]
         for prior in shot.attempts:
             if prior.get("status") in {"generating", "validating"}:
                 prior.update(status="failed", error="generation process ended before the attempt completed",
                              ended_at=time.time())
+        if not shot.attempts and not self._rushed:
+            self._recheck_first_take(manifest, index)
         sequence = self._backend_sequence(manifest)
         primary_failures = 0
         total_attempts = self.config.retry_limit + 1
         infrastructure_retry_limit = 2
         # One extra take with the move stripped out, spent only once every normal take was rejected.
-        repair_used = not self.config.repair_take
+        repair_used = not self.config.repair_take or self._rushed
         repairing = False
+        if self._rushed:
+            total_attempts = min(total_attempts, 2)
         maximum_attempts = total_attempts + infrastructure_retry_limit + (0 if repair_used else 1)
         creative_failures = 0
         infrastructure_failures = 0
         last_error = "No backend was attempted"
         revision_notes: list[tuple[float, str]] = []
+        restarted_server = False
         for prior in shot.attempts:
+            if prior.get("superseded"):
+                continue
             review = (prior.get("validation") or {}).get("semantic_review") or {}
             correction = str(review.get("revision_prompt") or "").strip()
             if not correction and not review.get("valid", True):
@@ -370,6 +423,10 @@ class QueueRunner:
             if correction and not review.get("valid", True):
                 revision_notes.append((float(review.get("average_score") or 0), correction[:1200]))
         for attempt_index in range(maximum_attempts):
+            if self._rushed and attempt_index and not self._can_retake(manifest, index):
+                log.info("Local AI %s: no time for a retake before the deadline; salvaging", shot.id)
+                manifest.record("retake_skipped_deadline", shot=shot.id)
+                break
             if creative_failures >= total_attempts:
                 if repair_used or not revision_notes:
                     break
@@ -382,6 +439,14 @@ class QueueRunner:
                 backend_name = sequence[1]
             backend = self.backends[backend_name]
             available, reason = backend.available()
+            if not available and backend_name == "minimax" and not restarted_server:
+                # ComfyUI aborted inside FLUX ("Fatal Python error: Aborted") and the last two stray-dog shots
+                # became animated stills seconds later: a dead server is restarted before any fallback.
+                restarted_server = True
+                log.warning("Local AI %s: MiniMax is unavailable (%s); restarting FreeVideo", shot.id, reason)
+                self._restart_minimax(manifest)
+                backend = self.backends[backend_name]
+                available, reason = backend.available()
             if not available:
                 last_error = reason
                 if backend_name == "minimax" and len(sequence) > 1:
@@ -427,18 +492,43 @@ class QueueRunner:
                     manifest.save()
 
                 reference = self._reference_for(manifest, index)
+                if (reference is None and backend_name == "minimax" and not self._rushed
+                        and isinstance(self.backends.get("minimax"), MiniMaxAdapter)
+                        and index in fresh_openings(manifest)):
+                    # The last take retired this shot's keyframe. Without a first frame MiniMax frames the
+                    # shot itself: shot-004's five text-only takes came back as stacked panels and a
+                    # letterboxed strip. Draw a new first frame instead.
+                    self._cancel_speculation(manifest, "a first frame is being redrawn")
+                    try:
+                        prepare_keyframes(manifest, self.config, {index + 1},
+                                          view=(lambda s: fast.frame_view(manifest, s)) if self._fast else None)
+                    except Exception as exc:
+                        log.warning("Keyframe redraw for %s failed: %s", shot.id, exc)
+                    reference = self._reference_for(manifest, index)
                 if reference is not None and reference.parent.name == "keyframes":
-                    attempt["keyframe"] = True
+                    attempt["keyframe"] = keyframe_id(reference)
                 candidate_shot = _prompt_for_backend(shot, backend_name)
                 if repairing:
                     attempt["repair"] = True
-                    candidate_shot = replace(candidate_shot, prompt=_repair_prompt(candidate_shot))
+                    repair = _repair_prompt(candidate_shot, manifest.script)
+                    worn = " ".join(f"{name} wears exactly: {outfit}."
+                                    for name, outfit in wardrobe_for(manifest, shot).items() if outfit)
+                    if worn:   # the last-resort take drew Hegdahl in denim without it (shot-014)
+                        repair = _rebuilt_prompt(candidate_shot, f"{payoff_of(candidate_shot.subject_action)} {worn} "
+                                                 "The framing, distance and angle stay exactly the same in every "
+                                                 "frame.", "locked-off static camera", manifest.script)
+                    candidate_shot = replace(candidate_shot, prompt=repair)
+                    manifest.settings.get("shot_doctor_take", {}).pop(shot.id, None)   # not a doctored plan
                 elif revision_notes:
                     best_correction = max(revision_notes, key=lambda item: item[0])[1]
-                    candidate_shot = replace(
-                        candidate_shot,
-                        prompt=_retake_prompt(candidate_shot, best_correction, reference is not None),
-                    )
+                    prompt = self._retake(manifest, index, candidate_shot, best_correction, reference)
+                    redrawn = self._reference_for(manifest, index)
+                    if redrawn != reference:          # the retake opened the shot fresh on a new first frame
+                        reference = redrawn
+                        attempt.pop("keyframe", None)
+                        if reference is not None and reference.parent.name == "keyframes":
+                            attempt["keyframe"] = keyframe_id(reference)
+                    candidate_shot = replace(candidate_shot, prompt=prompt)
                 job = None if revision_notes else self._take_speculation(manifest, index, backend_name, shot.seed)
                 if job:
                     attempt.update(started_at=job["started_at"], speculative=True)
@@ -469,6 +559,15 @@ class QueueRunner:
                 seconds = backend.clip_seconds(shot)
                 report = self.validator(result.path, self.config, width, height, seconds)
                 visual_report = self.visual_reviewer(result.path, shot, reference, manifest)
+                if visual_report.get("skipped") and any(name in str(visual_report.get("reason") or "")
+                                                        for name in _REVIEWER_OUT):
+                    attempt.update(status="interrupted", ended_at=time.time(),
+                                   error=str(visual_report.get("reason")))
+                    shot.status = "pending"
+                    manifest.error = f"{visual_report.get('reason')}; resume the project once the reviewer is back"
+                    manifest.record("reviewer_unavailable", shot=shot.id, reason=str(visual_report.get("reason")))
+                    manifest.save()
+                    raise ReviewerUnavailable(manifest.error)
                 report["semantic_review"] = visual_report
                 attempt["validation"] = report
                 if not visual_report.get("valid", False):
@@ -512,9 +611,14 @@ class QueueRunner:
                 self._log(manifest, {"shot": shot.id, **attempt})
                 self._emit(manifest, backend_name)
                 return True
+            except ReviewerUnavailable:
+                raise
             except Exception as exc:
-                # The next shot was rendering from this take's last frame; that frame is now wrong.
-                self._cancel_speculation(manifest, f"{shot.id} attempt {attempt['number']} failed")
+                # The next shot was rendering from this take's last frame; that frame is now wrong. A next
+                # shot opening on its own keyframe (fast mode) keeps rendering.
+                job = self._speculation
+                if not job or self._reference_source(manifest, job["index"]) == index:
+                    self._cancel_speculation(manifest, f"{shot.id} attempt {attempt['number']} failed")
                 last_error = str(exc)
                 attempt.update(status="failed", error=last_error, ended_at=time.time())
                 transient = _is_infrastructure_failure(exc)
@@ -550,6 +654,8 @@ class QueueRunner:
                 self._emit(manifest, backend_name, last_error)
                 if requested_stop in {ProjectState.PAUSED.value, ProjectState.CANCELLED.value}:
                     return False
+        if self._restage_failed_shot(manifest, index):
+            return self._generate_shot(manifest, index)
         if self._accept_fallback(manifest, index, last_error):
             return True
         shot.status = "failed"
@@ -565,7 +671,10 @@ class QueueRunner:
         reference and target its first attempt would use, so an accepted take loses nothing.
         """
         following = index + 1
-        if (not self.config.speculative_next_shot or following >= len(manifest.shots)
+        if self._fast:            # stills are already rendered: the next shot the GPU will need
+            following = next((shot.index for shot in self._pending_motion(manifest, index + 1)
+                              if not shot.attempts), len(manifest.shots))
+        if (not self.config.speculative_next_shot or following >= len(manifest.shots) or self._speculation
                 or (self._selected is not None and following + 1 not in self._selected)):
             return
         shot = manifest.shots[following]
@@ -726,7 +835,15 @@ class QueueRunner:
             takes.append((float(review.get("average_score") or 0), bool(review.get("fatal_problems")), attempt))
         takes.sort(key=lambda take: take[0], reverse=True)
         clean = [take for take in takes if not take[1]]
+        if self._rushed:
+            # A weak take reads as a weird scene; the shot's own reviewed keyframe as a still does not.
+            floor = int(os.getenv("LOCAL_VIDEO_VISION_MIN_SCORE") or 7) - 1
+            clean = [take for take in clean if take[0] >= floor]
         if clean and self._restore_take(manifest, shot, clean[0][2], "shot_accepted_best_take"):
+            return True
+        if self._rushed and fast.hires_keyframe(manifest, shot) is not None and self._finish_still(
+                manifest, shot, planned=False, reason=last_error[:300]):
+            log.warning("Local AI %s: no take passed review; its approved keyframe plays as a still", shot.id)
             return True
         reference = self._still_source(manifest, index)
         if reference and self._still_replacement(manifest, shot, reference):
@@ -831,9 +948,152 @@ class QueueRunner:
             return target
         source, duration = generate_voiceover(manifest.script["spoken_script"], voice=manifest.voice)
         shutil.move(source, target)
+        duration = self._fit_narration_length(manifest, target, duration)
         manifest.record("narration_created", duration=duration, path=str(target.relative_to(manifest.project_dir)))
         manifest.save()
         return target
+
+    def _fit_narration_length(self, manifest: ProjectManifest, narration: Path, duration: float) -> float:
+        """Retime the voice so the video lands on its planned length (61-65 s for the default 65).
+
+        The timeline follows the voice plus about 1.5 s, and voices differ in pace: the slow Edge voice
+        turned a 65 s plan into an 82 s video. atempo keeps the pitch; the change is capped so a voice
+        never sounds rushed or dragged.
+        """
+        planned = float(manifest.duration_seconds)
+        if (os.getenv("LOCAL_VIDEO_FIT_NARRATION", "1") == "0" or not duration
+                or planned - 5.5 <= duration <= planned - 1.5):
+            return duration
+        factor = min(1.25, max(0.85, duration / (planned - 2.5)))
+        retimed = narration.with_name("narration-retimed.mp3")
+        result = subprocess.run([self.config.ffmpeg, "-v", "error", "-y", "-i", str(narration), "-filter:a",
+                                 f"atempo={factor:.4f}", "-c:a", "libmp3lame", "-b:a", "160k", str(retimed)],
+                                capture_output=True, text=True)
+        if result.returncode != 0 or not retimed.is_file():
+            log.warning("Narration retiming failed (%s); keeping %.1f s", result.stderr[-200:], duration)
+            return duration
+        retimed.replace(narration)
+        fitted = get_duration(str(narration))
+        log.info("Narration retimed x%.3f: %.1f s -> %.1f s (planned video %d s)", factor, duration, fitted, planned)
+        manifest.record("narration_retimed", factor=round(factor, 4), before=round(duration, 2), after=round(fitted, 2))
+        return fitted
+
+    def _retake(self, manifest: ProjectManifest, index: int, shot, correction: str, reference: Path | None) -> str:
+        """The next take's prompt, planned by the shot doctor against the failure it must not repeat.
+
+        Retakes used the reviewer's correction alone: no wardrobe lock and none of the doctor's checks,
+        so Hegdahl shot-010 failed four times on clones, rows instead of a semicircle and changed
+        clothes. The doctor now sees the rejected take's problems, the real start frame and the
+        wardrobe; without it, the reviewer's correction still gets the wardrobe lock.
+        """
+        from . import shot_doctor
+        outfits = wardrobe_for(manifest, manifest.shots[index])
+        reviewed = [a for a in manifest.shots[index].attempts if (a.get("validation") or {}).get("semantic_review")]
+        review = reviewed[-1]["validation"]["semantic_review"] if reviewed else {}
+        failure = "; ".join([*(review.get("fatal_problems") or []), *(review.get("problems") or [])])[:1500]
+        if shot_doctor.enabled() and self.visual_reviewer is review_clip:
+            beats = manifest.script.get("beats") if isinstance(manifest.script.get("beats"), list) else []
+            end = beat_handoff(manifest.script, shot.index) if 0 <= shot.index < len(beats) else ""
+            result = shot_doctor.examine(shot, end, reference, outfits,
+                                         failed=f"{failure}\nThe reviewer's suggested fix: {correction}")
+            if (result and reference is not None and not result.get("start_frame_fits", True)
+                    and self._reference_source(manifest, index) is not None
+                    and shot.id not in manifest.settings.get("open_fresh", [])):
+                # Hegdahl shot-014 (pacing alone) inherited a frame holding him AND another prisoner and was
+                # rejected for it: draw its own first frame now. The early render of the next shot is cancelled
+                # and ComfyUI's models freed first, so FLUX has the GPU.
+                manifest.settings.setdefault("open_fresh", []).append(shot.id)
+                manifest.record("shots_open_fresh", shots=[shot.id])
+                log.info("Shot doctor %s: the inherited first frame cannot become this shot; drawing its own",
+                         shot.id)
+                if isinstance(self.backends.get("minimax"), MiniMaxAdapter):
+                    self._cancel_speculation(manifest, "a first frame is being redrawn")
+                    try:
+                        prepare_keyframes(manifest, self.config, {index + 1})
+                    except Exception as exc:
+                        log.warning("Keyframe redraw for %s failed: %s", shot.id, exc)
+                fresh = self._reference_for(manifest, index)
+                if fresh is not None:
+                    result = shot_doctor.examine(shot, end, fresh, outfits,
+                                                 failed=f"{failure}\nThe reviewer's suggested fix: {correction}") or result
+            if result:
+                # The reviewer judges this take's staging against the plan it was rendered from.
+                manifest.settings.setdefault("shot_doctor_take", {})[shot.id] = result["description"]
+                log.info("Shot doctor retake %s: %s; %s", shot.id, result["camera"], "; ".join(result["risks"])[:200])
+                return _rebuilt_prompt(shot, result["description"], result["camera"], manifest.script)
+        worn = " ".join(f"{name} wears exactly: {outfit}." for name, outfit in outfits.items() if outfit)
+        return _retake_prompt(shot, f"{correction} {worn}".strip(), reference is not None, manifest.script)
+
+    def _doctor_shots(self, manifest: ProjectManifest, shots: set[int] | None = None) -> None:
+        """Pre-flight every shot that has not been reviewed yet (see shot_doctor) and apply the result.
+
+        Cached per shot against its beat, end state and keyframe, so a resume re-applies it for free
+        after _upgrade_prompts rebuilt the prompts, and only new or changed shots cost a call. Shots
+        already reviewed keep their reviewer-led retakes.
+        """
+        from . import shot_doctor
+        # Only alongside the real reviewer: a run with a stub reviewer (tests, QC off) has no vision model.
+        if not shot_doctor.enabled() or self.visual_reviewer is not review_clip:
+            return
+        cache: dict[str, Any] = manifest.settings.setdefault("shot_doctor", {})
+        beats = manifest.script.get("beats") if isinstance(manifest.script.get("beats"), list) else []
+        ready, jobs = [], []
+        for index, shot in enumerate(manifest.shots):
+            if (shots is not None and index + 1 not in shots) or shot.status == "accepted":
+                continue
+            if any((a.get("validation") or {}).get("semantic_review") for a in shot.attempts):
+                continue
+            end = beat_handoff(manifest.script, shot.index) if 0 <= shot.index < len(beats) else ""
+            # The frame the take will really open on: a continuation opens on its source's last frame,
+            # not on a keyframe (Hegdahl shot-010 was doctored blind while shot-009's last frame was on
+            # disk). Unknown until that source is accepted; the fingerprint then changes and it re-checks.
+            source = self._reference_source(manifest, index)
+            if source is not None and not manifest.shots[source].last_frame:
+                keyframe = None
+            else:
+                keyframe = self._reference_for(manifest, index)
+            outfits = wardrobe_for(manifest, shot)
+            key = shot_doctor.fingerprint(shot, end, keyframe, outfits)
+            if (cache.get(shot.id) or {}).get("for") == key:
+                ready.append(shot)
+            else:
+                jobs.append((shot, end, keyframe, outfits, key))
+        unfit: list[int] = []
+        if jobs:
+            log.info("Shot doctor: checking %d shot(s) before their first take", len(jobs))
+            results = shot_doctor.examine_all([job[:4] for job in jobs])
+            for (shot, _, start, _, key), result in zip(jobs, results):
+                if not result:
+                    continue
+                # Only a frame the doctor actually saw can be judged unfit; without one it guesses.
+                if (start is not None and not result.get("start_frame_fits", True)
+                        and self._reference_source(manifest, shot.index) is not None
+                        and isinstance(self.backends.get("minimax"), MiniMaxAdapter)):
+                    # The inherited frame cannot become this shot (Hegdahl shot-010: a face close-up for a
+                    # medium shot of a semicircle, rejected six times): open fresh on its own keyframe.
+                    unfit.append(shot.index)
+                    log.info("Shot doctor %s: the inherited first frame cannot become this shot; it opens fresh",
+                             shot.id)
+                    continue
+                cache[shot.id] = dict(result, **{"for": key})
+                ready.append(shot)
+                log.info("Shot doctor %s: %s; %s", shot.id, result["camera"],
+                         "; ".join(result["risks"])[:240] or "no risks")
+        if unfit:
+            manifest.settings.setdefault("open_fresh", []).extend(manifest.shots[i].id for i in unfit)
+            manifest.record("shots_open_fresh", shots=[manifest.shots[i].id for i in unfit])
+            # FLUX needs the card: an early render of the next shot must not be running.
+            self._cancel_speculation(manifest, "a first frame is being drawn")
+            prepare_keyframes(manifest, self.config, {i + 1 for i in unfit})
+            self._doctor_shots(manifest, {i + 1 for i in unfit})
+        for shot in ready:
+            result = cache[shot.id]
+            shot.camera_action = result["camera"]
+            shot.prompt = _rebuilt_prompt(shot, result["description"], result["camera"], manifest.script)
+            manifest.settings.setdefault("shot_doctor_take", {})[shot.id] = result["description"]
+        if ready:
+            manifest.record("shots_doctored", shots=[shot.id for shot in ready])
+        manifest.save()
 
     @staticmethod
     def _upgrade_prompts(manifest: ProjectManifest) -> None:
@@ -853,7 +1113,7 @@ class QueueRunner:
                 # shore shot still carried "Open Pacific sea: a tropical ocean seen from a
                 # palm-lined beach", drew it, and its reviewer judged it against it.
                 shot.continuity = _continuity(manifest.script, manifest.visual_style, manifest.concept, shot.index)
-            prompt = _rebuilt_prompt(shot, shot.subject_action, shot.camera_action)
+            prompt = _rebuilt_prompt(shot, shot.subject_action, shot.camera_action, manifest.script)
             if prompt != shot.prompt:
                 shot.prompt = prompt
                 upgraded.append(shot.id)
@@ -867,6 +1127,9 @@ class QueueRunner:
             return
         available, detail = ensure_minimax(self.config)
         if available:
+            cleared = clear_orphaned_jobs(self.config)
+            if cleared:
+                manifest.record("comfy_orphans_cleared", detail=cleared)
             self.backends["minimax"] = MiniMaxAdapter(self.config)
             return
         if manifest.preferred_backend == "minimax":
@@ -882,7 +1145,10 @@ class QueueRunner:
         """After a crash or lost connection, bring FreeVideo back before the retry."""
         if not isinstance(self.backends.get("minimax"), MiniMaxAdapter):
             return
-        available, detail = ensure_minimax(self.config)
+        # Answering HTTP is not working: after a CUDA out-of-memory error ComfyUI still answers but runs its
+        # dead job forever, and after a native abort it does not answer at all. recover_server handles both.
+        detail = recover_server(self.config)
+        available = not detail.startswith("restart failed")
         manifest.record("minimax_restart_check", available=available, detail=detail)
         if available:
             self.backends["minimax"] = MiniMaxAdapter(self.config)
@@ -954,9 +1220,255 @@ class QueueRunner:
         if changed or metadata_changed:
             manifest.save()
 
+    def _requeue_boxed_clips(self, manifest: ProjectManifest, shots: set[int] | None) -> None:
+        """Queue again any accepted clip that plays letterboxed, accepted before validation measured bars."""
+        requeued = []
+        for shot in manifest.shots:
+            if shot.status != "accepted" or not shot.output or (shots is not None and shot.index + 1 not in shots):
+                continue
+            clip = resolve_within(manifest.project_dir, shot.output)
+            problem = bar_problem(bar_metrics(clip)) if clip.is_file() else ""
+            if problem:
+                log.warning("Local AI %s: accepted clip is %s; generating it again", shot.id, problem)
+                requeue_shot(manifest, shot)
+                requeued.append(shot.id)
+        if requeued:
+            manifest.record("boxed_clips_requeued", shots=requeued)
+            manifest.save()
+
+    # ------------------------------------------------------------------------------------------------
+    # Fast mode: the whole video inside the pipeline's wall-clock budget (see fast.py)
+
+    def _seconds_left(self) -> float:
+        return (self._deadline or time.time() + 3600) - time.time() - fast.RESERVE_SECONDS
+
+    def _pending_motion(self, manifest: ProjectManifest, start: int = 0) -> list:
+        return [shot for shot in manifest.shots[start:]
+                if shot.status != "accepted" and fast.is_motion(manifest, shot)
+                and (self._selected is None or shot.index + 1 in self._selected)]
+
+    def _prepare_fast(self, manifest: ProjectManifest, shots: set[int] | None) -> None:
+        """Plan which shots move, draw every shot's keyframe in parallel, and finish the stills on the way."""
+        with MANIFEST_LOCK:
+            # Every shot opens on its own reviewed keyframe: hard cuts, so no shot waits for another's clip.
+            opened = manifest.settings.setdefault("open_fresh", [])
+            opened.extend(shot.id for shot in manifest.shots if shot.id not in opened)
+            # Screen direction only matters across a continuous take; across cuts the lock just failed
+            # good frames (Zanzibar shot-016: a warship's bow pointing left, three takes).
+            for shot in manifest.shots:
+                if shot.status != "accepted" and (shot.continuity or {}).get("screen_geography"):
+                    shot.continuity = {**shot.continuity, "screen_geography": ""}
+        pending = [shot for shot in manifest.shots
+                   if shot.status != "accepted" and (shots is None or shot.index + 1 in shots)]
+        if not pending:
+            return
+        cost = fast.clip_cost(manifest)
+        left = self._seconds_left() - fast.keyframe_stage_seconds(len(pending)) - 60
+        count = fast.motion_budget(len(pending), left, cost) if fast.planned_stills() else len(pending)
+        fast.design_shots(manifest, count)
+        self._direct_clips(manifest, pending)
+        motion = [shot.id for shot in manifest.shots if fast.is_motion(manifest, shot)]
+        log.info("Fast plan: %d of %d shots as MiniMax clips (%s); %.0f min left of "
+                 "the budget, ~%.0f s per clip", len(motion), len(manifest.shots), ", ".join(motion) or "none",
+                 max(0.0, self._seconds_left()) / 60, cost)
+        started = time.monotonic()
+        made = prepare_keyframes(
+            manifest, self.config, shots, workers=int(os.getenv("KEYFRAME_WORKERS") or 4),
+            view=lambda shot: fast.frame_view(manifest, shot), on_ready=self._after_keyframe(manifest),
+            all_shots=True, keep_flawed=self._rushed)
+        log.info("Fast plan: %d keyframe(s) drawn in %.0fs", made, time.monotonic() - started)
+
+    def _restage_failed_shot(self, manifest: ProjectManifest, index: int) -> bool:
+        """Every take failed with no clean one to keep: restage the shot once and give it fresh takes.
+
+        Only in fast mode without planned stills (the quality-first default); the fallbacks after this are a
+        still picture or a flawed take, which the user never wants (Ghost Army shot-018, 2026-10-31).
+        """
+        if not self._fast or self._rushed:
+            return False
+        shot = manifest.shots[index]
+        design = fast.designed(manifest, shot)
+        if design.get("restaged_after_failure") or not fast.is_motion(manifest, shot):
+            return False
+        reviews = [(a.get("validation") or {}).get("semantic_review") or {} for a in shot.attempts]
+        if any(review and not review.get("fatal_problems") and not review.get("skipped") for review in reviews):
+            return False                     # a clean take exists: keep the best of those instead
+        failures = [str(item) for review in reviews
+                    for item in (review.get("fatal_problems") or review.get("problems") or [])][-6:]
+        try:
+            staging = fast.restage(manifest, shot, failures or [shot.error or "rejected"])
+        except Exception as exc:             # the fallbacks still finish the video
+            log.warning("Restaging %s unavailable (%s)", shot.id, exc.__class__.__name__)
+            staging = None
+        with MANIFEST_LOCK:
+            design = manifest.settings.setdefault("fast_design", {}).setdefault(shot.id, {"render": "motion"})
+            design["restaged_after_failure"] = True
+            if not staging:
+                manifest.save()
+                return False
+            shot.subject_action = design.get("planned_action") or shot.subject_action
+            design.update(staging, directed=False, subjects=[], source="designer")
+            manifest.record("shot_restaged_after_failure", shot=shot.id, frame=staging["frame"][:300])
+        log.warning("Local AI %s: every take failed; restaged as: %s", shot.id, staging["frame"][:200])
+        for attempt in shot.attempts:        # their corrections describe the old staging
+            attempt["superseded"] = True
+        self._direct_clips(manifest, [shot], force=True)
+        for name in (f"{shot.id}.png", f"{shot.id}.hires.png"):
+            (Path(manifest.project_dir) / "keyframes" / name).unlink(missing_ok=True)
+        try:
+            prepare_keyframes(manifest, self.config, {index + 1}, view=lambda s: fast.frame_view(manifest, s),
+                              all_shots=True)
+        except Exception as exc:             # a clip from text is still better than a still
+            log.warning("Keyframe redraw for restaged %s failed: %s", shot.id, exc)
+        shot.status, shot.error = "pending", None
+        manifest.save()
+        return True
+
+    def _direct_clips(self, manifest: ProjectManifest, pending: list, force: bool = False) -> None:
+        """Each motion shot's clip is generated from, and judged against, the designer's drawable staging.
+
+        The molasses hook asked for "a wave taller than a doorway surging straight toward the camera": FLUX
+        drew a dry street three times, and four text-only MiniMax takes made a low flood the reviewer then
+        rejected for not towering. The designer restages such beats at a filmable scale; the clip now asks
+        for that same staging instead of the plan's original wish.
+        """
+        directed = []
+        with MANIFEST_LOCK:
+            for shot in pending:
+                design = fast.designed(manifest, shot)
+                if (not fast.is_motion(manifest, shot) or design.get("directed") or (shot.attempts and not force)
+                        or not design.get("frame") or not design.get("motion")):
+                    continue
+                design["planned_action"] = shot.subject_action
+                shot.subject_action = f"{design['frame'].rstrip('. ')}. {design['motion']}"
+                view = shot
+                if design.get("source") == "designer":
+                    # Only the subjects this staging shows whole: the calm tank shot also carried the moving
+                    # molasses, and MiniMax flooded the yard.
+                    shown = set(design.get("subjects") or [])
+                    objects = str((shot.continuity or {}).get("recurring_objects") or "")
+                    kept = [item for item in objects.split("; ") if ":" in item
+                            and item.partition(":")[0].split("(")[0].strip() in shown]
+                    view = replace(shot, continuity={**(shot.continuity or {}), "recurring_objects": "; ".join(kept)})
+                shot.prompt = _rebuilt_prompt(view, shot.subject_action, shot.camera_action, None)
+                design["directed"] = True
+                directed.append(shot.id)
+        if directed:
+            manifest.record("clips_directed", shots=directed)
+            manifest.save()
+            log.info("Fast plan: %d clip(s) follow the designed staging", len(directed))
+
+    def _after_keyframe(self, manifest: ProjectManifest):
+        """Runs on the keyframe worker once a shot's frame is accepted: a still is finished there and then,
+        and a clip's first-take plan is checked by the shot doctor while FLUX keeps drawing."""
+        def ready(index: int, keyframe: Path) -> None:
+            shot = manifest.shots[index]
+            if shot.status == "accepted":
+                return
+            if not fast.is_motion(manifest, shot):
+                self._finish_still(manifest, shot, planned=True)
+                return
+            from . import shot_doctor
+            if not shot_doctor.enabled() or self.visual_reviewer is not review_clip:
+                return
+            beats = manifest.script.get("beats") if isinstance(manifest.script.get("beats"), list) else []
+            end = beat_handoff(manifest.script, shot.index) if 0 <= shot.index < len(beats) else ""
+            reference = self._reference_for(manifest, index)
+            with MANIFEST_LOCK:
+                outfits = wardrobe_for(manifest, shot)
+            key = shot_doctor.fingerprint(shot, end, reference, outfits)
+            cache = manifest.settings.setdefault("shot_doctor", {})
+            if (cache.get(shot.id) or {}).get("for") == key:
+                return
+            result = shot_doctor.examine(shot, end, reference, outfits)
+            if result:
+                with MANIFEST_LOCK:
+                    cache[shot.id] = dict(result, **{"for": key})
+                log.info("Shot doctor %s: %s; %s", shot.id, result["camera"],
+                         "; ".join(result["risks"])[:240] or "no risks")
+        return ready
+
+    def _finish_still(self, manifest: ProjectManifest, shot, *, planned: bool, reason: str = "") -> bool:
+        """The shot as a parallax camera move over its own approved keyframe."""
+        try:
+            path = fast.render_still(manifest, shot, self.config)
+            if path is None:
+                return False
+            fast.accept_still(manifest, shot, path, self.config, planned=planned, reason=reason)
+        except Exception as exc:
+            log.warning("Still for %s failed: %s", shot.id, exc)
+            manifest.record("still_failed", shot=shot.id, error=str(exc)[:300])
+            return False
+        manifest.save()
+        self._emit(manifest, "still")
+        return True
+
+    def _borrowed_still(self, manifest: ProjectManifest, shot) -> bool:
+        """A shot whose every keyframe take failed, as a different camera move over its nearest neighbour's
+        frame: the Potsdam run redrew shot-011 mid-clip-phase on the shared GPU and then spent a whole clip on
+        it from text, four minutes past its plan."""
+        moves = {"push_in": "pull_out", "pull_out": "push_in", "pan_left": "pan_right", "pan_right": "pan_left",
+                 "rise": "push_in"}
+        for other in sorted(manifest.shots, key=lambda s: (abs(s.index - shot.index), s.index)):
+            source = fast.hires_keyframe(manifest, other) if other.id != shot.id else None
+            if source is None:
+                continue
+            move = moves.get(fast.designed(manifest, other).get("still_move") or "push_in", "pull_out")
+            try:
+                path = fast.render_still(manifest, shot, self.config, source=source, move=move)
+                if path is None:
+                    return False
+                fast.accept_still(manifest, shot, path, self.config, planned=False,
+                                  reason=f"no keyframe of its own; {other.id}'s frame, {move}")
+            except Exception as exc:
+                log.warning("Borrowed still for %s failed: %s", shot.id, exc)
+                return False
+            log.warning("Local AI %s: no keyframe and no time for a clip; %s's frame plays with a %s",
+                        shot.id, other.id, move)
+            manifest.save()
+            return True
+        return False
+
+    def _fit_motion_budget(self, manifest: ProjectManifest, index: int) -> None:
+        """Turn the least motion-dependent pending clips into stills until the rest fit the deadline.
+
+        Only with planned stills: otherwise every shot stays a clip and the deadline only limits retakes.
+        """
+        if not fast.planned_stills():
+            return
+        pending = self._pending_motion(manifest, index)
+        cost = fast.clip_cost(manifest)
+        while pending and self._seconds_left() < cost * len(pending):
+            victim = min(pending, key=lambda shot: (fast.designed(manifest, shot).get("motion_need", 0), -shot.index))
+            pending.remove(victim)
+            if fast.hires_keyframe(manifest, victim) is None:
+                continue                      # nothing to animate: it stays a clip
+            if self._speculation and self._speculation["index"] == victim.index:
+                self._cancel_speculation(manifest, f"{victim.id} became a still to meet the deadline")
+            fast.demote(manifest, victim, f"{self._seconds_left() / 60:.1f} min left for {len(pending) + 1} clips "
+                                          f"of ~{cost:.0f} s")
+            self._finish_still(manifest, victim, planned=True, reason="deadline")
+
+    def _room_for_one_more_clip(self, manifest: ProjectManifest, index: int) -> bool:
+        """One clip beyond those still planned after `index` fits before the deadline."""
+        later = len(self._pending_motion(manifest, index + 1))
+        return self._seconds_left() >= fast.clip_cost(manifest) * (later + 1)
+
+    def _can_retake(self, manifest: ProjectManifest, index: int) -> bool:
+        """A retake only once no planned clip is still waiting, and only inside the deadline.
+
+        Retakes passed about as often as first takes (2 of 4 on the 2026-10-31 pig run), so the time is
+        better spent on another planned motion shot: retakes there made the deadline turn three of them
+        into stills. A rejected shot falls back to its approved keyframe meanwhile.
+        """
+        return not self._pending_motion(manifest, index + 1) and self._room_for_one_more_clip(manifest, index)
+
     def run(self, project: str | Path | ProjectManifest, shots: set[int] | None = None) -> ProjectManifest:
         manifest = project if isinstance(project, ProjectManifest) else load_project(project, self.config)
         self._selected = shots
+        self._fast = fast.enabled() and isinstance(self.backends.get("minimax"), MiniMaxAdapter)
+        self._rushed = self._fast and fast.planned_stills()
+        self._deadline = fast.pipeline_started() + fast.budget_seconds() if self._fast else None
         try:
             return self._run(manifest, shots)
         finally:
@@ -967,6 +1479,7 @@ class QueueRunner:
         lock_path = self.config.output_root / ".gpu-generation.lock"
         with FileLock(lock_path):
             self._silence_accepted_clips(manifest)
+            self._requeue_boxed_clips(manifest, shots)
             self._upgrade_prompts(manifest)
             # Start FreeVideo before preflight checks the backends: a stopped server is not a
             # missing one. A missing model or a failed/too-long voiceover stops the run before GPU work.
@@ -1005,16 +1518,34 @@ class QueueRunner:
                 manifest.set_state(ProjectState.FAILED, stage="narration", error=str(exc))
                 manifest.save()
                 return manifest
-            if isinstance(self.backends.get("minimax"), MiniMaxAdapter):
+            if self._fast:
+                try:
+                    self._prepare_fast(manifest, shots)
+                except Exception as exc:     # whatever was drawn stays; missing shots become clips
+                    log.warning("Fast plan incomplete: %s", exc, exc_info=True)
+            elif isinstance(self.backends.get("minimax"), MiniMaxAdapter):
                 try:
                     prepare_keyframes(manifest, self.config, shots)
                 except Exception as exc:     # keyframes only improve the look; never block the run
                     log.warning("Keyframes skipped: %s", exc)
+            try:
+                self._doctor_shots(manifest, shots)
+            except Exception as exc:         # the pre-flight only improves first takes; never block the run
+                log.warning("Shot doctor skipped: %s", exc)
             for index, shot in enumerate(manifest.shots):
                 if shots is not None and index + 1 not in shots:
                     continue
                 if shot.status == "accepted" and shot.output and resolve_within(manifest.project_dir, shot.output).is_file():
                     continue
+                if self._fast:
+                    if fast.is_motion(manifest, shot):
+                        self._fit_motion_budget(manifest, index)
+                    if not fast.is_motion(manifest, shot) and (
+                            shot.status == "accepted" or self._finish_still(manifest, shot, planned=True)):
+                        continue
+                    if (not fast.is_motion(manifest, shot) and not self._room_for_one_more_clip(manifest, index - 1)
+                            and self._borrowed_still(manifest, shot)):
+                        continue             # no keyframe and no time for a clip from text
                 control = self._control_state(manifest)
                 if control in {ProjectState.PAUSED.value, ProjectState.CANCELLED.value}:
                     manifest.state = control

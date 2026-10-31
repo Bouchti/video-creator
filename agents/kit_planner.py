@@ -51,8 +51,12 @@ def vocabulary(hero: bool = True, world: str = vocab.WORLD) -> str:
                '- hooks: [] exactly. The camera begins at the empty site and never jumps to the finished system.')
     gags = f" Running gag: {', '.join(w.GAGS)}." if len(w.GAGS) > 1 else ""
     story_rules = (
-        "- Then alternate fail -> fix pairs and end with one finale. A fail uses a failing event; a "
-        "fix/finale uses a holding event.\n- hooks: 1-2 replayed fail/finale steps before the rewind."
+        "  then at least 3 distinct fail -> fix pairs (each fix answers exactly the failure before it), then one\n"
+        f'  "finale" step with a holding event ({", ".join(w.FINALE_EVENTS)}). 8-11 steps. The first build is\n'
+        f'  "{w.FIRST_BUILD}" (in the first fail step).\n'
+        "- a fail step has a failing event; fix and finale steps have holding events.\n"
+        "- keep every mistake simple: one visible failure and one plain-language physical reason per fail step.\n"
+        "- hooks: 1-2 fail steps replayed first, before the rewind. Never hook with the happy finale."
         if hero else
         "- Build in real installation order from raw site to finished system. Add one visible component or show "
         "one newly available function per step. Use ONLY the holding events listed above; never stage a "

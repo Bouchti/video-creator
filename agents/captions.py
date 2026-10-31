@@ -25,6 +25,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Pop,Arial Black,112,{WHITE},{WHITE},&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,7,3,5,60,60,0,1
 Style: Word,Arial Black,124,{WHITE},{WHITE},&H00101010,&H90000000,-1,0,0,0,100,100,0,0,1,6,5,5,60,60,0,1
+Style: Hook,Arial Black,84,{WHITE},{WHITE},&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,7,4,8,60,60,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -63,6 +64,32 @@ def chunk_words(words: list) -> list:
 
 
 WORD_Y = 1390         # lower third: under the action, above the TikTok caption / button area
+HOOK_Y = 230          # top safe area, below the platform's status/search bar
+
+
+def hook_event(hook: str, seconds: float = 3.0) -> str:
+    """The hook as a headline from frame one, so the claim lands in the first 2-3 s whatever the
+    voice's pace (the Hegdahl narration only finished its hook sentence at 3.98 s).
+
+    WrapStyle 2 never wraps, so lines are broken here: up to 3 lines of ~16 characters at 84 px,
+    smaller when the title is longer. The headline yellows the first number it holds ("256").
+    """
+    words = _clean(hook).split()
+    if not words:
+        return ""
+    size, width = (84, 16) if len(" ".join(words)) <= 48 else (68, 20)
+    lines, line = [], ""
+    for word in words:
+        if line and len(line) + 1 + len(word) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    lines.append(line)
+    text = r"\N".join(lines[:4])
+    text = re.sub(r"(\d[\d,.]*)", rf"{{\\c{YELLOW}}}\1{{\\c{WHITE}}}", text, count=1)
+    style = f"\\an8\\pos({PLAY_W // 2},{HOOK_Y})\\fs{size}\\fad(0,300)\\fscx88\\fscy88\\t(0,120,\\fscx100\\fscy100)"
+    return f"Dialogue: 1,{_ts(0)},{_ts(seconds)},Hook,,0,0,0,,{{{style}}}{text}"
 
 
 def _word_text(word: str) -> str:
@@ -89,11 +116,15 @@ def words_to_ass_single(words: list, path: str) -> str:
     return path
 
 
-def words_to_ass(words: list, path: str, mode: str = "phrase") -> str:
-    """words: [{"text", "start", "end"}] → ASS file at path."""
+def words_to_ass(words: list, path: str, mode: str = "phrase", hook: str = "", hook_seconds: float = 3.0) -> str:
+    """words: [{"text", "start", "end"}] → ASS file at path; `hook` adds the opening headline."""
     if mode == "word":
-        return words_to_ass_single(words, path)
-    lines = [HEADER]
+        path = words_to_ass_single(words, path)
+        if hook and hook_event(hook, hook_seconds):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(hook_event(hook, hook_seconds) + "\n")
+        return path
+    lines = [HEADER] + ([hook_event(hook, hook_seconds)] if hook and hook_event(hook, hook_seconds) else [])
     chunks = chunk_words(words)
     for ci, chunk in enumerate(chunks):
         chunk_end = (chunks[ci + 1][0]["start"] if ci + 1 < len(chunks)

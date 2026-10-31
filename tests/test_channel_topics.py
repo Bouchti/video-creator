@@ -60,6 +60,30 @@ class ChannelTopicTests(unittest.TestCase):
             with patch.object(leader, "USED_TOPICS_FILE", path):
                 self.assertEqual([t["topic"] for t in leader.load_used_topics()], ["Wojtek the bear"])
 
+    def test_a_history_saved_with_a_bom_is_still_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "used.json")
+            with open(path, "w", encoding="utf-8-sig") as f:
+                json.dump([{"topic": "Wojtek the bear", "date": datetime.now().isoformat()}], f)
+            with patch.object(leader, "USED_TOPICS_FILE", path):
+                self.assertEqual([t["topic"] for t in leader.load_used_topics()], ["Wojtek the bear"])
+                leader.save_used_topic("The War of the Bucket")
+                self.assertEqual([t["topic"] for t in leader.load_used_topics()],
+                                 ["Wojtek the bear", "The War of the Bucket"])
+
+    def test_an_unreadable_history_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "used.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('[{"topic": "Wojtek the bear", "date": ')
+            with patch.object(leader, "USED_TOPICS_FILE", path):
+                with self.assertLogs("pipeline", "ERROR"):
+                    self.assertEqual(leader.load_used_topics(), [])
+                with self.assertRaises(ValueError):
+                    leader.save_used_topic("The War of the Bucket")
+            with open(path, encoding="utf-8") as f:
+                self.assertIn("Wojtek", f.read())
+
 
 if __name__ == "__main__":
     unittest.main()

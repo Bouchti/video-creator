@@ -4,91 +4,97 @@
   "voice": "energetic",
   "captions": "word",
   "music": "synth",
+  "beat_pause": 0.35,
+  "tail": 1.5,
   "beats": [
     {
+      "id": "burrow_hook",
       "action": "burrow_hook",
+      "video": "epilogue",
       "text": "This is Max. His barrier just lost to the river.",
       "overlay": {
         "type": "none"
       }
     },
     {
+      "id": "rewind",
       "action": "rewind",
-      "text": "Let's rewind to a sunny day.",
+      "video": "rewind",
+      "text": "Let's rewind to the start.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "promise",
-      "text": "Max promised his kids a backyard that never floods. How hard could it be, really?",
+      "text": "Max promised his kids the yard would stay dry forever.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fail_sand",
-      "text": "The river rose and it failed, because water flows easily through the big gaps between sand grains.",
+      "text": "Sand has wide gaps, so river water leaked through and collapsed it.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fix_core",
-      "text": "So Max fixed it, and it held, because clay's tiny grains barely let water through.",
+      "text": "A packed clay core closed those gaps and stopped the leak.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fail_boil",
-      "text": "The river rose and it failed, because water under pressure travels through buried sand and pushes up the thin soil on the other side.",
+      "text": "Then buried sand carried pressure underneath, bursting through the lawn.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fix_berm",
-      "text": "So Max fixed it, and it held, because weight holds the ground down and wells release the pressure.",
+      "text": "A heavy berm and relief wells released that hidden pressure safely.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fail_overtop",
-      "text": "The river rose and it failed, because water pouring over the top erodes bare soil from the back.",
+      "text": "Next, water crossed the low crest and gouged the bare slope.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fix_armor",
-      "text": "So Max fixed it, and it held, because freeboard: a safety margin above the highest expected flood.",
+      "text": "Max raised the crest, then added grass and protective rock.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fail_burrow",
-      "text": "The river rose and it failed, because water flowing through a hole carries soil away and widens it (piping).",
+      "text": "One squirrel tunnel became a muddy jet that carried soil away.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "fix_maintain",
-      "text": "So Max fixed it, and it held, because inspection and maintenance keep small holes from becoming breaches.",
+      "text": "Packed repairs and regular checks stopped small holes becoming breaches.",
       "overlay": {
         "type": "none"
       }
     },
     {
       "action": "finale",
-      "text": "Now every fix works together, the river rises, and the yard stays dry. Which fix would you build?",
+      "text": "Now every fix holds, and the trampoline stays dry. Which mistake surprised you?",
       "overlay": {
         "type": "none"
       }
     }
   ],
-  "cta": "Which fix would you build?"
+  "cta": "Which mistake surprised you?"
 }

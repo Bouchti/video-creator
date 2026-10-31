@@ -27,7 +27,7 @@ from PIL import Image, ImageDraw  # noqa: E402
 
 from config.paths import PROJECT_ROOT, get_output_dir  # noqa: E402
 from agents.beats import align_beats, script_word_timings, FPS  # noqa: E402
-from agents.media import FFMPEG, get_duration, merge_audio_video, burn_subtitles  # noqa: E402
+from agents.media import FFMPEG, FFPROBE, get_duration, merge_audio_video, burn_subtitles  # noqa: E402
 from agents.transcription import transcribe_with_whisper  # noqa: E402
 from agents.voice import generate_voiceover  # noqa: E402
 from agents.audio_fx import build_fx_track, mix_audio, SR  # noqa: E402
@@ -413,12 +413,20 @@ def _scene_preflight(film, film_json, film_py, timings_path, spans, work, spec):
 def _overlay(beat):
     """2D sticker for a beat: `overlay`, or the first 2D-type entry of a structured `callouts`
     list (stat / label). 3D callouts (label3d, dimension) are drawn in the scene instead."""
-    if beat.get("overlay"):
+    if beat.get("overlay") and beat["overlay"].get("type") != "none":
         return beat["overlay"]
     for c in beat.get("callouts", []):
         if c.get("type") in ("stat", "label"):
             return c
     return None
+
+
+def _kit_film(film):
+    """Kit scenes explain with physical 3D labels; they never receive 2D stickers or a CTA card."""
+    if not film.get("set"):
+        return False
+    from engine import sets as _sets
+    return bool(getattr(_sets.spec(film["set"]), "KIT", None))
 
 
 def _cta_start(film, words, n_frames):
@@ -470,7 +478,14 @@ def _beat_ids(beats):
     """Beat ids, with the hook / rewind beats identified by their `video` role (data-driven films
     name beats after their action, e.g. "float_hook")."""
     roles = {"epilogue": "hook", "rewind": "rewind"}
-    return [roles.get(b.get("video"), b.get("id", b.get("action"))) for b in beats]
+    ids = []
+    for beat in beats:
+        role = roles.get(beat.get("video"))
+        name = beat.get("id") or beat.get("action")
+        # Generated kit films made before roles were explicit still name the opening action *_hook.
+        # Treat that as an epilogue hook so their rewind frames cannot silently disappear.
+        ids.append(role or ("hook" if name and name.endswith("_hook") else name))
+    return ids
 
 
 def _rewind_hold(n):
@@ -527,6 +542,84 @@ def main():
     return produce(args)
 
 
+MAX_SPEED = 1.15                       # the fastest narration still reads as natural
+
+
+class FilmTooLong(RuntimeError):
+    """The narration cannot fit the film's length cap even read faster: the script is too long."""
+
+
+def _replace_file(source, destination):
+    """Atomically replace a cached artifact when possible, with a cross-volume fallback for temp files."""
+    try:
+        os.replace(source, destination)
+    except OSError:
+        shutil.copyfile(source, destination)
+        os.remove(source)
+
+
+def _fit_cap(voice_path, text, film):
+    """Keep every film inside FILM_MAX_SECONDS (65 s by default): if the voiced narration plus the tail is
+    longer, voice it again once, proportionally faster (up to MAX_SPEED); if even that cannot fit, stop
+    before any frame is rendered."""
+    cap = float(os.getenv("FILM_MAX_SECONDS") or 65)
+    tail = film.get("tail", 0.8)
+    duration = get_duration(voice_path)
+    if duration + tail <= cap:
+        return duration
+    base = float(os.getenv("VOICE_SPEED", "0.92"))
+    speed = min(MAX_SPEED, base * duration / max(1.0, cap - tail - 0.4))
+    if speed <= base + 1e-6:
+        raise FilmTooLong(f"narration is {duration:.1f}s; with the tail it passes the {cap:.0f}s cap")
+    log.warning(f"Narration {duration:.1f}s + tail passes the {cap:.0f}s cap; voicing it again at speed {speed:.2f}")
+    old = os.environ.get("VOICE_SPEED")
+    os.environ["VOICE_SPEED"] = f"{speed:.3f}"
+    try:
+        tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
+    finally:
+        if old is None:
+            os.environ.pop("VOICE_SPEED", None)
+        else:
+            os.environ["VOICE_SPEED"] = old
+    _replace_file(tmp, voice_path)
+    duration = get_duration(voice_path)
+    if duration + tail > cap:
+        raise FilmTooLong(f"narration is still {duration:.1f}s at speed {speed:.2f}: the script is too long for "
+                          f"the {cap:.0f}s cap")
+    return duration
+
+
+def _stream_durations(path):
+    result = subprocess.run(
+        [FFPROBE, "-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "json", path],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe stream check failed for {path}: {result.stderr[-300:]}")
+    found = {}
+    for stream in json.loads(result.stdout or "{}").get("streams", []):
+        try:
+            found.setdefault(stream["codec_type"], []).append(float(stream["duration"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return {kind: max(values) for kind, values in found.items() if values}
+
+
+def _assert_file_cap(path):
+    """The encoded deliverable is the last authority: it must be complete and not one frame over the cap."""
+    cap = float(os.getenv("FILM_MAX_SECONDS") or 65)
+    duration = get_duration(path)
+    if duration > cap:
+        raise FilmTooLong(f"final file is {duration:.2f}s; it passes the {cap:.0f}s cap")
+    streams = _stream_durations(path)
+    if "video" not in streams or "audio" not in streams:
+        raise RuntimeError("final file must contain both a video stream and an audio stream")
+    for kind in ("video", "audio"):
+        if duration - streams[kind] > 0.25:
+            raise RuntimeError(f"final {kind} stream is only {streams[kind]:.2f}s of the {duration:.2f}s film")
+    return duration
+
+
 def produce(args):
     """Voice → timings → Blender render → post. `args.film` is a film name in engine/films/ or a
     path to a film JSON (e.g. a script written by agents/showrunner.py). Returns the final mp4."""
@@ -563,13 +656,14 @@ def produce(args):
         args.reuse_voice = True                        # same voice → same timings → frames line up
         if not os.path.exists(voice_path):
             raise SystemExit("--redo/--list need a previous full render (work/voice.mp3)")
+    # A short pause between beats lets each gag / explanation land (ElevenLabs <break> tags). Build the
+    # exact text even when reusing audio: an old overlong voice must be re-voiced or rejected, never reused.
+    gap = film.get("beat_pause", 0.55)
+    text = f' <break time="{gap:.2f}s" /> '.join(b["text"] for b in beats) if gap else " ".join(b["text"] for b in beats)
     if not ((args.reuse_voice or args.remix) and os.path.exists(voice_path)):
-        # a short pause between beats lets each gag / explanation land (ElevenLabs <break> tags)
-        gap = film.get("beat_pause", 0.55)
-        text = f' <break time="{gap:.2f}s" /> '.join(b["text"] for b in beats) if gap else " ".join(b["text"] for b in beats)
         tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
-        shutil.move(tmp, voice_path)
-    duration = get_duration(voice_path)
+        _replace_file(tmp, voice_path)
+    duration = _fit_cap(voice_path, text, film)
     words = transcribe_with_whisper(voice_path)
     total = duration + film.get("tail", 0.8)      # time after the last word (let the ending land)
     slots = align_beats(beats, words, total)
@@ -714,7 +808,8 @@ def produce(args):
         open(os.path.join(work, "frames", ".clean"), "w").close()
 
     # ---- stickers (spread over all CPU cores: one PNG load/draw/save per frame adds up) ----
-    cta = film.get("cta")
+    stickers = not _kit_film(film)
+    cta = film.get("cta") if stickers else None
     cta_from = _cta_start(film, words, len(frames)) if cta else len(frames)
     comp = os.path.join(work, "comp")                  # final frames = raw render + stickers
     shutil.rmtree(comp, ignore_errors=True)
@@ -723,6 +818,8 @@ def produce(args):
     jobs = [(frames[i], _overlay(beat), (i - span["start"]) / FPS, dst(i))
             for beat, span in zip(beats, spans) if _overlay(beat)
             for i in range(span["start"], min(span["end"] + 1, len(frames), cta_from))]
+    if not stickers:
+        jobs = []
     if cta:                                            # end card: the closing question, until the last frame
         jobs += [(frames[i], {"type": "question", "text": cta}, (i - cta_from) / FPS, dst(i))
                  for i in range(cta_from, len(frames))]
@@ -786,10 +883,11 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     out = os.path.join(get_output_dir(), f"{name}.mp4")
     shutil.move(final, out)
     os.remove(merged)
+    final_duration = _assert_file_cap(out)
     preview = os.path.join(get_output_dir(), f"{name}_preview.mp4")
     subprocess.run([FFMPEG, "-v", "error", "-y", "-i", out, "-c:v", "copy", "-c:a", "libopus", "-b:a", "128k",
                     preview], check=True)
-    log.info(f"\nFILM: {out} ({get_duration(out):.1f}s)\nVS Code preview: {preview}")
+    log.info(f"\nFILM: {out} ({final_duration:.1f}s)\nVS Code preview: {preview}")
     if os.getenv("POST_TEXT", "1") != "0":             # ready-to-post TikTok + YouTube text next to the video
         from agents import post_text
         post_text.write(film, out)

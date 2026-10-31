@@ -15,8 +15,11 @@ log = logging.getLogger("pipeline")
 EVALUATOR_PROMPT = """You are a quality control agent for premium viral video scripts.
 
 RUBRIC:
-1. HOOK: beat 1 must state the most surprising fact or outcome in plain words (a cold open). An
-   opener that only sets the scene or gives background ("two armies, one river...") is BLOCKING.
+1. HOOK: beat 1 is why a scrolling viewer stops. Its words must open a curiosity gap (a paradox,
+   danger or impossible stake), and its visual must be the story's most gripping moment already in
+   motion. BLOCKING: an opener that only sets the scene or gives background ("two armies, one
+   river..."); a line that summarizes the story or reads like its title; a calm beat-1 visual (an
+   aftermath, people seated, standing or talking, an establishing view, an object at rest).
 2. FACTUAL ACCURACY: No hallucinations or verifiably false claims. STRICTEST check.
 3. LENGTH: Already verified in code before you see the script — never FAIL for length.
 4. BRAND SAFETY: No political, religious, or controversial framing.
@@ -73,6 +76,13 @@ object-led documentary rendered with a local AI video generator.
 Apply these rules:
 1. Beat 1 states the strongest supported outcome. Beat 2 begins the explanation, which then follows
    one causal evidence trail from the real subject through its process or finding to a clear payoff.
+   The final beats' visual descriptions must SHOW that payoff (the hook's claim happening on screen,
+   readable with the sound off); FAIL an ending whose visuals only seat people near each other while
+   the narration states the payoff. When a real person carries the story, also FAIL: one outfit for a
+   story spanning months or years or a change of circumstance (capture, prison, homecoming) with no
+   `look_changes`; a turning-point event (a fall, a capture, an escape) shown only through its
+   aftermath; a recurring anonymous group (fellow prisoners, officials) described differently from
+   one appearance to the next instead of through one `recurring_objects` entry.
 2. Every narration claim must be supported by the supplied evidence. Reject invented people,
    discoveries, experiments, quotations, historical actions, locations, measurements, or mechanisms.
 3. Do NOT require a human protagonist, recurring presenter, handshake, dramatic gesture, or personal
@@ -312,6 +322,84 @@ def variety_feedback(script: dict) -> str | None:
     return "VISUAL VARIETY (the video reads as one repeated shot): " + " ".join(f"- {p}" for p in problems)
 
 
+HOOK_MAX_SECONDS = 3.0
+HOOK_WORDS_PER_SECOND = 2.75   # measured: "Doug Hegdahl carried about 256 prisoners' identities home" = 11 spoken words, 3.98 s
+
+
+def _spoken_words(token: str) -> int:
+    """How many words a token takes to say: "256" is "two hundred fifty-six", "1967" "nineteen sixty-seven"."""
+    digits = re.sub(r"[^\d]", "", token)
+    if not digits:
+        return 1
+    if len(digits) == 4 and 1100 <= int(digits) <= 2099:
+        return 3
+    if digits.endswith("000"):
+        return 2
+    return len(digits) + (1 if len(digits) >= 3 else 0)
+
+
+def hook_seconds(text: str) -> float:
+    return sum(_spoken_words(token) for token in str(text or "").split()) / HOOK_WORDS_PER_SECOND
+
+
+def hook_feedback(script: dict) -> str | None:
+    """Beat 1 must land within ~3 s: viewers decide in the first 2-3 seconds whether to stay.
+
+    The writer is asked for a 2-second hook but nothing measured it; the Hegdahl hook took 3.98 s.
+    """
+    beats = script.get("beats") if isinstance(script.get("beats"), list) else []
+    hook = str((beats[0] or {}).get("text") or "") if beats and isinstance(beats[0], dict) else ""
+    seconds = hook_seconds(hook)
+    if not hook or seconds <= HOOK_MAX_SECONDS:
+        return None
+    budget = int(HOOK_MAX_SECONDS * HOOK_WORDS_PER_SECOND)
+    return (f"HOOK TOO LONG: beat 1 \"{hook}\" takes about {seconds:.1f} s to say; the hook must land in "
+            f"{HOOK_MAX_SECONDS:.0f} s. Rewrite beat 1 as at most {budget} spoken words (a number counts as "
+            "the words it is spoken with: 256 = four) that still state the most surprising outcome, and "
+            "move the rest into beat 2. Keep spoken_script in sync.")
+
+
+_TIME_SPAN = re.compile(r"\b(?:\d+|two|three|four|five|six|several|many)\s+(?:years?|months?|weeks?)\b|"
+                        r"\b(?:captiv\w*|prison\w*|imprison\w*|released|homecoming|returned home|came home|"
+                        r"back home|years later)\b", re.I)
+
+
+def wardrobe_feedback(script: dict) -> str | None:
+    """A named person in a story that spans time needs look_changes, or one outfit runs through it all.
+
+    The Hegdahl video wore one sailor uniform from the ship through two years of captivity to the
+    homecoming; the final review rejected it after six hours of rendering. Free to check here.
+    """
+    text = " ".join([str(script.get("spoken_script") or "")]
+                    + [str(b.get("text") or "") for b in script.get("beats") or [] if isinstance(b, dict)])
+    if not _TIME_SPAN.search(text):
+        return None
+    unchanged = [str(c.get("name")) for c in script.get("characters") or []
+                 if isinstance(c, dict) and c.get("name") and not c.get("look_changes")]
+    if not unchanged:
+        return None
+    return (f"ONE OUTFIT FOR THE WHOLE STORY: the narration spans time or a change of circumstance "
+            f"({_TIME_SPAN.search(text).group(0)!r}), but {', '.join(unchanged)} never changes clothes. Add "
+            "`look_changes` entries at the beats where their clothing really changes (worn prison clothing "
+            "during captivity, a fresh uniform or civilian clothes on return), each a full look description.")
+
+
+def question_feedback(script: dict) -> str | None:
+    """The last beat must end on a short question to the viewer: the channel's standing rule since
+    2026-10-25, enforced for the Max films and missing here (the Zanzibar and Hegdahl scripts ended on a
+    statement)."""
+    from agents.showrunner import CTA_RE, closing_question
+    beats = [b for b in script.get("beats") or [] if isinstance(b, dict)]
+    last = str(beats[-1].get("text") or "") if beats else ""
+    question = closing_question(last)
+    if question and not CTA_RE.search(question) and len(question.split()) <= 13:
+        return None
+    return ("NO CLOSING QUESTION: the last beat must END with one short question to the viewer (13 words at "
+            "most) that the video's facts let them answer or argue about, e.g. 'Would you have fired first?'. "
+            "Never ask them to comment, like, subscribe or follow. Keep spoken_script in sync."
+            + (f" Now it ends: \"{last}\"" if last else ""))
+
+
 def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int = 3, target_seconds: int = 75,
                         mode: str = "footage", source: str = "pexels", angle: str | None = None,
                         content_mode: str = "documentary", research: list[dict] | None = None,
@@ -363,8 +451,17 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
         if not min_words <= wc <= max_words:
             log.warning(f"Accepting {wc} words (within the {grace:.0%} length grace).")
 
+        hook = hook_feedback(script)
+        if hook and not final:
+            log.warning(f"Failed. Feedback: {hook}")
+            previous, last_feedback = script, hook
+            continue
+        if hook:
+            log.warning(f"Accepting the draft on the last attempt despite: {hook}")
+
         # Checked before the paid evaluation, which a monotonous draft would only waste.
-        variety = variety_feedback(script) if mode == "local-ai" else None
+        variety = ((variety_feedback(script) or wardrobe_feedback(script) or question_feedback(script))
+                   if mode == "local-ai" else None)
         if variety and not final:
             log.warning(f"Failed. Feedback: {variety}")
             previous, last_feedback = script, variety

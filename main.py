@@ -106,6 +106,8 @@ def run_pipeline(
     publish_live: bool = False,
 ) -> dict:
     started = datetime.now()
+    # Local-ai fast mode fits the whole run, topic to final video, into LOCAL_VIDEO_BUDGET_MINUTES.
+    os.environ["PIPELINE_STARTED_AT"] = str(started.timestamp())
     if source in SOURCE_ALIASES:
         log.info(f"Source '{source}' runs through '{normalize_source(source)}' "
                  f"(MiniMax H3 first, Wan fallback).")
@@ -373,12 +375,13 @@ if __name__ == "__main__":
     if args.publish_live and not args.publish:
         parser.error("--publish-live requires at least one --publish PLATFORM")
 
-    # Every downloadable library (CC0 assets, the compositor's npm packages) is fetched before the run
-    # starts, so a fresh clone is ready to produce; later runs skip this in milliseconds.
-    from agents.libraries import ensure as ensure_libraries
-    ensure_libraries()
-
     if args.source in ("evolution", "cutaway", "explainer"):
+        # Every downloadable library (CC0 assets, the compositor's npm packages) is fetched before a 3D run
+        # starts, so a fresh clone is ready to produce; later runs skip this in milliseconds. The local-ai,
+        # unreal and pexels routes use none of them, so they never wait on the ~45 GB first fetch.
+        from agents.libraries import ensure as ensure_libraries
+        ensure_libraries()
+
         # The 3D pipelines run under the autopilot: script → voice → exact-timing low-res rehearsal
         # (every ~3 s window must pass) → Blender production render with free technical rechecks →
         # sound + captions → final check. This gate is shared by Max cutaways, no-hero explainers and

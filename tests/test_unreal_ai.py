@@ -354,7 +354,7 @@ class ScriptAttemptBudgetTests(unittest.TestCase):
         def draft(topic, tone, **kwargs):
             drafts.append(kwargs.get("feedback"))
             return {"video_title": "t", "description": "d", "spoken_script": "w " * 130,
-                    "beats": [{"text": "w " * 10} for _ in range(13)], "story_premise": "p",
+                    "beats": [{"text": "w " * (6 if i == 0 else 10)} for i in range(13)], "story_premise": "p",
                     "protagonist_goal": "g", "stakes": "s", "ending_payoff": "e"}
 
         with patch("agents.script.generate_script", side_effect=draft), \
@@ -381,12 +381,13 @@ class ScriptAttemptBudgetTests(unittest.TestCase):
             {"verdict": "PASS", "feedback": "", "minor_only": False},
         ])
         script_obj = {"video_title": "t", "description": "d", "spoken_script": "w " * 130,
-                      "beats": [{"text": "w " * 10} for _ in range(13)], "story_premise": "p",
+                      "beats": [{"text": "w " * (6 if i == 0 else 10)} for i in range(13)], "story_premise": "p",
                       "protagonist_goal": "g", "stakes": "s", "ending_payoff": "e"}
         with patch("agents.script.generate_script", return_value=script_obj), \
                 patch.object(evaluator, "has_all_keys", return_value=(True, [])), \
                 patch.object(evaluator, "length_feedback", return_value=None), \
-                patch.object(evaluator, "evaluate_script", side_effect=lambda *a, **k: next(verdicts)):
+                patch.object(evaluator, "evaluate_script", side_effect=lambda *a, **k: next(verdicts)), \
+                patch.object(evaluator, "question_feedback", return_value=None):
             self.assertIsNotNone(evaluator.evaluate_with_retry("topic", max_retries=5, mode="local-ai"))
 
     def test_three_rounds_would_have_discarded_that_same_converging_draft(self):

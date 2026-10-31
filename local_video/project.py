@@ -11,8 +11,8 @@ from .config import (
     AUDIO_EXTENSIONS, BACKENDS, IMAGE_EXTENSIONS, PipelineConfig, resolve_within,
     slugify, validate_input_file,
 )
-from .models import ProjectManifest, ProjectState, estimated_remaining_seconds
-from .planner import build_visual_screenplay, plan_shots, validate_duration
+from .models import ProjectManifest, ProjectState, Shot, estimated_remaining_seconds
+from .planner import build_visual_screenplay, plan_shots, reseed, validate_duration
 
 
 DEFAULT_STYLE = "cinematic realism, tactile detail, restrained teal and amber grade, motivated natural light"
@@ -238,7 +238,13 @@ def reset_shot(project: str | Path, shot_number: int, config: PipelineConfig | N
     manifest = load_project(project, config)
     if not 1 <= shot_number <= len(manifest.shots):
         raise ValueError(f"shot_number must be between 1 and {len(manifest.shots)}")
-    shot = manifest.shots[shot_number - 1]
+    requeue_shot(manifest, manifest.shots[shot_number - 1])
+    manifest.save()
+    return manifest
+
+
+def requeue_shot(manifest: ProjectManifest, shot: Shot) -> None:
+    """Supersede a shot's clip and queue it for a fresh generation (the manifest is not saved)."""
     if shot.output:
         source = resolve_within(manifest.project_dir, shot.output)
         if source.is_file():
@@ -251,14 +257,15 @@ def reset_shot(project: str | Path, shot_number: int, config: PipelineConfig | N
     shot.last_frame = None
     shot.validation = None
     shot.error = None
+    # A new seed: with the same seed, keyframe and prompt MiniMax returns the very take being replaced
+    # (the Hegdahl hook came back frame-for-frame identical, cap glitch included).
+    shot.seed = reseed(shot, len(shot.attempts) + 1)
     shot.attempts = []
     # A regenerated shot is no longer salvaged: a stale mark would both count against the run's
     # degradation budget and keep the shot from serving as a still source for its neighbours.
     shot.degraded = ""
     manifest.outputs = {}
     manifest.set_state(ProjectState.QUEUED, reason="shot_regeneration", shot=shot.id)
-    manifest.save()
-    return manifest
 
 
 def replan_project(project: str | Path, config: PipelineConfig | None = None) -> ProjectManifest:

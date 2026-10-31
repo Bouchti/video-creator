@@ -43,6 +43,7 @@ _MOVE_PHRASE = {
     "pan_right": "steady pan right",
     "rise": "slow rising crane move",
     "orbit": "slow orbit around the subject",
+    "locked_off": "locked-off static camera",
 }
 
 
@@ -82,7 +83,38 @@ def framing_scale(subject: str) -> str | None:
     return None
 
 
-def _camera_plan(subject: str, index: int, chosen: str | None = None) -> tuple[str, str]:
+_TRAVEL = (r"(?:steam|sail|walk|driv|ride|rid|fly|flies|flew|run|ran|sprint|dash|bolt|gallop|bound|trot|race|chas|"
+           r"charg|march|roll|drift|cross|head|mov|swim|paddl|row|continu)\w*")
+
+
+def _heading(action: str) -> str:
+    """'left'/'right' when the subject travels across the frame ("steaming toward frame right")."""
+    # "its wake trailing behind it toward frame left": the wake points back, the ship travels right. Read
+    # first, or "steaming on, its wake trailing toward frame left" would read as travelling left.
+    behind = re.search(r"\b(?:wake|trail|exhaust|dust)\w*\b[^.;]{0,40}?\b(?:toward|towards|to)\s+"
+                       r"(?:the\s+)?frame\s+(left|right)\b", action)
+    if behind:
+        return "right" if behind.group(1) == "left" else "left"
+    # "sprints at full speed from frame left to frame right": the stray-dog hook came back running at the
+    # camera on both keyframe takes without a side-on line.
+    span = re.search(r"\bfrom\s+(?:the\s+)?frame\s+(left|right)\b[^.;]{0,40}?\b(?:to|toward|towards|into)\s+"
+                     r"(?:the\s+)?frame\s+(left|right)\b", action)
+    if span and span.group(1) != span.group(2):
+        return span.group(2)
+    found = re.search(rf"\b{_TRAVEL}\b[^.;]{{0,60}}?\b(?:toward|towards|to|into)\s+(?:the\s+)?frame\s+(left|right)\b",
+                      action)
+    if found:
+        return found.group(1)
+    found = re.search(r"\b(?:from\s+)?(left|right)[-\s]+to[-\s]+(?:the\s+)?(left|right)\b", action)
+    if found and found.group(1) != found.group(2):
+        return found.group(2)
+    # "the Greek column ... marches right in a side-on file": the stray-dog march, with no "frame" in it
+    found = re.search(rf"\b{_TRAVEL}\b\s+(?:\w+\s+)?(?:to(?:ward)?s?\s+the\s+)?(left|right)\b(?!\s+(?:hand|side|half))",
+                      action)
+    return found.group(1) if found else ""
+
+
+def _camera_plan(subject: str, index: int, chosen: str | None = None, handoff: str = "") -> tuple[str, str]:
     """Honor explicit screenplay composition instead of adding a conflicting camera preset.
 
     A composition cue in the description (macro, close-up, low angle, overhead) still sets both the
@@ -106,7 +138,17 @@ def _camera_plan(subject: str, index: int, chosen: str | None = None) -> tuple[s
         return "slow overhead drift", "24mm high aerial wide frame looking down"
     if "side angle" in action or "side shot" in action or "from the side" in action:
         return "gentle lateral tracking shot", placed("35mm side-angle medium-wide frame")
-    move = _MOVE_PHRASE.get(str(chosen or "").strip().lower()) or CAMERA_MOVES[index % len(CAMERA_MOVES)]
+    chosen = str(chosen or "").strip().lower()
+    # A move the writer chose but this table does not know holds the camera still: the rotation once gave
+    # Hegdahl's seated briefing (written "locked_off") a smooth orbit that slid the officials out of frame.
+    move = (_MOVE_PHRASE.get(chosen) or ("locked-off static camera" if chosen else "")
+            or CAMERA_MOVES[index % len(CAMERA_MOVES)])
+    heading = _heading(action) or _heading(handoff.lower())      # "continues on course toward frame right"
+    if heading and "pan" not in move and "track" not in move:
+        # A subject travelling across frame leaves it in three seconds unless the camera follows: the
+        # Hegdahl ship "filling the right half, steaming toward frame right" under a pull-back sailed out
+        # of frame on every take.
+        move = f"steady pan {heading}"
     if "wide" in action:
         return move, placed("24mm wide frame", move)
     if "medium" in action or "closer" in action:
@@ -146,13 +188,20 @@ def allocate_frames(total_seconds: int, shot_count: int, fps: int = 30) -> list[
     return frames
 
 
+STORY_SHOT_MAX_FRAMES = 105     # 3.5 s at 30 fps
+
+
 def allocate_story_frames(total_seconds: int, beat_texts: list[str], fps: int = 30) -> list[int]:
-    """Allocate 2.5-4 second shots by narration density and story position."""
+    """Allocate 2.5-3.5 second shots by narration density and story position.
+
+    Capped at 3.5 s: MiniMax's render time grows much faster than clip length (stray-dog run: 3.0 s
+    took 215 s, 3.9 s took 525 s), and assembly stretches a clip up to MAX_CLIP_STRETCH anyway.
+    """
     if not beat_texts:
         return allocate_frames(total_seconds, shot_count_for_duration(total_seconds), fps)
     total = validate_duration(total_seconds) * fps
     count = len(beat_texts)
-    if not count * 75 <= total <= count * 120:
+    if not count * 75 <= total <= count * STORY_SHOT_MAX_FRAMES:
         return allocate_frames(total_seconds, count, fps)
     weights: list[float] = []
     for index, text in enumerate(beat_texts):
@@ -161,13 +210,13 @@ def allocate_story_frames(total_seconds: int, beat_texts: list[str], fps: int = 
         story_emphasis = 0.9 if index == 0 else 1.12 if position >= 0.8 else 1.0
         weights.append(max(0.75, min(1.35, words / 7.0)) * story_emphasis)
     raw = [total * weight / sum(weights) for weight in weights]
-    frames = [max(75, min(120, round(value))) for value in raw]
+    frames = [max(75, min(STORY_SHOT_MAX_FRAMES, round(value))) for value in raw]
     delta = total - sum(frames)
     while delta:
         direction = 1 if delta > 0 else -1
         candidates = [
             index for index, value in enumerate(frames)
-            if (direction > 0 and value < 120) or (direction < 0 and value > 75)
+            if (direction > 0 and value < STORY_SHOT_MAX_FRAMES) or (direction < 0 and value > 75)
         ]
         if not candidates:
             raise ValueError("Could not allocate exact dynamic shot durations")
@@ -217,13 +266,40 @@ def _beat_visual(script: dict[str, Any], beat_index: int) -> dict[str, Any]:
     return beat.get("visual") if isinstance(beat.get("visual"), dict) else {}
 
 
+_NAME_TITLES = {"the", "of", "and", "mr", "mrs", "ms", "dr", "sir", "lady", "lord", "king", "queen", "saint",
+                "st", "captain", "major", "general", "colonel", "private", "sergeant", "lieutenant", "admiral"}
+
+
+def _name_tokens(name: str, others: list[str]) -> list[str]:
+    """Words that alone identify a character: a surname or first name no other character shares."""
+    shared = {word.lower() for other in others for word in re.findall(r"[\w'-]+", other)}
+    return [word for word in re.findall(r"[\w'-]+", name)
+            if len(word) >= 3 and word[0].isupper() and word.lower() not in _NAME_TITLES
+            and word.lower() not in shared]
+
+
 def beat_cast(script: dict[str, Any], beat_index: int) -> list[dict[str, Any]]:
-    """The script characters a beat names in its visual description or continuity notes."""
-    characters = [c for c in script.get("characters") or [] if isinstance(c, dict)]
+    """The script characters a beat names in its visual description or continuity notes.
+
+    A character counts when the full name appears, or a surname/first name only they carry: the
+    2026-10-29 script named "Doug Hegdahl" once and "Hegdahl" in 15 more beats, and those all
+    planned as "none of the story's named characters", so every shot drew a different man.
+    """
+    characters = [c for c in script.get("characters") or [] if isinstance(c, dict)
+                  and str(c.get("name") or "").strip()]
     visual = _beat_visual(script, beat_index)
     text = " ".join(str(visual.get(key) or "") for key in ("description", "continuity_in", "continuity_out"))
-    return [c for c in characters if str(c.get("name") or "").strip()
-            and re.search(rf"\b{re.escape(str(c['name']).strip())}\b", text, re.IGNORECASE)]
+    # "toward Hegdahl's off-frame position" names him without showing him: cast, he was drawn walking in.
+    text = re.sub(r"\b[\w'’-]+(?:'s|’s)?\s+(?:off-?(?:frame|screen)|out[- ]of[- ](?:frame|shot|view)|unseen)\b"
+                  r"|\b(?:off-?(?:frame|screen)|unseen)\s+[\w'’-]+", " ", text, flags=re.I)
+    names = [str(c["name"]).strip() for c in characters]
+    cast = []
+    for character, name in zip(characters, names):
+        tokens = _name_tokens(name, [other for other in names if other != name])
+        if (re.search(rf"\b{re.escape(name)}\b", text, re.IGNORECASE)
+                or any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens)):
+            cast.append(character)
+    return cast
 
 
 def _names_cast(script: dict[str, Any]) -> bool:
@@ -248,7 +324,7 @@ def continuation_source(
     back to a place keeps its look and a cut elsewhere never morphs out of an unrelated frame.
     A return to an earlier shot also needs the same cast: opening a two-army shot on a frame of
     one hero charging the camera makes the model add the enemy beside him.
-    A close shot never opens on a wide frame, nor a wide one on a close frame (`scales`, from
+    A close shot opens only on a close frame, and a wide one never on a close frame (`scales`, from
     framing_scale): three seconds cannot travel that far, so "close on a wave over the rock" opened
     on a wide aerial stayed a wide aerial on every take. Such a shot gets its own keyframe.
     Recurring objects (`objects`, from shot_objects) follow the same idea: a shot never opens on
@@ -263,8 +339,11 @@ def continuation_source(
         return index - 1
     same_cast = (lambda prior: True) if casts is None else (
         lambda prior: prior == index - 1 or sorted(casts[prior]) == sorted(casts[index]))
+    # A close shot opens only on a close frame: from a medium one the model "zooms" by redrawing the face,
+    # and Hegdahl shot-021 came out bald and still medium on two takes from shot-020's medium frame.
     same_scale = (lambda prior: True) if scales is None else (
-        lambda prior: {scales[prior], scales[index]} != {"close", "wide"})
+        lambda prior: {scales[prior], scales[index]} != {"close", "wide"}
+        and (scales[index] != "close" or scales[prior] == "close"))
 
     def same_objects(prior: int) -> bool:
         if objects is None or not objects[index]:
@@ -327,6 +406,40 @@ def _for_light(text: str, script: dict[str, Any], beat_index: int) -> str:
     others = set().union(*(_light_words(beat_labels(script, i)[1]) for i in range(len(beats)))) - _light_words(light)
     clauses = [part for part in re.split(r"\s*[;,]\s*", text) if part and not _light_words(part) & others]
     return ", ".join(clauses)
+
+
+_MARKING = re.compile(r"\b(?:flags?|banners?|ensigns?|tricolou?rs?|standards?|insignia|emblems?|markings?|"
+                      r"pennants?|colours of)\b", re.I)
+
+
+def colours_only(palette: str) -> str:
+    """A palette without the objects it names: the generator draws every noun it reads.
+
+    "Small accents from the Greek blue-and-white flag and the Bulgarian white-green-red flag" sat in
+    every shot's palette, and a Bulgarian flag rose over the Greek camp in all three takes of the
+    stray-dog shot-005. Each side's marking reaches only the shots whose description shows it.
+    """
+    clauses = [part for part in re.split(r"\s*[;,]\s*|\s+(?=with\b)", palette or "") if part.strip()]
+    kept = [part for part in clauses if not _MARKING.search(part)]
+    return ", ".join(kept).strip(" ,.")
+
+
+def _palette_for_scene(palette: str, script: dict[str, Any], beat_index: int) -> str:
+    """This scene's colours from a palette written per scene ("blue-gray for ship deck, sea surface, and
+    open sea; dusty beige for holding room, prison yard, and cell wall").
+
+    Splitting that on commas made "and open sea, dusty beige, faded gray, and cell wall" the open-sea
+    palette (Hegdahl run): scene names read as colours, and a prison wall reached the sea.
+    """
+    scene = beat_labels(script, beat_index)[0]
+    clauses = [part.strip() for part in re.split(r"\s*;\s*", palette or "") if part.strip()]
+    owned = [re.match(r"(.+?)\s+for\s+(.+)$", part.rstrip("."), re.I) for part in clauses]
+    if scene and owned and all(owned):
+        for match in owned:
+            labels = {label.strip().lower() for label in re.split(r",\s*(?:and\s+)?|\s+and\s+", match.group(2))}
+            if scene in labels:
+                return match.group(1).strip()
+    return _for_scene(_for_light(palette, script, beat_index), script, beat_index)
 
 
 def _for_scene(text: str, script: dict[str, Any], beat_index: int, split: str = r"\s*[;,]\s*") -> str:
@@ -405,12 +518,19 @@ def beat_objects(script: dict[str, Any], beat_index: int) -> list[str]:
     warship shot locked both fleets' flags, and the lone Dutch ship opened on the convoy.
     """
     visual = _beat_visual(script, beat_index)
-    text = {_singular(word) for word in _words(
-        " ".join(str(visual.get(key) or "") for key in ("description", "continuity_out")), 4)}
+    raw = " ".join(str(visual.get(key) or "") for key in ("description", "continuity_out")).lower()
+    text = {_singular(word) for word in _words(raw, 4)}
+    names = {str(item): re.sub(r"^(?:the|a|an)\s+", "", _object_name(item)) for item in script.get("recurring_objects") or []}
     by_head: dict[str, list[str]] = {}
     for item in script.get("recurring_objects") or []:
         head = re.findall(r"[a-z]{4,}", _object_name(item).replace("'s", ""))
-        if head and _singular(head[-1]) in text:
+        # A name inside another object's name is that object, not this one: "the molasses tank" put
+        # "The molasses ... moving as a heavy rolling mass" into a calm tank shot, and MiniMax erupted it.
+        own_text = raw
+        for other, name in names.items():
+            if other != str(item) and head and len(name.split()) > 1 and head[-1] in name.split():
+                own_text = re.sub(rf"\b{re.escape(name)}\b", " ", own_text)
+        if head and _singular(head[-1]) in {_singular(word) for word in _words(own_text, 4)}:
             by_head.setdefault(_singular(head[-1]), []).append(str(item))
     present = set()
     for items in by_head.values():
@@ -470,7 +590,7 @@ def _continuity(
     )
     geography = script.get("screen_geography") or ""
     if beat_index is not None:
-        palette = _for_scene(_for_light(palette, script, beat_index), script, beat_index)
+        palette = _palette_for_scene(palette, script, beat_index)
         visual_style = _for_scene(_for_light(visual_style, script, beat_index), script, beat_index)
         location = _for_scene(location, script, beat_index, _SENTENCES)
         geography = _for_scene(geography, script, beat_index, _SENTENCES)
@@ -480,11 +600,25 @@ def _continuity(
             beats = script.get("beats") if isinstance(script.get("beats"), list) else []
             here = {str(c.get("name")).strip() for i in range(len(beats)) if beat_labels(script, i)[0] == scene
                     for c in beat_cast(script, i)}
-            absent = [str(c.get("name")).strip() for c in script.get("characters") or []
-                      if isinstance(c, dict) and str(c.get("name") or "").strip() not in here]
+            names = [str(c.get("name") or "").strip() for c in script.get("characters") or []
+                     if isinstance(c, dict) and str(c.get("name") or "").strip()]
+            # A surname alone ("Hegdahl usually occupies frame left") names the character too.
+            patterns = {name: [rf"\b{re.escape(name)}\b"] + [rf"\b{re.escape(token)}\b" for token in
+                                                            _name_tokens(name, [n for n in names if n != name])]
+                        for name in names}
+
+            def mentions(part: str, name: str) -> bool:
+                return any(re.search(pattern, part, re.IGNORECASE) for pattern in patterns[name])
+
+            absent = [name for name in names if name not in here]
             parts = re.split(r"(?<=;)\s+|" + _SENTENCES, geography)
-            geography = " ".join(part for part in parts if not any(
-                re.search(rf"\b{re.escape(name)}\b", part, re.IGNORECASE) for name in absent if name))
+            named = [name for name in names if any(mentions(part, name) for part in parts)]
+            if named and all(name in absent for name in named):
+                # Every rule is about people who are not in this place ("his movement ... listeners face
+                # him"): an empty open-sea shot was told to hold listeners and drew a cabin of men.
+                geography = ""
+            else:
+                geography = " ".join(part for part in parts if not any(mentions(part, name) for name in absent))
         time_of_day = beat_labels(script, beat_index)[1] or time_of_day
         objects = beat_objects(script, beat_index)
     return {
@@ -497,7 +631,28 @@ def _continuity(
         "time_of_day": time_of_day,
         "recurring_objects": "; ".join(str(item) for item in objects if item),
         "visual_style": visual_style,
+        "period": story_period(script),
     }
+
+
+def story_period(script: dict[str, Any]) -> str:
+    """The year the story happens in, from the script's own words ("went overboard in 1967").
+
+    Nothing carried the era to the generators, so the Hegdahl run's "bare, location-neutral" holding
+    room came out as a clean modern hallway with a hardwood floor instead of a 1967 prison.
+    """
+    for key in ("description", "story_premise", "spoken_script"):
+        found = re.search(r"\b(1[0-9]{3}|20[0-2][0-9])s?\b", str(script.get(key) or ""))
+        if found:
+            return found.group(0)
+    return ""
+
+
+def period_line(continuity: dict[str, Any]) -> str:
+    """The era in words that add no new things: H3 draws every noun, and "every room, fitting, fabric
+    ... never new or modern" put a cabin interior into an open-sea shot (Hegdahl run shot-004)."""
+    period = str((continuity or {}).get("period") or "")
+    return f"Period: {period}, everything in frame of that era, aged and long used" if period else ""
 
 
 def continuity_text(value: dict[str, Any]) -> str:
@@ -540,15 +695,28 @@ _CAMERA_PROSE = {
 
 # The script marks stand-ins "illustrative" for honesty; to the generator the word asks for an
 # illustration, the painterly look the reviewer rejects. The screenplay keeps it.
-_ILLUSTRATIVE_LEAD = re.compile(
-    r"(^|:\s+)illustrative (?:period )?(?:reconstruction|stand-in)(?: (?:for|of) [^,.:;]+)?\s*[,:;]\s*", re.I)
+_ILLUSTRATIVE_LABEL = r"illustrative(?:,?\s+[\w-]+){0,2}?\s+(?:physical\s+)?(?:reconstruction|stand-in)"
+# "...reconstruction of captivity beginning: a door swings shut" -- "of X:" is a title, dropped whole.
+_ILLUSTRATIVE_TITLE = re.compile(rf"(^|:\s+){_ILLUSTRATIVE_LABEL}(?:\s+(?:of|for)\s+[^,.:;]+)?\s*:\s*", re.I)
+_ILLUSTRATIVE_LEAD = re.compile(rf"(^|:\s+){_ILLUSTRATIVE_LABEL}\s*[,;]\s*", re.I)
+# "...reconstruction of Hegdahl seated frame left, facing..." -- here X IS the shot: only the label
+# goes. Dropping "of X," with it cut the subject out of 11 of 22 prompts on the 2026-10-29 Hegdahl
+# run (MiniMax was never told he sat at frame left, and the first take had him walk off).
+_ILLUSTRATIVE_OF = re.compile(rf"\b{_ILLUSTRATIVE_LABEL}\s+(?:of|for)\s+", re.I)
 
 
 def generator_text(text: str) -> str:
     """Screenplay wording as the video model should read it."""
-    value = _ILLUSTRATIVE_LEAD.sub(r"\1", str(text or ""))
+    value = _ILLUSTRATIVE_TITLE.sub(r"\1", str(text or ""))
+    value = _ILLUSTRATIVE_LEAD.sub(r"\1", value)
+    value = _ILLUSTRATIVE_OF.sub("", value)
+    # "illustrative reconstruction pulls back from his face": the label was standing in for the camera
+    value = re.sub(rf"\b{_ILLUSTRATIVE_LABEL}\s+(?=(?:pulls|pushes|moves|tracks|drifts|follows|holds)\b)",
+                   "the camera ", value, flags=re.I)
     value = re.sub(r"\ban illustrative\s+(?=[^aeiouAEIOU\W])", "a ", value)
-    value = re.sub(r"\s*\(illustrative\)|\billustrative\s+", "", value, flags=re.I)
+    value = re.sub(r"\s*\(illustrative\)|\billustrative,?\s+", "", value, flags=re.I)
+    # "location-neutral" tells the writer not to claim a real place; to a generator it means generic/modern
+    value = re.sub(r",?\s*\blocation-neutral\b,?", "", value, flags=re.I)
     value = re.sub(r"\s+([,.;:])", r"\1", value)
     return re.sub(r"\s{2,}", " ", value).strip()
 
@@ -605,8 +773,18 @@ def _named_here(objects: str, action: str) -> list[str]:
         name = re.sub(r"\(.*?\)", "", item.split(":", 1)[0]).strip()
         proper = [w for w in re.findall(r"[A-Za-z]+", name) if w[:1].isupper() and w.lower() not in _COMMON_CAPITALS]
         if not proper or any(_singular(w.lower()) in words for w in proper):
-            kept.append(item)
+            kept.append(_without_story_states(item))
     return kept
+
+
+def _without_story_states(item: str) -> str:
+    """An object's look without its states at other points of the story.
+
+    "intact through beat 12, split open from beat 13, torn and collapsed plates after" in a calm shot of
+    the molasses tank made MiniMax burst it mid-clip; the shot's own action already says how it looks now.
+    """
+    parts = [part for part in re.split(r"\s*;\s*", item) if not re.search(r"\bbeats?\s*\d", part, re.I)]
+    return re.sub(r"\s*\([^)]*\bbeats?\s*\d[^)]*\)", "", "; ".join(parts)).strip()
 
 
 _COMMON_CAPITALS = {"the", "a", "an", "iron", "old", "new", "red", "white", "black"}
@@ -633,20 +811,27 @@ def construct_prompt(
     """
     suffix = MINIMAX_SUFFIX if backend == "minimax" else WAN_SUFFIX
     style = generator_text(continuity.get("visual_style") or "photographic realism")
-    parts = [f"Live-action, {style.rstrip('.')}, {framing}, 9:16 vertical frame."]
+    parts = [f"Live-action, {style.rstrip('.')}, {framing}, 9:16 vertical frame, the picture filling it edge to edge."]
     characters = str(continuity.get("characters") or "")
     if cast_names:
         plural = len(cast_names) > 1
         parts.append(
             f"Exactly {len(cast_names)} named character{'s' if plural else ''} ({', '.join(cast_names)}), "
-            f"each appearing once: {_sentence(characters)} Every other figure is an anonymous extra in "
+            f"each appearing once: {_sentence(generator_text(characters))} Every other figure is an anonymous extra in "
             "plain drab clothing, with other hair and none of their colours or signature items.")
     elif cast_names is not None:
         parts.append("None of the story's named characters; any people are anonymous background figures.")
     elif characters and characters != DEFAULT_CHARACTERS:
-        parts.append(_sentence(characters))
+        parts.append(_sentence(generator_text(characters)))
     parts.append(_sentence(generator_text(subject_action)))
     end = generator_text(handoff) or generator_text(payoff_of(subject_action))
+    if end and _MARKING.search(end) and not _MARKING.search(subject_action):
+        # "marches right toward the Bulgarian flag" in the end state of a shot that shows no flag: MiniMax
+        # drew one into the column mid-clip. The end state may not bring in a marking the shot never shows.
+        end = re.sub(rf"\s+(?:toward|towards|to|under|beside|past|near|below)\s+[^,;.]*?{_MARKING.pattern}", "", end,
+                     flags=re.I)
+        end = re.sub(rf"[^,;]*{_MARKING.pattern}[^,;]*[,;]?", "", end, flags=re.I)
+        end = re.sub(r"\s{2,}", " ", end).strip(" ,;")
     if end and end.rstrip(".") not in parts[-1]:
         parts.append(_sentence(f"By the end of the clip: {end}"))
     objects = generator_text("; ".join(_named_here(continuity.get("recurring_objects") or "", subject_action)))
@@ -660,8 +845,11 @@ def construct_prompt(
     location = str(continuity.get("location") or "")
     if location and not location.startswith(DEFAULT_LOCATION):
         parts.append(_sentence(f"Setting: {generator_text(location)}"))
-    if continuity.get("palette") and continuity["palette"] != DEFAULT_PALETTE:
-        parts.append(_sentence(f"Colour palette: {generator_text(continuity['palette'])}"))
+    if period_line(continuity):
+        parts.append(_sentence(period_line(continuity)))
+    palette = colours_only(str(continuity.get("palette") or ""))
+    if palette and continuity["palette"] != DEFAULT_PALETTE:
+        parts.append(_sentence(f"Colour palette: {generator_text(palette)}"))
     # A fixed "clear air" contradicted every hazy, smoky or ash-darkened light, and won: 28 reviews on
     # the volcano run said the sky came back pale and bright instead of ash-darkened.
     parts.append(_sentence(f"Light: {light}, held steady in every frame") if light
@@ -780,7 +968,8 @@ def plan_shots(
         # Each shot carries only the looks its beat needs (a cub scene never sees the adult).
         shot_continuity = _continuity(script, visual_style, concept, beat_index)
         camera, framing = _camera_plan(subject, index,
-                                       chosen=_beat_visual(script, beat_index).get("camera"))
+                                       chosen=_beat_visual(script, beat_index).get("camera"),
+                                       handoff=beat_handoff(script, beat_index))
         scene_ambience = ambience or "natural location tone and specific diegetic details"
         transition = str(_beat_visual(script, beat_index).get("transition") or "cut")
         if index == 0 or transition not in {"cut", "match_cut", "crossfade"}:

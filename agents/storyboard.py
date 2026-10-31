@@ -83,12 +83,18 @@ def validate(sb: dict) -> list:
     if v is None:
         return p + [f"world must be one of {vocab.worlds()}"]
     calm, thing = v.CALM, v.THING
+    if has_hero(sb) and sb.get("world") == "embankment" and sb.get("gag") != "duck":
+        p.append("an embankment Max story always uses the duck so every mistake ends with it sailing into the flood")
     steps = sb.get("steps") or []
     if is_linear(sb):
         if not 9 <= len(steps) <= 13:
             p.append(f"{len(steps)} steps; a linear explainer has 9-13 additive build steps including the finale")
     elif not 5 <= len(steps) <= 11:
         p.append(f"{len(steps)} steps; a story has 5-11 (setup, fail/fix pairs, finale)")
+    if not is_linear(sb):
+        failures = sum(s.get("kind") == "fail" for s in steps)
+        if failures < 3:
+            p.append(f"{failures} failure steps; every story needs at least 3 distinct mistakes and their fixes")
     ids = [s.get("id", "") for s in steps] + [h.get("id", "") for h in sb.get("hooks") or []]
     if has_hero(sb):
         ids.append("rewind")
@@ -174,8 +180,8 @@ def validate(sb: dict) -> list:
             p.append("give 1-2 hooks (a step replayed first, before the rewind)")
         for h in hooks:
             target = step_ids.get(h.get("step"))
-            if target is None or target.get("kind") not in ("fail", "finale"):
-                p.append(f"hook '{h.get('id')}' must replay a fail step or the finale")
+            if target is None or target.get("kind") != "fail":
+                p.append(f"hook '{h.get('id')}' must replay a failure, never the happy ending")
     return p
 
 
@@ -193,12 +199,15 @@ def spec_source(sb: dict, set_id: str) -> str:
     v = world_vocab(sb)
 
     def must_see(event):                       # nobody to see in a no-hero explainer
-        return [n for n in v.EVENT_MUST_SEE[event] if hero or n != "Max"]
+        names = [n for n in v.EVENT_MUST_SEE[event] if hero or n != "Max"]
+        if hero and v.EVENTS[event].get("outcome") == "fail":
+            names += list(getattr(v, "HERO_FAILURE_MUST_SEE", ()))
+        return names
 
     for h in sb["hooks"]:
         s = steps[h["step"]]
         ev = v.EVENTS[s["event"]]
-        actions[h["id"]] = {"kind": "hook", "shows": f"The payoff moment first: {ev['shows']}.",
+        actions[h["id"]] = {"kind": "hook", "shows": f"The failure replays first: {ev['shows']}.",
                             "must_see": must_see(s["event"]),
                             "extras": v.GAG_DOES.get(s["event"], "") if gag else "",
                             "seconds": v.SECONDS["hook"], "replays": s["id"]}
@@ -283,11 +292,16 @@ def reference_film(sb: dict, set_id: str) -> dict:
         return {"title": sb["title"], "set": set_id, "format": "buildup", "voice": "energetic",
                 "captions": "word", "music": "synth", "beats": beats, "cta": None, "tail": 1.2}
     hook = sb["hooks"][0]
-    beats = [{"action": hook["id"], "text": lines["hook_hero" if hero else "hook"], "overlay": {"type": "none"}},
-             {"action": "rewind", "text": "Let's rewind to the start.", "overlay": {"type": "none"}}]
+    beats = [{"id": hook["id"], "action": hook["id"], "video": "epilogue",
+              "text": lines["hook_hero" if hero else "hook"], "overlay": {"type": "none"}},
+             {"id": "rewind", "action": "rewind", "video": "rewind",
+              "text": "Let's rewind to the start.", "overlay": {"type": "none"}}]
     for s in sb["steps"]:
         ev = v.EVENTS[s["event"]]
-        if s["kind"] == "setup":
+        reference = getattr(v, "REFERENCE_BEATS", {}).get(s["event"])
+        if reference:
+            text = re.sub(r"\bMax\b", "The builders", reference) if not hero else reference
+        elif s["kind"] == "setup":
             text = lines["setup_hero" if hero else "setup"]
         elif s["kind"] == "finale":
             text = lines["finale"]
@@ -296,11 +310,14 @@ def reference_film(sb: dict, set_id: str) -> dict:
         else:
             text = f"So {'Max fixed it' if hero else 'the fix went in'}, and it held, because {ev['teaches']}."
         words = text.split()
-        beats.append({"action": s["id"], "text": " ".join(words[:30]), "overlay": {"type": "none"}})
+        # A new world's first preview must also respect the cap even before it supplies polished reference lines.
+        clipped = text if reference else " ".join(words[:12])
+        beats.append({"id": s["id"], "action": s["id"], "text": clipped, "overlay": {"type": "none"}})
     if not beats[-1]["text"].endswith("?"):
         beats[-1]["text"] += " Which fix would you build?"
     return {"title": sb["title"], "set": set_id, "voice": "energetic", "captions": "word", "music": "synth",
-            "beats": beats, "cta": beats[-1]["text"].split(". ")[-1]}
+            "beat_pause": 0.35, "tail": 1.5, "beats": beats,
+            "cta": beats[-1]["text"].split(". ")[-1]}
 
 
 def set_id_for(sb: dict) -> str:
@@ -359,5 +376,5 @@ LEVEE = {
          "label": "INSPECT + FILL"},
         {"id": "finale", "kind": "finale", "change": "none", "event": "storm_holds", "weather": "storm", "label": ""},
     ],
-    "hooks": [{"id": "burrow_hook", "step": "fail_burrow"}, {"id": "happy_hook", "step": "finale"}],
+    "hooks": [{"id": "burrow_hook", "step": "fail_burrow"}],
 }

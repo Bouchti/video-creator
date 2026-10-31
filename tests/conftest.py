@@ -20,3 +20,30 @@ def _no_real_ai(monkeypatch):
             return os.path.join(_FAKE_DIR, f"{name}.exe")
         return _real_which(cmd, *a, **k)
     monkeypatch.setattr(shutil, "which", which)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_video_server(monkeypatch):
+    """Nor may a test start FreeVideo: a stale mock once let recover_server restart the real ComfyUI on port
+    8190 while a video was rendering. Tests that exercise ensure_minimax patch it themselves."""
+    import subprocess
+    real_popen = subprocess.Popen
+
+    def popen(command, *args, **kwargs):
+        if "freevideo_serve" in " ".join(str(part) for part in (command if isinstance(command, list) else [command])):
+            raise AssertionError("a test tried to start the real FreeVideo server")
+        return real_popen(command, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+
+@pytest.fixture(autouse=True)
+def _classic_local_video(monkeypatch):
+    """Local-ai fast mode (deadline plan, parallax stills) is the production default; the suite's queue tests
+    were written for the classic every-shot-a-clip flow, so fast mode is opted into per test."""
+    monkeypatch.setenv("LOCAL_VIDEO_FAST", os.environ.get("TEST_LOCAL_VIDEO_FAST", "0"))
+
+
+@pytest.fixture(autouse=True)
+def _no_shared_backend_limit(monkeypatch):
+    """A usage limit remembered by a real run must not switch the suite's backends, nor a test's leak out."""
+    monkeypatch.setenv("SHOWRUNNER_LIMIT_MEMORY", "0")

@@ -56,7 +56,9 @@ class ReferenceFilmTests(unittest.TestCase):
 
     def test_reference_passes_the_writer_checks(self):
         from agents import evolution_writer as ew
-        self.assertEqual(ew.hard_checks(_script(self.film), "bridge_evolution"), [])
+        from agents import showrunner as sr        # the reference predates the 65 s cap: structure only
+        self.assertEqual([p for p in ew.hard_checks(_script(self.film), "bridge_evolution")
+                          if not sr.is_length_problem(p)], [])
 
     def test_to_film_marks_the_format(self):
         from agents import evolution_writer as ew

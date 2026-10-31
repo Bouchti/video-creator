@@ -13,6 +13,18 @@ import sys
 import time
 
 
+def engine_source(engine: Path) -> Path:
+    """Where the freevideo_engine package lives: the install root itself, or (launcher-managed installs)
+    the versioned source folder machine.json records."""
+    if (engine / "freevideo_engine").is_dir():
+        return engine
+    try:
+        source = Path(json.loads((engine / "machine.json").read_text(encoding="utf-8"))["source"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return engine
+    return source if (source / "freevideo_engine").is_dir() else engine
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="FreeVideo installation folder")
@@ -20,12 +32,13 @@ def main() -> int:
     parser.add_argument("--models", type=Path, help="extra folder with checkpoints/ (FLUX keyframes)")
     args = parser.parse_args()
     engine = args.root.resolve()
-    sys.path.insert(0, str(engine))
+    source = engine_source(engine)
+    sys.path.insert(0, str(source))
     from freevideo_engine.comfy_environment import isolated_environment
 
     comfy = engine / "ComfyUI"
     host = json.loads((engine / "launcher" / "comfy-host.json").read_text(encoding="utf-8"))
-    env = isolated_environment(engine, engine)
+    env = isolated_environment(engine, source)
     env.pop("PYTHONPATH", None)
     env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1", PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     # HTTPS-scanning antivirus (Norton) re-signs traffic with a root only Windows trusts.

@@ -185,7 +185,7 @@ def _restore_first_backup(set_id, run):
 
 
 def probe(path):
-    """1080x1920 video, an audio stream, a sane duration."""
+    """1080x1920 video, an audio stream, and a duration inside the hard film cap."""
     from agents.media import FFMPEG
     ffprobe = shutil.which("ffprobe") or FFMPEG.replace("ffmpeg", "ffprobe")
     r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration",
@@ -204,8 +204,9 @@ def probe(path):
     if not any(s.get("codec_type") == "audio" for s in streams):
         problems.append("no audio stream")
     dur = float(info.get("format", {}).get("duration") or 0)
-    if not 15 <= dur <= 180:
-        problems.append(f"duration {dur:.1f}s is outside 15-180 s")
+    cap = float(os.getenv("FILM_MAX_SECONDS") or 65)
+    if not 15 <= dur <= cap:
+        problems.append(f"duration {dur:.2f}s is outside 15-{cap:g} s")
     return problems
 
 
@@ -396,7 +397,7 @@ def stage_render(run, film_json):
     """make_film with scene validation + auto-fix; every failure is classified, repaired, resumed."""
     from agents import scene_validator as sv
     from agents.set_builder import KitDefect, RepairNotApplied, fix_code
-    from engine.make_film import BlenderFailed, produce
+    from engine.make_film import BlenderFailed, FilmTooLong, produce
 
     film = json.load(open(film_json, encoding="utf-8"))
     set_id = film.get("set")
@@ -475,6 +476,10 @@ def stage_render(run, film_json):
             # the prepare stage found a missing or broken object before any frame: a kit bug, same on a retry
             run.event("render", "the kit scene failed its prepare check; nothing was rendered", detail=str(exc)[:400])
             raise GiveUp(str(exc)) from exc
+        except FilmTooLong as exc:
+            # The script/voice is deterministically too long. Rendering retries or scene repairs cannot help.
+            run.event("render", "film exceeds the 65-second cap; stopped before rendering", detail=str(exc))
+            raise GiveUp(str(exc)) from exc
         except Exception as exc:                          # noqa: BLE001
             if _is_budget(exc):
                 return _give_up(run, film_json, set_id, exc)
@@ -521,7 +526,7 @@ def stage_check(run, video, film_json):
     for attempt in range(1, 3):
         problems = probe(video)
         if not problems:
-            run.event("check", "final video checked: 1080x1920, audio, duration OK")
+            run.event("check", "final video checked: 1080x1920, audio, at or below the duration cap")
             return video
         if len(problems) == 1 and problems[0].startswith("video is ") and _normalize_final_resolution(video):
             run.event("check", "normalized the completed 9:16 video to 1080x1920",

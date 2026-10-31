@@ -47,25 +47,38 @@ def load_used_topics() -> list:
     History does not go stale like news: with a 7-day window the channel would retell Wojtek the
     bear a week after publishing him. USED_TOPICS_DAYS shortens it if ever wanted.
     """
+    try:
+        data = _read_used_topics()
+    except (OSError, ValueError, TypeError) as e:
+        # An unreadable history means every past topic is fair game again, so say so loudly.
+        log.error("Topic history %s is unreadable (%s); past topics will NOT be excluded", USED_TOPICS_FILE, e)
+        return []
+    cutoff = datetime.now() - timedelta(days=int(os.getenv("USED_TOPICS_DAYS") or 3650))
+    return [t for t in data if datetime.fromisoformat(t["date"]) > cutoff]
+
+
+def _read_used_topics() -> list:
+    """The raw history; utf-8-sig because a PowerShell edit saves the file with a BOM."""
     if not os.path.exists(USED_TOPICS_FILE):
         return []
-    try:
-        with open(USED_TOPICS_FILE) as f:
-            data = json.load(f)
-        cutoff = datetime.now() - timedelta(days=int(os.getenv("USED_TOPICS_DAYS") or 3650))
-        recent = [t for t in data if datetime.fromisoformat(t["date"]) > cutoff]
-        return recent
-    except Exception:
-        return []
+    with open(USED_TOPICS_FILE, encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError("expected a JSON list of {topic, date}")
+    return data
 
 
 def save_used_topic(topic: str):
-    """Append today's topic to the history file (kept for USED_TOPICS_DAYS, ten years by default)."""
-    used = load_used_topics()
+    """Append today's topic to the history file (every entry is kept; USED_TOPICS_DAYS only filters reads).
+
+    Raises instead of writing when the existing file cannot be read, so one bad read never replaces the
+    whole history with a single entry.
+    """
+    used = _read_used_topics()
     used.append({"topic": topic, "date": datetime.now().isoformat()})
     os.makedirs(os.path.dirname(USED_TOPICS_FILE), exist_ok=True)
-    with open(USED_TOPICS_FILE, "w") as f:
-        json.dump(used, f, indent=2)
+    with open(USED_TOPICS_FILE, "w", encoding="utf-8") as f:
+        json.dump(used, f, indent=2, ensure_ascii=False)
 
 
 # ------------------- TRENDING SEARCH -------------------
@@ -244,8 +257,6 @@ GOOD topics:
   stolen oak bucket, which still hangs in its cathedral tower"
 - "Tsutomu Yamaguchi was in Hiroshima on business when the first atomic bomb fell, went home to
   Nagasaki, and survived the second one three days later"
-- "Wojtek, a Syrian brown bear, was enlisted as a private in the Polish army and carried
-  ammunition crates at Monte Cassino"
 
 BAD topics (too generic, or off-brand):
 - "Medieval warfare"

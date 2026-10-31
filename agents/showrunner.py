@@ -32,8 +32,11 @@ load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
 
 WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 words → 82.8 s (pauses)
-TARGET_WORDS = (140, 192)              # ≈ 60–80 s with this voice (incl. the closing question)
-WORDS_PER_BEAT, WORDS_CAP = 18, 230    # long story ladders: ~18 words a beat, never over ~95 s
+# The film is capped at FILM_MAX_SECONDS (65 s). The voice runs ~2.35 words/s; minus the tail and the
+# beat pauses that leaves ~60 s of speech: 110-140 words, at most MAX_BEAT_WORDS per beat.
+FILM_MAX_SECONDS = float(os.getenv("FILM_MAX_SECONDS") or 65)
+TARGET_WORDS = (110, 140)
+MAX_BEAT_WORDS = 22
 HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # what the editor and writer aim for
 # What actually ships: no rule breaks and EVERY score >= SHIP_FLOOR. Calibrated on the editor's real
@@ -51,7 +54,7 @@ FILMS_DIR = os.path.join(get_output_dir(), "films")
 
 # ------------------- the house style (shared by writer + editor) -------------------
 
-STYLE = """You write narration for 60-80 second vertical 3D CUTAWAY explainer videos (TikTok, Reels,
+STYLE = """You write narration for vertical 3D CUTAWAY explainer videos capped at 65 seconds (TikTok, Reels,
 Shorts), the format of channels like @youbuiltit: the world is sliced open so viewers watch what
 is normally hidden: soil layers, pipes, tanks, water and machines at work.
 
@@ -83,12 +86,12 @@ What makes these videos great:
 - Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
 
 
-STORY_STYLE = """You write narration for 60-80 second vertical 3D cutaway CARTOON videos (TikTok, Reels,
+STORY_STYLE = """You write narration for vertical 3D cutaway CARTOON videos capped at 65 seconds (TikTok, Reels,
 Shorts): the world is sliced open so viewers see what is hidden underground, starring a hero who
 learns how things are really built by getting it hilariously wrong first.
 
 The format is TRIAL AND ERROR:
-- THE HOOK (beat 1, at most 13 words, about 2 seconds): the funniest disaster (or the happy payoff),
+- THE HOOK (beat 1, at most 13 words, about 2 seconds): replay the funniest disaster, never the happy payoff,
   shown on screen, phrased so the viewer has to know how it happened. Example of the energy, not
   the words: "This is Max. His brand new pool just floated out of the ground." Never "Did you know",
   never a question to the viewer.
@@ -96,7 +99,8 @@ The format is TRIAL AND ERROR:
 - THE LADDER: the hero tries the obvious thing, it FAILS on screen, the narration names the REAL
   physical reason in one plain sentence, the FIX is the real engineering solution and says why it
   works, and the next attempt reveals the next problem. Every failure is a true lesson and every
-  fix answers exactly that failure. Make cause and effect explicit ("because", "so", "but").
+  fix answers exactly that failure. Use at least three distinct mistakes before the finale. Make
+  cause and effect explicit ("because", "so", "but").
 - THE HERO: endearing and overconfident, never stupid: we laugh WITH him. Max actively chooses each
   approach, and every failure beat gives him a distinct confidence setup before physics answers it:
   a short, natural sentence such as "Max called it bulletproof" or "Max said the river couldn't rise
@@ -162,8 +166,61 @@ _PRIMARY_RESET = [None]                # when the primary backend's usage limit 
 _BACKEND_LOCK = threading.Lock()
 
 
+_LIMIT_LOADED = [False]
+
+
+def _limit_file():
+    """Where a usage limit is remembered between processes (SHOWRUNNER_LIMIT_MEMORY=0 turns it off)."""
+    if os.getenv("SHOWRUNNER_LIMIT_MEMORY", "1").strip() == "0":
+        return None
+    return os.path.join(os.path.dirname(get_output_dir()), "logs", ".ai_backend_limit.json")
+
+
+def _restore_limit():
+    """Start on the fallback while the primary's last usage limit has not lifted.
+
+    Every new process used to try the exhausted Codex first: ~40 s lost per run and per resume, and a
+    local-ai run has a one-hour budget. An unknown reset time is trusted for one hour.
+    """
+    path = _limit_file()
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as stream:
+            state = json.load(stream)
+        written = float(state.get("written") or 0)
+        until = (datetime.datetime.fromisoformat(state["until"]) if state.get("until")
+                 else datetime.datetime.fromtimestamp(written + 3600))
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    fallback = state.get("fallback")
+    if (state.get("backend") == BACKEND and fallback in ("codex", "subscription") and fallback != BACKEND
+            and datetime.datetime.now() < until):
+        _ACTIVE_BACKEND[0] = fallback
+        _PRIMARY_RESET[0] = until
+        log.info("[showrunner] %s is still at its usage limit (until %s); using %s", BACKEND,
+                 until.strftime("%Y-%m-%d %H:%M"), fallback)
+
+
+def _remember_limit(failed, fallback):
+    path = _limit_file()
+    if not path:
+        return
+    reset = _PRIMARY_RESET[0]
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            json.dump({"backend": failed, "fallback": fallback, "until": reset.isoformat() if reset else None,
+                       "written": datetime.datetime.now().timestamp()}, stream)
+    except OSError:
+        pass
+
+
 def active_backend():
     """Backend currently serving this process; changes once after a usage limit."""
+    if _ACTIVE_BACKEND[0] is None and not _LIMIT_LOADED[0]:
+        _LIMIT_LOADED[0] = True
+        _restore_limit()
     return _ACTIVE_BACKEND[0] or BACKEND
 
 
@@ -189,6 +246,7 @@ def activate_fallback(reason="Primary backend usage limit reached", failed_backe
             return True
         _ACTIVE_BACKEND[0] = fallback
         _PRIMARY_RESET[0] = parse_reset(str(reason))
+        _remember_limit(current, fallback)
         log.warning("[showrunner] %s; switching all remaining AI work to %s", str(reason)[:180], fallback)
     return True
 
@@ -946,19 +1004,22 @@ GAG_RE = re.compile(r"\b(physics|fail(ure)?|round|attempt|score|plane|max|take)\
                     r"\b(physics|gravity)\s+(wins|won|leads|led|scores?|scored)\b", re.I)
 
 
+# Asking for engagement instead of asking a question. "like" only as the call to action: "what would you
+# like Max to build?" is a fine question. (This check once held a backspace for \b and never matched.)
+CTA_RE = re.compile(r"\bcomments?\b|\bsubscrib\w*|\bfollow\s+(?:us|me|for|along)\b|"
+                    r"\b(?:hit|smash|drop|leave|give)\s+(?:it\s+|this\s+|a\s+)?like\b|"
+                    r"\blike\s+(?:this|the)\s+(?:video|short)\b", re.I)
+
+
+def is_length_problem(problem: str) -> bool:
+    """A narration-length rule (the 65 s cap): reference scripts written before the cap break only these."""
+    return problem.startswith("total narration is") or bool(re.match(r"beat \d+ has \d+ words; max", problem))
+
+
 def word_budget(set_id):
-    """(min, max) narration words for a set. A Max story ladder gets ~WORDS_PER_BEAT words per beat (its
-    actions + hook + rewind), at least TARGET_WORDS' maximum and at most WORDS_CAP: a 12-beat ladder with
-    four failure mechanisms could not be both clear and funny in 192 words (16 a beat) - every revision
-    traded one for the other. Other formats keep TARGET_WORDS."""
-    try:
-        sp = sets.spec(set_id)
-    except Exception:                                    # noqa: BLE001  unknown set: the default budget
-        return TARGET_WORDS
-    order = getattr(sp, "STORY_ORDER", None)
-    if not (getattr(sp, "HERO", None) and order):
-        return TARGET_WORDS
-    return TARGET_WORDS[0], min(WORDS_CAP, max(TARGET_WORDS[1], WORDS_PER_BEAT * (len(order) + 2)))
+    """(min, max) narration words. One budget for every set: the 65 s cap does not grow with the story
+    (scaling it for long ladders produced a 93 s film). A story too long for it is a planning error."""
+    return TARGET_WORDS
 
 
 def hard_checks(script, set_id):
@@ -976,8 +1037,8 @@ def hard_checks(script, set_id):
         need = int(sp.min_seconds(b) * WORDS_PER_SECOND * 0.75)
         if k > 1 and n < need:
             problems.append(f"beat {k + 1} {sp.beat_actions(b)} has {n} words; it needs at least {need} to show its actions")
-        if n > 32:
-            problems.append(f"beat {k + 1} has {n} words; max 32")
+        if n > MAX_BEAT_WORDS:
+            problems.append(f"beat {k + 1} has {n} words; max {MAX_BEAT_WORDS}")
     words = sum(len(b["text"].split()) for b in beats)
     lo, hi = word_budget(set_id)
     if not lo <= words <= hi:
@@ -993,7 +1054,7 @@ def hard_checks(script, set_id):
         q = closing_question(beats[-1]["text"])
         if not q:
             problems.append("the last beat must END with a short question to the viewer that invites comments")
-        elif re.search(r"(comment|comments|like|subscribe|follow)", q, re.I):
+        elif CTA_RE.search(q):
             problems.append("the closing question must not mention comments, likes, subscribing or following")
         elif len(q.split()) > 14:
             problems.append(f"the closing question has {len(q.split())} words; keep it under 13")
@@ -1209,7 +1270,7 @@ def to_film(script, topic, facts, review=None):
     film = {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
             "music": "synth", "beats": beats, "cta": closing_question(beats[-1]["text"]) if beats else None,
             # story sets end on a reunion: hold the payoff after the last word so it can land
-            "tail": 2.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2,
+            "tail": 1.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2, "beat_pause": 0.35,
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),

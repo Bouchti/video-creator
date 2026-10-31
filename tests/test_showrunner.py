@@ -61,7 +61,7 @@ class PoolSpecTests(unittest.TestCase):
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class HardCheckTests(unittest.TestCase):
     def test_passes_in_budget(self):
-        script = {"beats": _beats(GOOD, words=11)}            # 176 words
+        script = {"beats": _beats(GOOD, words=8)}             # 128 words: inside the 65 s budget
         script["beats"][0]["text"] = "An empty pool can float right out of the ground."
         self.assertEqual(showrunner.hard_checks(script, "pool"), [])
 
@@ -91,6 +91,14 @@ class HardCheckTests(unittest.TestCase):
     def test_real_numbers_allowed(self):
         for line in ("It needs 60 kilometres an hour.", "A bar every 25 centimetres.", "Double speed, four times lift."):
             self.assertIsNone(showrunner.GAG_RE.search(line), line)
+
+    def test_closing_question_rejects_engagement_bait_but_not_the_word_like(self):
+        for bait in ("Comment your guess?", "Would you subscribe for part two?", "Hit like if you saw it coming?",
+                     "Follow us for more?", "Did you like this video?"):
+            self.assertIsNotNone(showrunner.CTA_RE.search(bait), bait)
+        for question in ("What would you like Max to build next?", "Which disaster looks like yours?",
+                         "Would you follow his plan or fix it first?"):
+            self.assertIsNone(showrunner.CTA_RE.search(question), question)
 
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
@@ -159,11 +167,11 @@ class RevisionTests(unittest.TestCase):
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class RuleRepairTests(unittest.TestCase):
     def test_one_word_over_budget_is_trimmed_not_redrafted(self):
-        over = {"title": "t", "beats": _beats(GOOD, words=12)}            # 192 words
+        over = {"title": "t", "beats": _beats(GOOD, words=8)}             # 128 words
         over["beats"][0]["text"] = "An empty pool can float right out of the ground."
-        over["beats"][3]["text"] += " extra extra extra"
+        over["beats"][3]["text"] += " extra" * 14                          # 142: just over the 140 cap
         trimmed = json.loads(json.dumps(over))
-        trimmed["beats"][3]["text"] = " ".join(["word"] * 12)
+        trimmed["beats"][3]["text"] = " ".join(["word"] * 8)
         problems = showrunner.hard_checks(over, "pool")
         self.assertTrue(any("total narration" in p for p in problems))
         with patch.object(showrunner, "_call", return_value=trimmed) as call:
@@ -203,6 +211,11 @@ class ToFilmTests(unittest.TestCase):
         beats = [{"id": "float_hook", "video": "epilogue"}, {"id": "rewind", "video": "rewind"}, {"id": "dig"}]
         self.assertEqual(_beat_ids(beats), ["hook", "rewind", "dig"])
 
+    def test_make_film_recovers_legacy_named_hook_role(self):
+        from engine.make_film import _beat_ids
+        beats = [{"action": "burrow_hook"}, {"action": "rewind"}, {"action": "promise"}]
+        self.assertEqual(_beat_ids(beats), ["hook", "rewind", "promise"])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -241,7 +254,8 @@ class NuclearSetTests(unittest.TestCase):
     def test_reference_film_is_valid(self):
         film = json.load(open(os.path.join(ROOT, "engine", "films", "max_nuclear.json"), encoding="utf-8"))
         self.assertEqual(spec("nuclear_story").validate(film["beats"]), [])
-        self.assertEqual(showrunner.hard_checks({"beats": film["beats"]}, "nuclear_story"), [])
+        self.assertEqual([p for p in showrunner.hard_checks({"beats": film["beats"]}, "nuclear_story")
+                          if not showrunner.is_length_problem(p)], [])     # the reference predates the 65 s cap
 
     def test_story_order_enforced(self):
         film = json.load(open(os.path.join(ROOT, "engine", "films", "max_nuclear.json"), encoding="utf-8"))
@@ -254,7 +268,8 @@ class BoatSetTests(unittest.TestCase):
     def test_reference_film_is_valid(self):
         film = json.load(open(os.path.join(ROOT, "engine", "films", "max_boat.json"), encoding="utf-8"))
         self.assertEqual(spec("boat_story").validate(film["beats"]), [])
-        self.assertEqual(showrunner.hard_checks({"beats": film["beats"]}, "boat_story"), [])
+        self.assertEqual([p for p in showrunner.hard_checks({"beats": film["beats"]}, "boat_story")
+                          if not showrunner.is_length_problem(p)], [])     # the reference predates the 65 s cap
 
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
@@ -286,13 +301,12 @@ class RetryContinuesTests(unittest.TestCase):
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class WordBudgetTests(unittest.TestCase):
-    def test_long_story_ladders_get_more_words_and_others_keep_the_default(self):
-        self.assertEqual(showrunner.word_budget("pool"), showrunner.TARGET_WORDS)
-        lo, hi = showrunner.word_budget("boat_story")
-        n = len(spec("boat_story").STORY_ORDER) + 2
-        self.assertEqual(hi, min(showrunner.WORDS_CAP, max(showrunner.TARGET_WORDS[1], showrunner.WORDS_PER_BEAT * n)))
-        self.assertGreater(hi, showrunner.TARGET_WORDS[1])
-        self.assertLessEqual(hi, showrunner.WORDS_CAP)
+    def test_every_set_gets_the_same_budget_that_fits_the_65_second_cap(self):
+        for set_id in ("pool", "boat_story", "kit_max_s_backyard_levee_story"):
+            self.assertEqual(showrunner.word_budget(set_id), showrunner.TARGET_WORDS)
+        lo, hi = showrunner.TARGET_WORDS
+        # ~2.35 words/s plus the tail and ten 0.35 s pauses must stay inside the cap
+        self.assertLessEqual(hi / 2.35 + 1.5 + 10 * 0.35, showrunner.FILM_MAX_SECONDS)
 
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})

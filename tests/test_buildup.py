@@ -40,7 +40,8 @@ class BuildupTests(unittest.TestCase):
     def test_reference_script_passes(self):
         self.assertEqual(self.film["format"], "buildup")
         self.assertTrue(self.film["beats"][0]["text"].startswith("If you"))
-        self.assertEqual(sr.hard_checks(self.script, "pool"), [])
+        # the reference predates the 65 s cap: its structure must pass, its length is a production rule
+        self.assertEqual([p for p in sr.hard_checks(self.script, "pool") if not sr.is_length_problem(p)], [])
 
     def test_must_open_with_if_you(self):
         bad = _with(self.script, 0, "Every backyard pool hides a secret. Dirt drinks water, so it needs a concrete shell.")

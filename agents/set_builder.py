@@ -362,7 +362,7 @@ RULES THAT KEEP RENDERS CORRECT (learned the hard way):
   splash, creak, crack, whoosh, pop, wind, rumble, stone_thud, steel_clank, bridge_groan, traffic,
   engine, ship_horn, boing, roll).
 - The film JSON: "set": "<id>", "format": "evolution", "captions": "phrase", "music": "synth",
-  "beat_pause": 0.35, "tail": 1.5, one beat per action in STAGE_ORDER, 140-190 words in total, an
+  "beat_pause": 0.35, "tail": 1.5, one beat per action in STAGE_ORDER, 110-140 words in total, an
   opening of at most 18 words, at most 5 overlays, and a closing question as the last sentence plus
   "cta" with that question. Facts must be true; numbers only from MODEL_FACTS."""
 
@@ -415,7 +415,7 @@ those elements, as object-name prefixes the Blender module really uses (e.g. ["l
 one sentence on what ELSE is visible (the running gag, the kids, Max's reaction). The script writer
 reads it to write jokes about what is really on screen; the reviewer does not require it. When you cut
 a gag from "shows", move it to "extras" if it is still on screen. It needs two hook actions, then rewind,
-then a 7-10 action trial-and-error ladder that alternates visible failures with real engineering
+then a 7-10 action trial-and-error ladder with at least three mistakes that alternates visible failures with real engineering
 fixes and ends in a happy finale with Max's two children. Each action needs kind, shows and seconds.
 The validator must require one hook first, rewind second, and every STORY_ORDER action exactly once.
 
@@ -488,7 +488,7 @@ VISUAL AND SAFETY RULES:
   Show things where they are: if the narration says the water goes up the tunnel or the top runs dry,
   the camera follows that water / frames that basin big. Never explain with a far wide shot where the
   key object is a speck; never keep a big sticker over the place the shot is about.
-- The reference film JSON names this set, uses captions "word", one beat per required action, 140-192
+- The reference film JSON names this set, uses captions "word", one beat per required action, 110-140
   spoken words, a <=13-word hook and a final question. It exists for preview validation; the
   showrunner writes the production script after the set passes.
 """
@@ -811,7 +811,7 @@ VISUAL RULES (the reference look: a clean, bright, semi-realistic diorama sliced
   names is on screen at the beat's middle and at 7/8; screens show a picture, not blank white; time of
   day reads in the sky (studio.key_sky with the sun lamp).
 - The reference film JSON names this set, uses captions "word", voice "energetic", one beat per
-  required action (every build action, any explainers and the outro), format "buildup", 140-192 spoken
+  required action (every build action, any explainers and the outro), format "buildup", 110-140 spoken
   words, a title shaped "How a <start> Becomes a <finished system>", an opening that starts "If you",
   and a final "Congratulations, you've built a <thing>." Set cta to null. It exists for preview
   validation; the showrunner writes
@@ -1034,7 +1034,8 @@ def static_checks(set_id, story=False, explainer=False) -> list:
         identity_check = "assert getattr(sp, 'HERO', '') == 'Max', 'story spec HERO must be Max'; "
     else:
         identity_check = "assert getattr(sp, 'FORMAT', '') == 'evolution', 'spec FORMAT must be \"evolution\"'; "
-    story_check = (f"from agents.showrunner import hard_checks; e += hard_checks(f, {set_id!r}); "
+    story_check = (f"from agents.showrunner import hard_checks, is_length_problem; "
+                   f"e += [x for x in hard_checks(f, {set_id!r}) if not is_length_problem(x)]; "
                    # every shown action of a Max story names what must be on screen (the measured must_see gate)
                    + ("e += [f'action {a!r} needs \"must_see\": a list of 1-4 object-name prefixes the viewer must see' "
                       "for a, v in sp.ACTIONS.items() if v.get('kind') != 'rewind' and not ("

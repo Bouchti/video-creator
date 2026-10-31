@@ -26,7 +26,7 @@ STORY_ORDER = ["promise", "fail_sand", "fix_core", "fail_boil", "fix_berm", "fai
 ACTIONS = {
     "burrow_hook": {
         "kind": "hook",
-        "shows": "The payoff moment first: a squirrel digs a tunnel into the barrier; the river finds it; water rushes through the tunnel and blasts out of the yard side as a muddy jet.",
+        "shows": "The failure replays first: a squirrel digs a tunnel into the barrier; the river finds it; water rushes through the tunnel and blasts out of the yard side as a muddy jet.",
         "must_see": [
             "kb_tunnel",
             "kb_jet",
@@ -38,21 +38,6 @@ ACTIONS = {
             5
         ],
         "replays": "fail_burrow"
-    },
-    "happy_hook": {
-        "kind": "hook",
-        "shows": "The payoff moment first: a full storm: the river presses on the barrier and nothing gets through; the yard stays dry and the kids bounce on the trampoline.",
-        "must_see": [
-            "kb_barrier",
-            "Max",
-            "Kid1"
-        ],
-        "extras": "the rubber duck floats on the storm-high river and stays there",
-        "seconds": [
-            3,
-            5
-        ],
-        "replays": "finale"
     },
     "rewind": {
         "kind": "rewind",
@@ -78,7 +63,10 @@ ACTIONS = {
         "must_see": [
             "kb_barrier",
             "kb_flow",
-            "Max"
+            "Max",
+            "kb_fail_flood",
+            "kb_duck",
+            "kb_drench"
         ],
         "extras": "the rubber duck rides the rising river up to the wall",
         "seconds": [
@@ -108,7 +96,10 @@ ACTIONS = {
         "must_see": [
             "kb_flow",
             "kb_boil",
-            "Max"
+            "Max",
+            "kb_fail_flood",
+            "kb_duck",
+            "kb_drench"
         ],
         "extras": "the rubber duck pops up out of the sand boil in the yard",
         "seconds": [
@@ -138,7 +129,10 @@ ACTIONS = {
         "must_see": [
             "kb_sheet",
             "kb_gouge",
-            "Max"
+            "Max",
+            "kb_fail_flood",
+            "kb_duck",
+            "kb_drench"
         ],
         "extras": "the rubber duck surfs over the crest and down the waterfall",
         "seconds": [
@@ -168,7 +162,10 @@ ACTIONS = {
         "must_see": [
             "kb_tunnel",
             "kb_jet",
-            "Max"
+            "Max",
+            "kb_fail_flood",
+            "kb_duck",
+            "kb_drench"
         ],
         "extras": "the rubber duck rides the muddy jet out onto the lawn",
         "seconds": [

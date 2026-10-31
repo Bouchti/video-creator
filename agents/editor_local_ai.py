@@ -9,7 +9,7 @@ from pathlib import Path
 
 from local_video.config import PipelineConfig
 from local_video.project import create_project, load_project
-from local_video.queue import QueueBusyError, QueueRunner
+from local_video.queue import QueueBusyError, QueueRunner, ReviewerUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def process_video(
     for attempt in range(resumes + 1):
         try:
             project = QueueRunner(config).run(project)
-        except QueueBusyError:
+        except (QueueBusyError, ReviewerUnavailable):     # retrying cannot help; the project resumes later
             raise
         except Exception as exc:
             if attempt == resumes:

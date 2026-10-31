@@ -103,6 +103,71 @@ def motion_metrics(path: str | Path, samples: int = 24) -> dict[str, float]:
     }
 
 
+def frame_bars(frames: list) -> dict[str, float]:
+    """How much of the frame letterbox and pillarbox bars cover, from grayscale frames.
+
+    MiniMax sometimes frames a vertical clip as a wide picture between bars: black for Hegdahl
+    shot-004 (a strip a third of the frame tall, accepted after the reviewer noted it only softly),
+    white for shot-020. A bar is a band of edge rows or columns that stays flat near-black or
+    near-white in every frame, so dark scenes, whose shadows still carry texture and change over time,
+    do not count.
+    """
+    import cv2
+    import numpy as np
+    if not frames:
+        return {"letterbox": 0.0, "pillarbox": 0.0}
+    stack = np.stack([cv2.resize(f, (108, 192), interpolation=cv2.INTER_AREA) for f in frames]).astype(np.float32)
+
+    def run(lines) -> float:
+        flat = lines.reshape(lines.shape[0], -1)
+        dead = (flat.std(axis=1) < 4) & ((np.percentile(flat, 99, axis=1) < 26)
+                                         | (np.percentile(flat, 1, axis=1) > 229))
+        if dead.all() or not dead[0]:
+            return 0.0           # an all-dark frame is a black clip, measured elsewhere
+        count = int(np.argmin(dead))
+        # A bar ends in a hard edge where the picture starts; a night sky fades into the scene.
+        if abs(float(flat[count:count + 3].mean()) - float(flat[count - 1].mean())) < 12:
+            return 0.0
+        return count / len(dead)
+
+    rows, cols = stack.transpose(1, 0, 2), stack.transpose(2, 0, 1)
+    top, bottom, left, right = run(rows), run(rows[::-1]), run(cols), run(cols[::-1])
+    # Both opposite edges: one dark edge is a ceiling or a shadow, two are bars.
+    return {"letterbox": top + bottom if min(top, bottom) >= 0.03 else 0.0,
+            "pillarbox": left + right if min(left, right) >= 0.03 else 0.0}
+
+
+def bar_metrics(path: str | Path, samples: int = 8) -> dict[str, float]:
+    """frame_bars for a clip (sampled frames) or a still image."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return {"letterbox": 0.0, "pillarbox": 0.0}
+    source = Path(path)
+    if source.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+        image = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+        return frame_bars([image] if image is not None else [])
+    capture = cv2.VideoCapture(str(source))
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    frames = []
+    for position in np.linspace(0, max(count - 1, 0), min(samples, max(count, 1)), dtype=int):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(position))
+        ok, frame = capture.read()
+        if ok and frame is not None:
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+    capture.release()
+    return frame_bars(frames)
+
+
+def bar_problem(bars: dict[str, float]) -> str:
+    if bars.get("letterbox", 0.0) >= 0.08:
+        return f"letterboxed picture: flat bars cover {bars['letterbox']:.0%} of the frame height"
+    if bars.get("pillarbox", 0.0) >= 0.08:
+        return f"pillarboxed picture: flat bars cover {bars['pillarbox']:.0%} of the frame width"
+    return ""
+
+
 def visual_quality_metrics(path: str | Path, samples: int = 12) -> dict[str, float]:
     """Detect severely blurred or oversaturated artifact frames missed by container checks."""
     try:
@@ -169,7 +234,10 @@ def validate_clip(
             (quality["artifact_score"] > 22.0 and quality["colorfulness"] > 85.0)
             or (quality["artifact_score"] > 14.0 and quality["colorfulness"] > 140.0))):
         problems.append("probable smeared/oversaturated generation artifacts")
-    report = {**metadata, **metrics, **quality, "valid": not problems, "problems": problems}
+    bars = bar_metrics(path)
+    if bar_problem(bars):
+        problems.append(bar_problem(bars))
+    report = {**metadata, **metrics, **quality, **bars, "valid": not problems, "problems": problems}
     if problems:
         raise ValueError("; ".join(problems))
     return report
