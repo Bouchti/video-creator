@@ -432,7 +432,7 @@ class NarrationFitTests(unittest.TestCase):
             config, project = self._project(folder)
             backend = FakeBackend(config, "minimax", [])
             runner = QueueRunner(config, backends={"minimax": backend, "wan": backend})
-            with patch.object(QueueRunner, "_narration", side_effect=RuntimeError("ElevenLabs quota")):
+            with patch("local_video.queue.ensure_narration", side_effect=RuntimeError("ElevenLabs quota")):
                 result = runner.run(project)
             self.assertEqual("failed", result.state)
             self.assertIn("ElevenLabs quota", result.error)
@@ -1732,7 +1732,7 @@ class KeyframeTests(unittest.TestCase):
             answer = {"composition_match": 8, "realism": 8, "anatomy": 8, "identity_match": 4,
                       "fatal_problems": [], "problems": [], "correction": ""}
             with patch.object(visual_review, "review_enabled", return_value=True), \
-                    patch.object(visual_review.ai_router, "ask", return_value=answer):
+                    patch.object(visual_review.llm, "ask", return_value=answer):
                 matched = visual_review.review_keyframe(still, shot, [("Ada", still)])
                 unanchored = visual_review.review_keyframe(still, shot, [])
             self.assertFalse(matched["valid"])
@@ -2447,7 +2447,7 @@ class QualityFloorTests(unittest.TestCase):
                 return {"risks": ["the door leaves frame"], "camera": "locked_off", "start_frame_fits": True,
                         "description": "Medium shot: the keeper stands at frame left by the open door, lamp raised."}
 
-            with patch.object(shot_doctor.ai_router, "ask", side_effect=ask):
+            with patch.object(shot_doctor.llm, "ask", side_effect=ask):
                 result = shot_doctor.examine(shot, "the door is shut", None, {"Ada": "gray wool sweater"},
                                              failed="the door left the frame")
             self.assertEqual("locked-off static camera", result["camera"])
@@ -2602,7 +2602,7 @@ class QualityFloorTests(unittest.TestCase):
                                            "story_progression")}
             answer.update(fatal_problems=[], problems=[], revision_prompt="")
             with patch.object(visual_review, "review_enabled", return_value=True), \
-                    patch.object(visual_review.ai_router, "ask",
+                    patch.object(visual_review.llm, "ask",
                                  side_effect=lambda system, prompt, schema, **k: seen.update(p=prompt) or answer):
                 visual_review.review_clip(clip, shot, None, project)
             self.assertIn("as planned for this take (judge staging, layout and camera against this): Medium shot: "

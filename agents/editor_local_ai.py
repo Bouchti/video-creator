@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from local_video.config import PipelineConfig
+from local_video.models import caption_settings
 from local_video.project import create_project, load_project
 from local_video.queue import QueueBusyError, QueueRunner, ReviewerUnavailable
 
@@ -38,7 +39,7 @@ def process_video(
         reference_image=reference_image,
         music=music,
         ambience=ambience,
-        captions={"enabled": captions, "burn_in": captions, "export_srt": captions, "word_highlight": True},
+        captions=caption_settings(captions, burn_in=captions, export_srt=captions),
         voice=voice,
         config=config,
         script=script,

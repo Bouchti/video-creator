@@ -306,9 +306,9 @@ def design_shots(manifest: ProjectManifest, motion_count: int) -> dict[str, dict
     design = heuristic_design(manifest, motion_count)
     if env_int("LOCAL_VIDEO_DESIGN", 1, 0, 1) == 1:
         try:
-            from agents import ai_router
+            from agents import llm
             started = time.monotonic()
-            values = ai_router.ask(
+            values = llm.ask(
                 "You are the director of photography for a short vertical documentary made with local "
                 "image and video generators.", _design_prompt(manifest, motion_count), DESIGN_SCHEMA,
                 effort="low")
@@ -389,8 +389,8 @@ def restage(manifest: ProjectManifest, shot: Shot, failures: list[str]) -> dict[
           "story's era, place and light.\n" + FRAME_RULES
         + "\n\nSubmit the structured output."
     )
-    from agents import ai_router
-    values = ai_router.ask("You are the director of photography rescuing a shot the video model keeps failing.",
+    from agents import llm
+    values = llm.ask("You are the director of photography rescuing a shot the video model keeps failing.",
                            prompt, RESTAGE_SCHEMA, effort="low")
     frame = str((values or {}).get("frame") or "").strip()
     motion = str((values or {}).get("motion") or "").strip()

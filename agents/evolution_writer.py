@@ -19,13 +19,14 @@ import logging
 import os
 import re
 
+from agents import llm
+from config.paths import slug
 from agents import showrunner as sr
 from engine import sets
 
 log = logging.getLogger("pipeline")
 
 OPEN_MAX_WORDS = 18
-TARGET_WORDS = sr.TARGET_WORDS
 
 EVO_STYLE = """You write narration for 55-75 second vertical 3D "EVOLUTION" videos (TikTok, Reels, Shorts):
 one continuous 3D world seen from drone height, where a thing has to keep getting smarter because
@@ -58,14 +59,16 @@ The format, beat by beat:
 
 def _rules(set_id):
     sp = sets.spec(set_id)
+    lo, hi = sr.target_words()
+    wps = sr.words_per_second()
     pairs = "; ".join(f"{p} then {s}" for p, s in getattr(sp, "ANSWERS", {}).items())
     return f"""STRUCTURE RULES (the renderer enforces them):
 - The actions, exactly once each, in this order: {' → '.join(sp.STAGE_ORDER)}.
 - One action per beat. A problem may share ONE beat with the fix that answers it ("actions":
   ["heat", "expansion_joint"]) when both lines are short. Problem/fix pairs: {pairs}.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
-  {sr.WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. Opening <= {OPEN_MAX_WORDS} words.
-- Word budget: {TARGET_WORDS[0]}-{TARGET_WORDS[1]} words in total (~{sr.WORDS_PER_SECOND} words/s).
+  {wps} x 0.75 words. No beat over 32 words. Opening <= {OPEN_MAX_WORDS} words.
+- Word budget: {lo}-{hi} words in total (~{wps} words/s).
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "120 m", text like "river width": a REAL measurement only); "label" = a short badge naming a real
   idea, no numbers (e.g. "Cables only pull"). Use "none" on most beats, at most 5 stickers, never
@@ -99,7 +102,7 @@ every bridge looks different, the hidden fixes nobody notices, the famous failur
 rule...), a working title, the opening line (second person, at most {OPEN_MAX_WORDS} words), the
 payoff, and honest 1-10 scores for curiosity, visual_fit, novelty and shareability. Set `best` to
 the index of the strongest."""
-    out = sr._call(EVO_STYLE, prompt, ANGLE_SCHEMA, effort="medium")
+    out = llm.ask(EVO_STYLE, prompt, ANGLE_SCHEMA, effort="medium")
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
     best["set"] = set_id
@@ -148,7 +151,7 @@ Write the improved script."""
             prompt += ("\nTONE EXAMPLE: a reference script for this same set. Match its rhythm, do NOT reuse "
                        f"its lines; beat it.\n{example}\n")
         prompt += "\nWrite the script. Every beat must earn its place."
-    return sr._call(EVO_STYLE, prompt, sr.SCRIPT_SCHEMA, effort="high")
+    return llm.ask(EVO_STYLE, prompt, sr.SCRIPT_SCHEMA, effort="high")
 
 
 def critique(script, topic, facts, hard_problems):
@@ -172,7 +175,7 @@ Automatic checks found: {hard_problems or 'nothing'}
 
 List concrete problems and line edits (quote the line, give the better line). verdict = "ship"
 only if every score is {sr.PASS_SCORE}+ and there are no factual errors or rule breaks."""
-    return sr._call(EVO_STYLE, prompt, CRITIQUE_SCHEMA, effort="medium")
+    return llm.ask(EVO_STYLE, prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
 def hard_checks(script, set_id):
@@ -226,7 +229,7 @@ def to_film(script, topic, facts, review=None):
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),
-                     "model": sr.CODEX_MODEL if sr.active_backend() == "codex" else sr.CLI_MODEL}}
+                     "model": llm.CODEX_MODEL if llm.active_backend() == "codex" else llm.CLI_MODEL}}
 
 
 def run(angle=None, set_id=None, render=True, preview=False):
@@ -236,7 +239,7 @@ def run(angle=None, set_id=None, render=True, preview=False):
     script, review = develop(topic, facts)
     film = to_film(script, topic, facts, review)
     os.makedirs(sr.FILMS_DIR, exist_ok=True)
-    name = f"{datetime.date.today():%Y%m%d}_{sr.slug(script['title'])}"
+    name = f"{datetime.date.today():%Y%m%d}_{slug(script['title'])}"
     path = os.path.join(sr.FILMS_DIR, f"{name}.json")
     json.dump(film, open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
     log.info(f"[evolution] script saved: {path}")

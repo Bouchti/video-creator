@@ -1,6 +1,8 @@
 """
 Ready-to-post text for a finished film: TikTok caption + hashtags + cover idea, YouTube Shorts title,
-description and tags, Instagram Reels caption + hashtags + alt text. Written next to the video as `<video>_post.txt` every time a film is produced.
+description and tags, Instagram Reels caption + hashtags + alt text, then the credits (CC BY photos and
+music must be credited in the description) and research sources. Written next to the video as
+`<video>_post.txt` every time a film is produced.
 
 Claude writes it from the film's script and fact sheet (same backend as the showrunner: the
 subscription by default). Without Claude it falls back to a template built from the script.
@@ -56,12 +58,12 @@ SCHEMA = {
 
 
 def _ask_claude(film):
-    from agents import showrunner as sr
+    from agents import llm
     script = "\n".join(f"- [{b.get('action')}] {b['text']}" for b in film["beats"])
     meta = film.get("meta", {})
     prompt = (f"{RULES}\n\nTITLE: {film.get('title', '')}\nCLOSING QUESTION: {film.get('cta') or ''}\n\n"
               f"SCRIPT (in order):\n{script}\n\nFACT SHEET:\n{meta.get('facts', '')[:4000]}")
-    return sr._call("You write social media posts for a premium educational TikTok/YouTube channel.", prompt,
+    return llm.ask("You write social media posts for a premium educational TikTok/YouTube channel.", prompt,
                     SCHEMA, effort="low")
 
 
@@ -110,6 +112,19 @@ def _no_tag_lines(text):
     return "\n".join(keep).strip()
 
 
+def _attribution(film):
+    """Credits and research sources: CC BY / BY-SA photos and music need attribution in the description."""
+    credits = film.get("credits") or film.get("meta", {}).get("credits") or []
+    sources = [s for s in film.get("research_sources") or [] if isinstance(s, dict) and s.get("url")]
+    text = ""
+    if credits:
+        text += "\n===== CREDITS (paste into the description) =====\n" + "\n".join(f"- {c}" for c in credits) + "\n"
+    if sources:
+        text += "\n===== RESEARCH SOURCES =====\n" + "\n".join(
+            f"- {s.get('title') or 'Source'}: {s['url']}" for s in sources) + "\n"
+    return text
+
+
 def _fmt(p):
     p = dict(p, tiktok_caption=_no_tag_lines(p["tiktok_caption"]),
              instagram_caption=_no_tag_lines(p["instagram_caption"]))
@@ -134,7 +149,7 @@ def write(film, video_path):
         post = _template(film)
     out = os.path.splitext(video_path)[0] + "_post.txt"
     with open(out, "w", encoding="utf-8") as f:
-        f.write(_fmt(post))
+        f.write(_fmt(post) + _attribution(film))
     log.info(f"POST TEXT: {out}")
     return out
 

@@ -7,6 +7,26 @@ export type Track = {start: number; xy: [number, number][]}; // xy[i] is the pos
 
 export type Label = {text: string; from: number; to: number; anchor?: string; at?: [number, number]};
 
+// An explanation arrow pinned to a prop's middle: drawn on at `from`, captioned, held until `to`.
+export type Arrow = {
+  from: number;
+  to: number;
+  anchor: string;
+  dir: 'left' | 'right' | 'up' | 'down' | 'cw' | 'ccw';
+  text?: string;
+};
+
+// An explanation diagram (src/diagram/Xray.tsx): a generated component by id, or the template chain of steps.
+export type DiagramCue = {
+  id: string;
+  from: number;
+  to: number;
+  mode?: 'xray' | 'card';
+  anchor?: string;
+  title?: string;
+  steps?: string[];
+};
+
 export type Title = {text: string; from: number; to: number; sub?: string};
 
 export type Callout = {kind: 'counter' | 'stamp'; text: string; from: number; to: number; tone?: 'good' | 'bad'};
@@ -35,6 +55,8 @@ export type ShortProps = {
   chapters?: Title[];
   words?: Word[];
   labels?: Label[];
+  arrows?: Arrow[];
+  diagrams?: DiagramCue[];
   anchors?: Record<string, Track>;
   callouts?: Callout[];
   punchIns?: PunchIn[];

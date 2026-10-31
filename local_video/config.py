@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,7 +11,7 @@ from typing import Iterable
 import requests
 from dotenv import load_dotenv
 
-from config.paths import PROJECT_ROOT, get_comfy_workflow_path, get_env_path
+from config.paths import PROJECT_ROOT, get_comfy_workflow_path, get_env_path, slug
 from agents.media import FFMPEG, FFPROBE
 
 load_dotenv(get_env_path())
@@ -58,8 +56,7 @@ def env_float(name: str, default: float, minimum: float = 0.0) -> float:
 
 
 def slugify(value: str, limit: int = 48) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:limit].strip("-")
-    return slug or "video-project"
+    return slug(value, limit, "-").strip("-") or "video-project"
 
 
 def resolve_within(root: str | Path, relative: str | Path) -> Path:
@@ -85,15 +82,6 @@ def validate_input_file(path: str | Path, extensions: set[str], max_bytes: int =
     if source.stat().st_size > max_bytes:
         raise ValueError(f"Input file is larger than {max_bytes // (1024 * 1024)} MB")
     return source
-
-
-def _pinokio_home() -> Path | None:
-    config = Path.home() / ".pinokio" / "config.json"
-    try:
-        value = json.loads(config.read_text(encoding="utf-8")).get("home")
-        return Path(value).expanduser() if value else None
-    except (OSError, ValueError, TypeError):
-        return None
 
 
 def _candidate_urls(explicit: Iterable[str | None], fallbacks: Iterable[str]) -> list[str]:
@@ -150,12 +138,15 @@ def discover_comfy_url(
     return None
 
 
+def default_output_root() -> Path:
+    """Where local-video projects live, and the GPU lock every route shares (LOCAL_VIDEO_OUTPUT_DIR)."""
+    return Path(os.getenv("LOCAL_VIDEO_OUTPUT_DIR") or Path(PROJECT_ROOT) / "output" / "projects").expanduser().resolve()
+
+
 @dataclass
 class PipelineConfig:
     discover_services: bool = True
-    output_root: Path = field(default_factory=lambda: Path(
-        os.getenv("LOCAL_VIDEO_OUTPUT_DIR") or Path(PROJECT_ROOT) / "output" / "projects"
-    ).expanduser().resolve())
+    output_root: Path = field(default_factory=lambda: default_output_root())
     minimax_url: str | None = None
     wan_url: str | None = None
     wan_workflow: Path = field(default_factory=lambda: Path(
@@ -206,8 +197,6 @@ class PipelineConfig:
                 ("VAELoader", "vae_name", self.wan_vae),
             ])
 
-    def backend_available(self, backend: str) -> bool:
-        return bool(self.minimax_url if backend == "minimax" else self.wan_url if backend == "wan" else False)
 
     def tool_versions(self) -> dict[str, str | None]:
         return {

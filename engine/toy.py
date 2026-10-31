@@ -380,6 +380,25 @@ def add_noise(obj, data_path: str, index: int, strength: float, scale: float, ph
             return mod
 
 
+def world_matrix_at(obj, frame: int):
+    """obj's WORLD matrix at `frame` from its animation curves and its parents' (no frame_set; constraints are
+    ignored). value_at(root, "location") is relative to the parent: a close shot of Max riding a floating house
+    aimed at his local coordinates and filmed the top of his hat from metres away."""
+    from mathutils import Euler, Matrix
+    loc = Vector(value_at(obj, "location", frame))
+    rot = Euler(value_at(obj, "rotation_euler", frame), obj.rotation_mode if obj.rotation_mode in
+                ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX") else "XYZ")
+    local = Matrix.LocRotScale(loc, rot, Vector(value_at(obj, "scale", frame)))
+    if obj.parent is None:
+        return local
+    return world_matrix_at(obj.parent, frame) @ obj.matrix_parent_inverse @ local
+
+
+def world_location_at(obj, frame: int):
+    """obj's world position at `frame` (world_matrix_at): where a camera must look to find it."""
+    return world_matrix_at(obj, frame).to_translation()
+
+
 def value_at(obj, data_path: str, frame: int):
     """The ANIMATED value of a vector property at `frame` (falls back to the current value).
 

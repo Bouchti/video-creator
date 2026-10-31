@@ -25,13 +25,12 @@ from datetime import datetime
 
 import requests
 
-from config.paths import get_temp_dir
-from agents.editor_pexels import _UA
+from config.paths import get_temp_dir, get_user_agent
 from agents.beats import (
     FPS, get_beats, get_visual, align_beats, split_frames, even_split, script_word_timings,
 )
 from agents.media import (
-    FFMPEG, _remove_files, get_duration, detect_crop, landscape_to_vertical,
+    FFMPEG, remove_files, get_duration, detect_crop, landscape_to_vertical,
     concat_clips, merge_audio_video, burn_subtitles,
 )
 from agents.transcription import transcribe_with_whisper
@@ -39,16 +38,14 @@ from agents.voice import generate_voiceover
 
 log = logging.getLogger("pipeline")
 
-FOOTAGE_PROVIDERS = ("pexels",)
 STOCK_CANDIDATES = 6     # thumbnails shown to the vision check per beat
 
 
 class _Run:
     """Per-video state: temp files, used media, credits, counters."""
 
-    def __init__(self, script: dict, footage: str):
+    def __init__(self, script: dict):
         self.script = script
-        self.footage = footage
         self.ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.temp = []
         self.used_urls = set()
@@ -70,7 +67,7 @@ def _fetch_preview(run: _Run, candidate: dict):
     thumb = candidate.get("thumb")
     try:
         if thumb:
-            r = requests.get(thumb, headers=_UA, timeout=20)
+            r = requests.get(thumb, headers={"User-Agent": get_user_agent()}, timeout=20)
             if r.status_code == 200 and r.content:
                 with open(out, "wb") as f:
                     f.write(r.content)
@@ -189,12 +186,8 @@ def _build_stock(run: _Run, beat: dict, frames: int) -> list:
             for i, (clip, n) in enumerate(zip(clips, parts))]
 
 
-def _build_footage(run: _Run, beat: dict, frames: int) -> list:
-    return _build_stock(run, beat, frames)
-
-
 _BUILDERS = {"diagram": _build_diagram, "photo": _build_photo,
-             "footage": _build_footage, "card": _build_card}
+             "footage": _build_stock, "card": _build_card}
 _ORDER = {"scene": ["footage", "photo", "card"],
           "diagram": ["diagram", "card"],
           "photo": ["photo", "footage", "card"],
@@ -216,16 +209,13 @@ def build_beat(run: _Run, beat: dict, frames: int) -> list:
 
 # ------------------- MAIN PIPELINE -------------------
 
-def process_video(script: dict, voice: str = "energetic", footage: str = "pexels") -> str:
+def process_video(script: dict, voice: str = "energetic") -> str:
     """Beat-timed video: each visual appears exactly while its words are spoken."""
-    if footage not in FOOTAGE_PROVIDERS:
-        raise ValueError(f"Unknown footage provider: {footage}")
     beats = get_beats(script)
     if not beats:
         raise ValueError("Script has no beats")
 
-    run = _Run(script, footage)
-    run.ai_total = sum(1 for b in beats if get_visual(b).get("kind", "footage") == "footage")
+    run = _Run(script)
     audio_path = stitched = merged = srt = None
     shots = []
 
@@ -237,7 +227,7 @@ def process_video(script: dict, voice: str = "energetic", footage: str = "pexels
 
         kinds = [get_visual(b).get("kind", "footage") for b in beats]
         log.info(f"\n[2/5] Building {len(beats)} beat visuals ({kinds.count('scene')} animated scene, "
-                 f"{kinds.count('footage')} footage via {footage}, {kinds.count('photo')} photo, "
+                 f"{kinds.count('footage')} stock footage, {kinds.count('photo')} photo, "
                  f"{kinds.count('diagram')} diagram)\n")
         for n, (beat, slot) in enumerate(zip(beats, slots), start=1):
             log.info(f"  Beat {n}/{len(beats)} [{slot['start']:.1f}-{slot['end']:.1f}s] "
@@ -263,4 +253,4 @@ def process_video(script: dict, voice: str = "energetic", footage: str = "pexels
         script["credits"] = run.credits
         return final
     finally:
-        _remove_files(run.temp + [stitched, audio_path, merged, srt])
+        remove_files(run.temp + [stitched, audio_path, merged, srt])

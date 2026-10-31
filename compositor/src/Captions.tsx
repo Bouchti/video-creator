@@ -43,6 +43,7 @@ export const Captions: React.FC<{words: Word[]; style: Style}> = ({words, style}
   return (
     <AbsoluteFill style={{pointerEvents: 'none'}}>
       <div
+        key={page.startMs}
         style={{
           position: 'absolute',
           top: height * ZONES.captionY,
@@ -61,12 +62,14 @@ export const Captions: React.FC<{words: Word[]; style: Style}> = ({words, style}
           textShadow: outline(size * 0.07),
         }}
       >
-        {page.tokens.map((t) => {
+        {page.tokens.map((t, i) => {
           const active = ms >= t.fromMs && ms < t.toMs;
           const key = emphasis.has(t.fromMs);
           return (
+            // keyed by position, never by time: two words with the same start time ("the water") shared a
+            // key, React kept the orphan, and a stray "THE" led every later caption
             <span
-              key={t.fromMs}
+              key={`${page.startMs}-${i}`}
               style={{
                 display: 'inline-block',
                 margin: '0 0.22em',

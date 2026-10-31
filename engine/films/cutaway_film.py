@@ -71,6 +71,10 @@ fill = toy.add_area("Fill", (0, -12, 4), (0, 0, -1.2), energy=900, size=12)
 toy.add_area("Rim", (-6, 14, 7), (0, 2, 0), energy=300, size=8, color=(1.0, 0.92, 0.8))
 bg = bpy.context.scene.world.node_tree.nodes["Background"].inputs["Strength"]
 
+if not HOOKLESS:                              # the hook opens on its own shot, never a glide from the finale
+    from engine import camera as _camera  # noqa: E402
+    _camera.HARD_CUTS.add(EPI + HOOK_B)
+
 set_mod = importlib.import_module(f"engine.sets.{film['set']}")
 set_cls = next(v for k, v in vars(set_mod).items()
                if k.endswith("Set") and isinstance(v, type) and v.__module__ == set_mod.__name__)
@@ -102,7 +106,41 @@ if HOOKLESS and not getattr(stage, "STORYBOARD", None):
     _run_hookless(stage, beats, spans)          # a kit set's own run() stages a film with no hook beat itself
 else:
     stage.run(beats, spans, EPI)
+from engine.character import perform_queued  # noqa: E402
+perform_queued()                              # motion capture (act / idle / talk / walk) around the hand keys
 print(f"interpolation: {toy.normalize_interpolation()} inherited keys reset to Bezier")
+
+
+def render_frame(f):
+    return f + EPI if HOOK_B <= f <= HOOK_E else f
+
+
+def preview_frames():
+    """(beat index, tag, timeline frame) of the three stills per beat a preview renders."""
+    out = []
+    for idx, b in enumerate(beats):
+        if b["action"] == "rewind":
+            continue
+        s, e = spans[idx]
+        out += [(idx, "a", s + max(2, (e - s) // 8)), (idx, "b", (s + e) // 2), (idx, "c", e - max(2, (e - s) // 8))]
+    return out
+
+
+# ---------------- labels / insets: hidden while the camera cuts them; where they sit, for make_film's stickers ----
+if os.getenv("OVERLAY_FIX", "1") == "1":
+    from engine import overlays  # noqa: E402
+    if only_frames:
+        _shown_frames = [render_frame(f) for f in only_frames]
+    elif preview:
+        _shown_frames = [render_frame(f) for _i, _t, f in preview_frames()]
+    else:
+        _shown_frames = list(range(BUILD_START, total + 1)) + list(range(HOOK_B + EPI, HOOK_E + EPI + 1))
+    import time as _time
+    _t = _time.time()
+    _hidden, _boxes = overlays.settle(scene, _shown_frames)
+    json.dump({str(f - EPI if f > EPI else f): b for f, b in _boxes.items()},
+              open(os.path.join(out_dir, "text_boxes.json"), "w", encoding="utf-8"))
+    print(f"overlays: {len(_shown_frames)} frames settled in {_time.time() - _t:.0f} s")
 
 # ---------------- sound events: epilogue → hook; nothing from the build under hook/rewind ----------------
 for ev in events._events:
@@ -112,10 +150,6 @@ for ev in events._events:
         ev["frame"] = -1
 events._events[:] = [ev for ev in events._events if ev["frame"] > 0]
 events.save(os.path.join(out_dir, "events.json"))
-
-
-def render_frame(f):
-    return f + EPI if HOOK_B <= f <= HOOK_E else f
 
 
 scene.render.image_settings.file_format = "PNG"
@@ -163,6 +197,10 @@ elif "--qa" in args:
         for lbl, items in qa.must_see(scene, chars, wanted, render_frame).items():
             qual["beats"].setdefault(lbl, []).extend(items)
             qual["count"] += len(items)
+        if not HOOKLESS and labelled:                # the hook must MOVE from its first frames (measured, not judged)
+            for f, issue in qa.hook_motion(scene, chars, labelled[0], render_frame):
+                qual["beats"].setdefault(labelled[0][0], []).append({"frames": [f, f], "issue": issue})
+                qual["count"] += 1
         for beat, items in qual["beats"].items():
             for it in items:
                 print(f"QA {beat} f{it['frames'][0]}: {it['issue']}")
@@ -178,14 +216,10 @@ elif only_frames:
         scene.render.filepath = os.path.join(out_dir, f"still_{f:04d}.png")
         bpy.ops.render.render(write_still=True)
 elif preview:
-    for idx, b in enumerate(beats):
-        if b["action"] == "rewind":
-            continue
-        s, e = spans[idx]
-        for tag, f in (("a", s + max(2, (e - s) // 8)), ("b", (s + e) // 2), ("c", e - max(2, (e - s) // 8))):
-            scene.frame_set(render_frame(f))
-            scene.render.filepath = os.path.join(out_dir, f"preview_{idx + 1:02d}_{b['action']}_{tag}.png")
-            bpy.ops.render.render(write_still=True)
+    for idx, tag, f in preview_frames():
+        scene.frame_set(render_frame(f))
+        scene.render.filepath = os.path.join(out_dir, f"preview_{idx + 1:02d}_{beats[idx]['action']}_{tag}.png")
+        bpy.ops.render.render(write_still=True)
 else:
     # Parallel workers (make_film) each render a chunk: --range=A:B of the build frames and/or
     # --hook. Without these flags this process renders everything.

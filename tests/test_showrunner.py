@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from engine.sets import spec
 from agents import showrunner
+from agents import llm
 
 # These tests exercise the classic hook + rewind rules with the pool set. Explainer sets now default
 # to the build-up format (tests/test_buildup.py); EXPLAINER_FORMAT=hook keeps the classic path.
@@ -61,7 +62,7 @@ class PoolSpecTests(unittest.TestCase):
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class HardCheckTests(unittest.TestCase):
     def test_passes_in_budget(self):
-        script = {"beats": _beats(GOOD, words=8)}             # 128 words: inside the 65 s budget
+        script = {"beats": _beats(GOOD, words=11)}            # 176 words
         script["beats"][0]["text"] = "An empty pool can float right out of the ground."
         self.assertEqual(showrunner.hard_checks(script, "pool"), [])
 
@@ -111,7 +112,7 @@ class TopicSelectionTests(unittest.TestCase):
     def test_all_consumed_stops_before_any_ai_call(self):
         history = [{"set": set_id} for set_id in showrunner.sets.AVAILABLE]
         with patch.object(showrunner, "_history", return_value=history), \
-                patch.object(showrunner, "_call", side_effect=AssertionError("AI must not run")):
+                patch.object(llm, "ask", side_effect=AssertionError("AI must not run")):
             with self.assertRaisesRegex(showrunner.NoUnusedStorySets, "already been used"):
                 showrunner.pick_topic()
 
@@ -122,8 +123,17 @@ class TopicSelectionTests(unittest.TestCase):
         with open(os.path.join(films, "by_hand.json"), "w", encoding="utf-8") as f:
             json.dump({"title": "By hand", "set": "boat_story", "meta": {"angle": "a"}}, f)
         with patch.object(showrunner, "HISTORY", os.path.join(root, "missing.json")), \
-                patch.object(showrunner, "FILMS_DIR", films):
+                patch.object(showrunner, "FILMS_DIR", films), \
+                patch.object(showrunner, "ENGINE_FILMS_DIR", os.path.join(root, "none")):
             self.assertEqual(showrunner.available_topic_sets(["nuclear_story", "boat_story"]), ["nuclear_story"])
+
+    def test_committed_hero_films_consume_their_subject(self):
+        # the published pool / boat / pumpkin films live in engine/films, outside the log
+        root = tempfile.mkdtemp()
+        with patch.object(showrunner, "HISTORY", os.path.join(root, "missing.json")), \
+                patch.object(showrunner, "FILMS_DIR", os.path.join(root, "none")):
+            available = showrunner.available_topic_sets(["boat_story", "pool_story", "record_chasing_giant_pumpkin_story"])
+        self.assertEqual(available, [])
 
     def test_explicit_repeat_override(self):
         history = [{"set": "nuclear_story"}]
@@ -167,14 +177,14 @@ class RevisionTests(unittest.TestCase):
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class RuleRepairTests(unittest.TestCase):
     def test_one_word_over_budget_is_trimmed_not_redrafted(self):
-        over = {"title": "t", "beats": _beats(GOOD, words=8)}             # 128 words
+        over = {"title": "t", "beats": _beats(GOOD, words=12)}            # 192 words
         over["beats"][0]["text"] = "An empty pool can float right out of the ground."
-        over["beats"][3]["text"] += " extra" * 14                          # 142: just over the 140 cap
+        over["beats"][3]["text"] += " extra extra extra"
         trimmed = json.loads(json.dumps(over))
-        trimmed["beats"][3]["text"] = " ".join(["word"] * 8)
+        trimmed["beats"][3]["text"] = " ".join(["word"] * 12)
         problems = showrunner.hard_checks(over, "pool")
         self.assertTrue(any("total narration" in p for p in problems))
-        with patch.object(showrunner, "_call", return_value=trimmed) as call:
+        with patch.object(llm, "ask", return_value=trimmed) as call:
             script, left = showrunner.repair_rules(over, "pool", problems)
         self.assertEqual(left, [])
         self.assertIs(script, trimmed)
@@ -185,7 +195,7 @@ class RuleRepairTests(unittest.TestCase):
         over["beats"][3]["text"] += " extra extra extra"
         worse = {"title": "t", "beats": _beats(GOOD[:3], words=40)}
         problems = showrunner.hard_checks(over, "pool")
-        with patch.object(showrunner, "_call", return_value=worse):
+        with patch.object(llm, "ask", return_value=worse):
             script, left = showrunner.repair_rules(over, "pool", problems)
         self.assertIs(script, over)
         self.assertEqual(left, problems)
@@ -301,12 +311,28 @@ class RetryContinuesTests(unittest.TestCase):
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
 class WordBudgetTests(unittest.TestCase):
-    def test_every_set_gets_the_same_budget_that_fits_the_65_second_cap(self):
-        for set_id in ("pool", "boat_story", "kit_max_s_backyard_levee_story"):
-            self.assertEqual(showrunner.word_budget(set_id), showrunner.TARGET_WORDS)
-        lo, hi = showrunner.TARGET_WORDS
-        # ~2.35 words/s plus the tail and ten 0.35 s pauses must stay inside the cap
-        self.assertLessEqual(hi / 2.35 + 1.5 + 10 * 0.35, showrunner.FILM_MAX_SECONDS)
+    def test_long_story_ladders_get_more_words_and_others_keep_the_default(self):
+        target = showrunner.target_words()
+        self.assertEqual(showrunner.word_budget("pool"), target)
+        lo, hi = showrunner.word_budget("boat_story")
+        n = len(spec("boat_story").STORY_ORDER) + 2
+        cap = showrunner._words(showrunner.MAX_SECONDS)
+        self.assertEqual(hi, min(cap, max(target[1], showrunner._words(showrunner.SECONDS_PER_BEAT * n))))
+        self.assertGreater(hi, target[1])
+        self.assertLessEqual(hi, cap)
+
+    def test_scripts_are_sized_for_the_voice_that_really_speaks(self):
+        # the tunnel script was sized for 2.4 words/s; Chatterbox spoke 3.27 and every action ran ~35 % fast
+        from agents import stage_writer
+        path = os.path.join(tempfile.mkdtemp(), "rates.json")
+        with patch.object(stage_writer, "_rates_file", return_value=path),                 patch.dict(os.environ, {"VOICE_ENGINE": "chatterbox"}):
+            stage_writer.record_rate(176, 53.8, route="cutaway")
+            lo, hi = showrunner.word_budget("pool")
+            self.assertEqual((lo, hi), (round(58 * 3.27), round(80 * 3.27)))
+            self.assertIn("3.27 x 0.75 words", showrunner._rules("boat_story"))
+            beats = _beats(["float_hook", "rewind"] + list(spec("boat_story").STORY_ORDER), words=11)
+            short = [p for p in showrunner.hard_checks({"beats": beats}, "boat_story") if "it needs at least" in p]
+            self.assertTrue(short)                       # 11 words cannot carry a 4 s action at this pace
 
 
 @patch.dict(os.environ, {"EXPLAINER_FORMAT": "hook"})
@@ -368,3 +394,124 @@ class ShipGateTests(unittest.TestCase):
             showrunner._keep_rejected(topic, {"title": "best"}, passing, [], last=({"title": "newest"}, [], failing))
             script, _p, review = showrunner._last_rejected(topic)
         self.assertEqual(script["title"], "best")
+
+
+class HumanScaleTests(unittest.TestCase):
+    BIG = {"subject": "Undersea tunnel", "largest_part_m": 40, "trend_source_url": "https://a.example",
+           "trend_signal": "x", "hook_line": "h", "payoff": "p"}
+
+    def _plan(self, searches, verdict):
+        prompts = []
+
+        def call(system, prompt, schema, **kw):
+            prompts.append(prompt)
+            return {"candidates": [dict(c) for c in searches[len(prompts) - 1]]}
+
+        def judge(topic, need_demo=True, report=None):
+            problem, known, impressive = verdict(topic)
+            if report is not None:
+                report["impressive"] = impressive
+            return problem, known
+        with patch.object(llm, "ask", side_effect=call),                 patch.object(showrunner, "_history", return_value=[]),                 patch.object(showrunner, "_wishlist", return_value=[]), patch.object(showrunner, "_subjects_in_progress", return_value=[]), patch.dict(os.environ, {"NEW_SET_SEARCHES": str(len(searches))}),                 patch("agents.leader.novelty_problem", side_effect=judge) as judged:
+            return showrunner.plan_new_story_set(), prompts, judged
+
+    def test_a_giant_subject_never_reaches_the_paid_judge(self):
+        # a full-size sea tunnel left Max at 14% of the frame and 9 of 13 scenes failed
+        small = dict(self.BIG, subject="Backyard floating dock", largest_part_m=6)
+        plan, prompts, judged = self._plan([[self.BIG, small]], lambda t: (None, 10, 8))
+        self.assertEqual(plan["subject"], "Backyard floating dock")
+        self.assertEqual(judged.call_count, 1)
+        self.assertEqual(len(prompts), 1)                # one search returned both candidates
+
+    def test_three_candidates_are_judged_at_once_and_the_most_impressive_passing_one_wins(self):
+        a, b, c = (dict(self.BIG, subject=n, largest_part_m=5) for n in ("Sandcastle", "Ice bridge", "Glass boat"))
+        scores = {"Sandcastle": ("not impressive enough", 6), "Ice bridge": (None, 8), "Glass boat": (None, 9)}
+        plan, prompts, judged = self._plan([[a, b, c]], lambda t: (scores[t.split(":")[0]][0], 10,
+                                                                   scores[t.split(":")[0]][1]))
+        self.assertEqual(plan["subject"], "Glass boat")
+        self.assertEqual((len(prompts), judged.call_count), (1, 3))
+
+    def test_a_second_search_is_told_what_failed_and_the_best_is_used_anyway(self):
+        first = [dict(self.BIG, subject=f"Plain {k}", largest_part_m=5) for k in range(3)]
+        second = [dict(self.BIG, subject=f"Odd {k}", largest_part_m=5) for k in range(3)]
+        plan, prompts, _ = self._plan([first, second], lambda t: ("too common", 50, 7 if t.startswith("Odd 2") else 5))
+        self.assertIn("Plain 0 (too common)", prompts[1])
+        self.assertEqual(plan["subject"], "Odd 2")
+
+
+class NewSetPlanScriptTests(unittest.TestCase):
+    """The script of a NEW set comes from its plan: the plan's prose hook is mapped to the set's hook action.
+    A fresh topic search found the new set 'consumed' (its own reference film) and, with
+    SHOWRUNNER_FORCE_NEW_SET=1, filtered it out entirely: the run would have stopped after building the set."""
+    SET = "immersed_undersea_tunnel_con_story"
+
+    def test_a_prose_hook_maps_to_the_hook_action_that_shows_it(self):
+        self.assertEqual(showrunner._hook_for(self.SET, "Max drives his family car through the lit dry tunnel"),
+                         "happy_hook")
+        self.assertEqual(showrunner._hook_for(self.SET, "a sealed concrete block floats out of the dock"),
+                         "float_hook")
+
+    def test_the_plan_is_scripted_without_a_new_topic_search(self):
+        plan = {"title": "t", "angle": "a", "hook_line": "h", "payoff": "p", "trend_signal": "s",
+                "trend_source_url": "https://x.example", "hook_action": "the block floats out to sea",
+                "fact_sheet": "facts"}
+        seen = {}
+
+        def develop(topic, facts):
+            seen.update(topic)
+            return {"title": "T", "beats": []}, {}
+        d = tempfile.mkdtemp()
+        with patch.dict(os.environ, {"SHOWRUNNER_FORCE_NEW_SET": "1"}), \
+                patch.object(showrunner, "pick_topic", side_effect=AssertionError("no new topic search")), \
+                patch.object(showrunner, "research", return_value="facts"), \
+                patch.object(showrunner, "_ensure_extras"), \
+                patch.object(showrunner, "develop", side_effect=develop), \
+                patch.object(showrunner, "to_film", return_value={"beats": [{"id": "h", "text": "x"}]}), \
+                patch.object(showrunner, "FILMS_DIR", d), patch.object(showrunner, "HISTORY", os.path.join(d, "h.json")), \
+                patch.object(showrunner, "_history", return_value=[]):
+            path = showrunner.run(render=False, set_id=self.SET, topic_hint=plan)
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual((seen["hook_action"], seen["set"], seen["angle"]), ("float_hook", self.SET, "a"))
+
+    def test_force_new_set_never_filters_a_set_named_explicitly(self):
+        with patch.dict(os.environ, {"SHOWRUNNER_FORCE_NEW_SET": "1"}):
+            self.assertEqual(showrunner.available_topic_sets([self.SET], history=[]), [self.SET])
+            self.assertNotIn("boat_story", showrunner.available_topic_sets(history=[]))
+
+
+class OneWordOverTests(unittest.TestCase):
+    """A revision that met the bar was beaten by an older fun-6 draft because one beat had 33 words (max 32)."""
+    GOOD = {k: 8 for k in ("hook", "clarity", "story_flow", "problem_solution", "fun", "accuracy", "pacing",
+                           "visual_sync", "learn")}
+
+    def test_a_revision_is_trimmed_before_it_is_graded(self):
+        draft = ({"title": "old"}, [], dict(scores=dict(self.GOOD, fun=6)))
+        revision = {"title": "new"}
+        trimmed = {"title": "new, trimmed"}
+        graded = []
+
+        def critique(script, topic, facts, problems):
+            graded.append((script["title"], problems))
+            return {"scores": dict(self.GOOD)}
+        with patch.object(showrunner, "write_script", return_value=revision), \
+                patch.object(showrunner, "hard_checks", return_value=["beat 12 has 33 words; max 32"]), \
+                patch.object(showrunner, "repair_rules", return_value=(trimmed, [])), \
+                patch.object(showrunner, "critique_script", side_effect=critique):
+            best, revised = showrunner._revise({"set": "pool"}, "f", *draft, best=draft)
+        self.assertEqual(graded[0], ("new, trimmed", []))
+        self.assertTrue(revised)
+        self.assertEqual(best[0]["title"], "new, trimmed")
+
+    def test_a_retry_ships_the_saved_revision_once_it_is_trimmed(self):
+        d = tempfile.mkdtemp()
+        topic = {"set": "pool", "title": "T"}
+        with patch.object(showrunner, "FILMS_DIR", d):
+            showrunner._keep_rejected(topic, {"title": "old"}, {"scores": dict(self.GOOD, fun=6)}, [],
+                                      last=({"title": "new"}, ["beat 12 has 33 words; max 32"],
+                                            {"scores": dict(self.GOOD)}))
+            with patch.object(showrunner, "hard_checks",
+                              side_effect=lambda s, set_id: ["beat 12 has 33 words; max 32"] if s["title"] == "new" else []), \
+                    patch.object(showrunner, "repair_rules", return_value=({"title": "new, trimmed"}, [])):
+                script, problems, review = showrunner._last_rejected(topic)
+        self.assertEqual((script["title"], problems), ("new, trimmed", []))
+        self.assertTrue(showrunner._ships(review, problems))

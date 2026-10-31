@@ -10,22 +10,21 @@ import shutil
 import subprocess
 import threading
 import time
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
 from agents.audio_fx import pick_music
 from agents.media import get_duration
-from agents.voice import generate_voiceover
 from config.paths import PROJECT_ROOT
 
 from . import fast
-from .assembly import assemble_project
+from .assembly import assemble_project, ensure_narration
 from .backends import BackendAdapter, GenerationResult, MiniMaxAdapter, _remove_generated_audio, build_backends
 from .freevideo import clear_orphaned_jobs, ensure_minimax, recover_server
 from .keyframes import fresh_openings, keyframe_id, prepare_keyframes, usable_keyframe, wardrobe_for
-from .config import PipelineConfig, resolve_within
+from .config import PipelineConfig, default_output_root, resolve_within
 from .models import MANIFEST_LOCK, ProjectManifest, ProjectState, completed_shots, estimated_remaining_seconds
 from .planner import (
     MAX_DURATION, MIN_DURATION, MINIMAX_SUFFIX, WAN_SUFFIX, allocate_frames, allocate_story_frames, _continuity, construct_prompt, continuation_source, framing_for, framing_scale, payoff_of,
@@ -46,6 +45,9 @@ TIKTOK_MIN_SECONDS = 61                # TikTok pays (Creator Rewards) only on v
 
 class QueueBusyError(RuntimeError):
     pass
+
+
+GPU_LOCK_NAME = ".gpu-generation.lock"
 
 
 class VisualReviewRejected(ValueError):
@@ -175,6 +177,23 @@ class FileLock(AbstractContextManager):
                 pass
             self.owned = False
         return False
+
+
+@contextmanager
+def gpu_lock(root: Path | None = None):
+    """Hold the GPU lock every route shares (local-ai, director, Chatterbox), waiting while another run owns it."""
+    lock = FileLock((root or default_output_root()) / GPU_LOCK_NAME)
+    while True:
+        try:
+            lock.__enter__()
+            break
+        except QueueBusyError as exc:
+            log.info("GPU busy (%s); waiting", exc)
+            time.sleep(60)
+    try:
+        yield lock
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def _music_path(manifest: ProjectManifest) -> Path | None:
@@ -941,17 +960,13 @@ class QueueRunner:
         )
 
     def _narration(self, manifest: ProjectManifest) -> Path | None:
-        if not manifest.narration_enabled or not str(manifest.script.get("spoken_script") or "").strip():
-            return None
-        target = Path(manifest.project_dir) / "audio" / "narration.mp3"
-        if target.is_file():
-            return target
-        source, duration = generate_voiceover(manifest.script["spoken_script"], voice=manifest.voice)
-        shutil.move(source, target)
-        duration = self._fit_narration_length(manifest, target, duration)
-        manifest.record("narration_created", duration=duration, path=str(target.relative_to(manifest.project_dir)))
-        manifest.save()
-        return target
+        """The project's narration (assembly.ensure_narration), retimed to the planned length when first voiced."""
+        fresh = not (Path(manifest.project_dir) / "audio" / "narration.mp3").is_file()
+        narration = ensure_narration(manifest)
+        if narration and fresh:
+            self._fit_narration_length(manifest, narration, get_duration(str(narration)))
+            manifest.save()
+        return narration
 
     def _fit_narration_length(self, manifest: ProjectManifest, narration: Path, duration: float) -> float:
         """Retime the voice so the video lands on its planned length (61-65 s for the default 65).
@@ -1476,8 +1491,7 @@ class QueueRunner:
             self._cancel_speculation(manifest, "the run stopped")
 
     def _run(self, manifest: ProjectManifest, shots: set[int] | None) -> ProjectManifest:
-        lock_path = self.config.output_root / ".gpu-generation.lock"
-        with FileLock(lock_path):
+        with FileLock(self.config.output_root / GPU_LOCK_NAME):
             self._silence_accepted_clips(manifest)
             self._requeue_boxed_clips(manifest, shots)
             self._upgrade_prompts(manifest)

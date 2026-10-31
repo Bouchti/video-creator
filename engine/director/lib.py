@@ -26,11 +26,12 @@ ASPECT = 9 / 16
 
 # ------------------------------------------------------------------ scene + look
 
-LOOKS = {   # name -> (view transform, look). "vivid" is the default: saturated, punchy, safe highlights
-    "vivid": ("AgX", "AgX - Punchy"),
-    "standard": ("Standard", "Medium High Contrast"),
-    "neutral": ("Khronos PBR Neutral", "Medium High Contrast"),
-    "agx": ("AgX", "AgX - Medium High Contrast"),
+LOOKS = {   # name -> (view transform, look, exposure). Measured on the same frames (docs/REDESIGN.md section 9):
+    # AgX desaturates and caps the brightest 2 % of a cartoon frame at 0.71 (it reads grey and faded);
+    # Khronos PBR Neutral keeps material colours true: colourfulness 84 vs 50, highlights up to 0.9.
+    "vivid": ("Khronos PBR Neutral", "None", 0.4),
+    "standard": ("Standard", "Medium High Contrast", 0.0),
+    "agx": ("AgX", "AgX - Punchy", 0.0),
 }
 
 
@@ -61,8 +62,7 @@ def reset(fps=30, preview=False, look="vivid", motion_blur=False):
     if hasattr(r, "motion_blur_position"):
         r.motion_blur_position = "START"     # a hard cut must not smear the previous shot
     vs = scene.view_settings
-    vs.view_transform, vs.look = LOOKS[look]
-    vs.exposure = 0.0
+    vs.view_transform, vs.look, vs.exposure = LOOKS[look]
     r.film_transparent = False
     r.image_settings.file_format = "PNG"
     r.image_settings.color_mode = "RGB"
@@ -465,8 +465,14 @@ EASES = {   # name -> (interpolation, easing) applied to the FIRST key of a segm
 }
 
 
+MIN_BOUNCY = 20   # frames: BOUNCE / ELASTIC pack several bounces into any span; shorter they jitter frame to frame
+
+
 def tween(ob, path, f0, f1, a, b, ease="smooth", back=1.7):
-    """Animate ob.path from a (at f0) to b (at f1) with a named ease."""
+    """Animate ob.path from a (at f0) to b (at f1) with a named ease. A bounce or elastic ease shorter than
+    MIN_BOUNCY frames becomes one overshoot ("pop"): the ta-da hop flickered up-down-up on 3 frames."""
+    if ease in ("bounce", "elastic") and f1 - f0 < MIN_BOUNCY:
+        ease = "pop"
     interp, easing = EASES[ease]
     key(ob, path, f0, a, interp, easing, back)
     key(ob, path, f1, b, "BEZIER")
@@ -531,6 +537,7 @@ class Camera:
         data.dof.focus_object = self.aim
         bpy.context.scene.camera = self.cam
         self.lens = lens
+        self.shots, self.notes, self.last_f0 = [], [], 1
 
     def pose(self, center, width, yaw=0.0, pitch=12.0, lens=None):
         """(camera position, aim) so `width` metres around `center` span the frame width."""
@@ -551,41 +558,91 @@ class Camera:
         for idb, path in ((self.cam, "location"), (self.aim, "location"), (self.data, "lens")):
             _set_interp(idb, path, f, interp, easing)
 
+    # Gentle camera, enforced here for every world (docs/REDESIGN.md section 8): without motion blur a fast
+    # move strobes, and cuts between near-identical framings read as the picture "zooming" by itself.
+    MAX_TRAVEL = 0.008     # aim travel per frame, as a share of the frame width
+    MAX_ZOOM = 0.004       # |ln(width change)| per frame (~12 %/s)
+    MAX_TURN = 0.35        # degrees of yaw / pitch per frame
+
+    def _limit(self, a, b, frames):
+        """Shorten the move a -> b until it respects the speed limits; returns the (possibly) new b."""
+        ca, cb = Vector(a["center"]), Vector(b["center"])
+        w = (a["width"] + b["width"]) / 2
+        need = max((cb - ca).length / w / self.MAX_TRAVEL,
+                   abs(math.log(b["width"] / a["width"])) / self.MAX_ZOOM,
+                   abs(b.get("yaw", 0) - a.get("yaw", 0)) / self.MAX_TURN,
+                   abs(b.get("pitch", 12) - a.get("pitch", 12)) / self.MAX_TURN) / max(1, frames)
+        if need <= 1.0:
+            return b
+        k = 1.0 / need
+        self.notes.append(f"move at frames {self.last_f0}+ shortened to {k:.0%}: too fast for a clean picture")
+        out = dict(b)
+        out["center"] = tuple(ca.lerp(cb, k))
+        out["width"] = a["width"] * (b["width"] / a["width"]) ** k
+        for key, default in (("yaw", 0.0), ("pitch", 12.0)):
+            out[key] = a.get(key, default) + (b.get(key, default) - a.get(key, default)) * k
+        return out
+
+    @staticmethod
+    def _similar(p, q):
+        """Two framings a viewer would see as the same shot (a cut between them is a jump cut)."""
+        w = max(p["width"], q["width"])
+        return (max(p["width"], q["width"]) / min(p["width"], q["width"]) < 1.35
+                and (Vector(p["center"]) - Vector(q["center"])).length < 0.3 * w
+                and abs(p.get("yaw", 0) - q.get("yaw", 0)) < 12 and abs(p.get("pitch", 12) - q.get("pitch", 12)) < 8)
+
     def shot(self, f0, f1, a, b=None, cut=True, ease="smooth"):
-        """a / b: dicts of pose() arguments for the start and end of the move."""
-        b = b or a
+        """a / b: dicts of pose() arguments for the start and end of the move.
+        A cut to a framing similar to the previous one becomes a continuation (no jump cut); every move is
+        speed-limited (shortened when needed)."""
+        if not hasattr(self, "shots"):
+            self.shots, self.notes = [], []
+        self.last_f0 = f0
+        b = dict(b or a)
+        a = dict(a)
+        prev = self.shots[-1] if self.shots and self.shots[-1][1] == f0 - 1 else None
+        asked, glide = dict(a), False
+        if prev is not None and self._similar(prev[3], a):
+            a, cut, glide = dict(prev[3]), False, True   # glide on from where we are instead of jump-cutting
+        elif prev is not None and not cut:
+            cut = True                              # a 1-frame "glide" to a different framing IS a cut
+        limited = self._limit(a, b, f1 - f0)
+        if glide and limited is not b:
+            # the glide cannot reach the framing in time: the speed limit held the camera halfway between a
+            # broom and a bike for a whole beat and the bike was never seen. Cut to the framing instead.
+            self.notes.pop()
+            a, cut = asked, True
+            limited = self._limit(a, b, f1 - f0)
+        b = limited
         la, lb = a.get("lens", self.lens), b.get("lens", self.lens)
         ca, aa = self.pose(**a)
         cb, ab = self.pose(**b)
         interp, easing = EASES[ease]
         if cut and f0 > 1:
-            # hold whatever came before up to f0-1, then jump
-            for idb, path in ((self.cam, "location"), (self.aim, "location"), (self.data, "lens")):
-                for fc in fcurves(idb):
-                    if fc.data_path == path:
-                        for kp in fc.keyframe_points:
-                            if kp.co.x >= f0 - 1 - 0.5 and kp.co.x < f0:
-                                kp.interpolation = "CONSTANT"
-            prev = [kp for fc in fcurves(self.cam) if fc.data_path == "location" for kp in fc.keyframe_points
-                    if kp.co.x < f0]
-            if prev:
-                last = max(kp.co.x for kp in prev)
+            prev_keys = [kp for fc in fcurves(self.cam) if fc.data_path == "location" for kp in fc.keyframe_points
+                         if kp.co.x < f0]
+            if prev_keys:
+                last = max(kp.co.x for kp in prev_keys)
                 for idb, path in ((self.cam, "location"), (self.aim, "location"), (self.data, "lens")):
                     _set_interp(idb, path, last, "CONSTANT")
         self._key(f0, ca, aa, la, interp, easing)
         self._key(f1, cb, ab, lb, "BEZIER", "AUTO")
+        self.shots.append((f0, f1, a, b))
 
-    def shake(self, f0, f1, amp=0.08, seed=1):
+    def shake(self, f0, f1, amp=0.06, seed=1, hz=4.0):
+        """A smooth, decaying rumble (keyed every frame on a sine): random jumps every 2 frames strobed."""
         rnd = random.Random(seed)
+        phase = [rnd.uniform(0, 6.28) for _ in range(3)]
+        self.rig.location = (0, 0, 0)
         self.rig.keyframe_insert("location", frame=f0 - 1)
-        n = max(1, (f1 - f0) // 2)
-        for i in range(n):
-            f = f0 + i * 2
-            k = amp * (1 - i / n) ** 1.5
-            self.rig.location = (rnd.uniform(-k, k), rnd.uniform(-k, k) * 0.4, rnd.uniform(-k, k))
+        for f in range(f0, f1 + 1):
+            t = (f - f0) / 30.0
+            k = amp * math.exp(-4.0 * t)
+            self.rig.location = tuple(k * math.sin(2 * math.pi * hz * t + ph) * s
+                                      for ph, s in zip(phase, (1.0, 0.3, 0.8)))
             self.rig.keyframe_insert("location", frame=f)
         self.rig.location = (0, 0, 0)
-        self.rig.keyframe_insert("location", frame=f1)
+        self.rig.keyframe_insert("location", frame=f1 + 1)
 
 
 # ------------------------------------------------------------------ anchors

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -34,9 +35,6 @@ def remove_files(paths) -> None:
                 log.warning("Could not remove temporary file %s: %s", path, exc)
 
 
-# Temporary compatibility alias while callers migrate.
-_remove_files = remove_files
-
 
 def run_process(cmd, timeout: int, cleanup_paths=()):
     try:
@@ -46,7 +44,65 @@ def run_process(cmd, timeout: int, cleanup_paths=()):
         raise
 
 
-_run_process = run_process
+def run(cmd, **kw):
+    """Run a tool and return its CompletedProcess; raise with the tail of its output when it fails."""
+    kw.setdefault("text", True)
+    r = subprocess.run(cmd, capture_output=True, **kw)
+    if r.returncode != 0:
+        err = r.stderr or r.stdout
+        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
+        raise RuntimeError(f"{os.path.basename(str(cmd[0]))} failed: {err[-1500:]}")
+    return r
+
+
+def probe_json(path, entries: str = "format=duration:stream=codec_type,width,height", timeout: int = 30) -> dict:
+    """ffprobe's JSON for `path`, limited to `entries`."""
+    return json.loads(run([FFPROBE, "-v", "error", "-show_entries", entries, "-of", "json", str(path)],
+                          timeout=timeout).stdout)
+
+
+def vertical_short_problems(path, min_seconds: float, max_seconds: float) -> tuple[float, list[str]]:
+    """(duration, why `path` is not a deliverable short): 1080x1920 video, an audio stream and
+    min_seconds < duration < max_seconds."""
+    try:
+        info = probe_json(path)
+    except (RuntimeError, ValueError):
+        return 0.0, [f"ffprobe could not read {path}"]
+    streams = info.get("streams", [])
+    video = [s for s in streams if s.get("codec_type") == "video"]
+    duration = float(info.get("format", {}).get("duration") or 0)
+    problems = []
+    if not video:
+        problems.append("no video stream")
+    elif (video[0].get("width"), video[0].get("height")) != (1080, 1920):
+        problems.append(f"video is {video[0].get('width')}x{video[0].get('height')}, not 1080x1920")
+    if not any(s.get("codec_type") == "audio" for s in streams):
+        problems.append("no audio stream")
+    if not min_seconds < duration < max_seconds:
+        problems.append(f"duration {duration:.2f}s is outside {min_seconds:g}-{max_seconds:g} s")
+    return duration, problems
+
+
+def read_pcm(path, sr: int, seconds: float | None = None):
+    """Mono float32 samples in [-1, 1] at `sr`, decoded by FFmpeg (the first `seconds` only, if given)."""
+    import numpy as np
+    head = ["-t", str(seconds)] if seconds else []
+    raw = run([FFMPEG, "-v", "error", "-i", str(path), *head, "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
+              text=False).stdout
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+
+
+def write_wav(path, x, sr: int) -> str:
+    """Write mono float samples (clipped to [-1, 1]) as a 16-bit WAV."""
+    import wave
+    import numpy as np
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes())
+    return path
+
 
 
 def get_duration(file_path: str) -> float:
@@ -146,39 +202,6 @@ def concat_clips(clip_paths: list[str], target_duration: float) -> str:
         raise
     finally:
         remove_files([concat_file])
-
-
-def stitch_clips_to_duration(
-    clip_paths: list[str], target_duration: float, loop_to_fill: bool = False,
-) -> str:
-    if not clip_paths:
-        raise ValueError("At least one clip is required for stitching")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    per_clip = target_duration / len(clip_paths)
-    normalized: list[str] = []
-    total = 0.0
-    try:
-        for index, clip in enumerate(clip_paths):
-            target = os.path.join(get_temp_dir(), f"norm_{index}_{stamp}.mp4")
-            normalized.append(target)
-            actual = get_duration(clip)
-            seconds = per_clip if loop_to_fill else min(per_clip + 0.2, actual)
-            landscape_to_vertical(clip, target, seconds, loop=loop_to_fill)
-            total += get_duration(target)
-        if total < target_duration - 0.5:
-            gap_target = os.path.join(get_temp_dir(), f"loop_{stamp}.mp4")
-            result = run_process([
-                FFMPEG, "-y", "-stream_loop", "-1", "-i", normalized[-1],
-                "-t", str(target_duration - total + 0.3), "-c:v", "libx264",
-                "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
-                "-an", gap_target,
-            ], 60, normalized + [gap_target])
-            if result.returncode != 0:
-                raise RuntimeError(f"Clip loop failed: {result.stderr[-300:]}")
-            normalized.append(gap_target)
-        return concat_clips(normalized, target_duration)
-    finally:
-        remove_files(normalized)
 
 
 def merge_audio_video(video_path: str, audio_path: str) -> str:

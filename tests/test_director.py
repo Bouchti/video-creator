@@ -5,7 +5,7 @@ import unittest
 
 from config.paths import PROJECT_ROOT
 from agents import director
-from agents.plan_writer import validate
+from agents.plan_rules import validate
 
 PLAN = os.path.join(PROJECT_ROOT, "engine", "director", "plans", "septic.json")
 
@@ -134,6 +134,25 @@ class FrameQATest(unittest.TestCase):
         self.assertLess(frame_qa.pan_speed(slow), frame_qa.PAN_MAX)
         self.assertGreater(frame_qa.pan_speed(whip), frame_qa.PAN_MAX)
         self.assertLess(frame_qa.flicker(whip), 0.5)        # a pan is motion, not strobing
+
+    def test_highlights_catch_a_greyed_picture(self):
+        import numpy as np
+        from PIL import Image
+        from agents import frame_qa
+        grey = np.linspace(0, 181, 480 * 270).reshape(480, 270).astype(np.uint8)    # tops out at 0.71 (AgX)
+        full = np.linspace(0, 255, 480 * 270).reshape(480, 270).astype(np.uint8)
+        self.assertLess(frame_qa.highlights(Image.fromarray(grey).convert("RGB")), frame_qa.HIGHLIGHT_MIN)
+        self.assertGreater(frame_qa.highlights(Image.fromarray(full).convert("RGB")), frame_qa.HIGHLIGHT_MIN)
+
+
+class WordTimingTest(unittest.TestCase):
+    def test_two_words_never_share_a_start(self):
+        words = [{"text": "the", "start": 26.8, "end": 26.85}, {"text": "water", "start": 26.8, "end": 27.1},
+                 {"text": "seeps", "start": 27.1, "end": 27.5}]
+        out = director.strictly_increasing(words)
+        starts = [w["start"] for w in out]
+        self.assertEqual(starts, sorted(set(starts)))
+        self.assertTrue(all(w["end"] > w["start"] for w in out))
 
 
 if __name__ == "__main__":

@@ -4,27 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents import evaluator
-from agents.media import stitch_clips_to_duration
-from agents.scene_utils import get_scenes, scene_prompt
 from agents.transcription import words_to_srt
 from agents.publisher import publish_video
 
 
 class EditorHelperTests(unittest.TestCase):
-    def test_get_scenes_supports_list_and_legacy_schema(self):
-        # New connected-scene schema: a scenes list.
-        self.assertEqual(["a", "b", "c"], get_scenes({"scenes": ["a", "b", "c"]}))
-        # Legacy fixed scene_1..N schema still works.
-        self.assertEqual(["s1", "s2"], get_scenes({"scene_1": "s1", "scene_2": "s2"}))
-
-    def test_scene_prompt_appends_shared_visual_style(self):
-        script = {"scenes": ["a diver descends"], "visual_style": "35mm, teal grade"}
-        self.assertEqual("a diver descends, 35mm, teal grade", scene_prompt(script, 0))
-
-    def test_stitch_requires_at_least_one_clip(self):
-        with self.assertRaisesRegex(ValueError, "At least one clip"):
-            stitch_clips_to_duration([], target_duration=30)
-
     def test_words_to_srt_preserves_apostrophes(self):
         words = [
             {"text": "don't", "start": 0.0, "end": 0.4},
@@ -41,13 +25,13 @@ class EditorHelperTests(unittest.TestCase):
 
 class EvaluatorTests(unittest.TestCase):
     def test_local_ai_documentary_uses_object_led_review(self):
-        with patch("agents.ai_router.ask", return_value={"verdict": "PASS", "issues": []}) as ask:
+        with patch("agents.llm.ask", return_value={"verdict": "PASS", "issues": []}) as ask:
             evaluator.evaluate_script({"spoken_script": "A sample enters the chamber.",
                                        "content_mode": "documentary"}, source="local-ai")
         self.assertIs(ask.call_args.args[0], evaluator.LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT)
 
     def test_evaluate_script_accepts_structured_verdict(self):
-        with patch("agents.ai_router.ask", return_value={"verdict": "PASS"}) as ask:
+        with patch("agents.llm.ask", return_value={"verdict": "PASS"}) as ask:
             result = evaluator.evaluate_script({"spoken_script": "test"})
 
         self.assertEqual("PASS", result["verdict"])
@@ -56,7 +40,7 @@ class EvaluatorTests(unittest.TestCase):
     def test_all_issues_become_one_revision_brief(self):
         issues = [{"beat": 1, "severity": "blocking", "fix": "Correct the year to 1943."},
                   {"beat": 20, "severity": "minor", "fix": "Add service medals to the veterans."}]
-        with patch("agents.ai_router.ask", return_value={"verdict": "FAIL", "issues": issues}):
+        with patch("agents.llm.ask", return_value={"verdict": "FAIL", "issues": issues}):
             result = evaluator.evaluate_script({"spoken_script": "test"})
         self.assertIn("Beat 1 [blocking]", result["feedback"])
         self.assertIn("Beat 20 [minor]", result["feedback"])
@@ -87,7 +71,7 @@ class EvaluatorTests(unittest.TestCase):
         self.assertIn("Cut at least 20", evaluator.length_feedback(170, 100, 150, 10))
 
     def test_evaluate_script_rejects_unknown_verdict(self):
-        with patch("agents.ai_router.ask", return_value={"verdict": "MAYBE"}):
+        with patch("agents.llm.ask", return_value={"verdict": "MAYBE"}):
             with self.assertRaisesRegex(ValueError, "PASS or FAIL"):
                 evaluator.evaluate_script({"spoken_script": "test"})
 

@@ -2,6 +2,7 @@
 
 import glob
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,21 @@ PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 # Ensure project root is on sys.path so `agents` is importable
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+
+# The Remotion compositor (npm project) and the npx that runs it.
+COMPOSITOR = os.path.join(PROJECT_ROOT, "compositor")
+NPX = "npx.cmd" if os.name == "nt" else "npx"
+
+
+def get_blender() -> str:
+    """Blender executable: BLENDER_EXE, else the default Windows install location."""
+    return os.getenv("BLENDER_EXE") or r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
+
+
+def slug(text, limit: int | None = 48, sep: str = "_") -> str:
+    """Lowercase ASCII words of `text` joined by `sep`, cut to `limit` characters (file names, set ids)."""
+    return re.sub(r"[^a-z0-9]+", sep, str(text).lower()).strip(sep)[:limit]
 
 
 def get_env_path() -> str:

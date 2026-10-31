@@ -152,6 +152,64 @@ def gradient_background() -> Image.Image:
     return Image.merge("RGB", bands)
 
 
+# ------------------- OVERLAYS -------------------
+
+def draw_overlay(frame: Image.Image, overlay: dict, t: float) -> Image.Image:
+    """Draw a sticker overlay (label, stat or closing question) on `frame` at t seconds into its shot."""
+    from agents.diagram import stat_text_at
+    kind = overlay.get("type")
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    appear = 0.18
+
+    if kind == "label":
+        p = ease_out_back(progress(t, appear, 0.35))
+        if p > 0:
+            draw_badge(draw, str(overlay.get("text") or ""), W // 2, int(SAFE_TOP - 40 * (1 - p)),
+                       alpha=min(1.0, p), size=76)
+    elif kind == "stat":
+        value = str(overlay.get("value") or "").strip()
+        a = ease_out_cubic(progress(t, appear, 0.25))
+        pop = ease_out_back(progress(t, appear, 0.4))
+        shown = stat_text_at(value, progress(t, appear, 0.9))
+        font, _ = fit_text(draw, value, W - 160, 1, 220, 90)
+        y = SAFE_TOP + 40 + int(30 * (1 - pop))
+        draw.text((W / 2, y), shown, font=font, anchor="mt", fill=rgba(PALETTE["accent"], a),
+                  stroke_width=10, stroke_fill=rgba(PALETTE["dark"], a))
+        label = str(overlay.get("text") or overlay.get("label") or "").strip()
+        if label:
+            lf, lines = fit_text(draw, label.upper(), W - 160, 2, 64, 40)
+            ly = y + line_height(font) + 6
+            la = ease_out_cubic(progress(t, appear + 0.25, 0.3))
+            for line in lines:
+                draw.text((W / 2, ly), line, font=lf, anchor="mt", fill=rgba(PALETTE["text"], la),
+                          stroke_width=7, stroke_fill=rgba(PALETTE["dark"], la))
+                ly += line_height(lf)
+    elif kind == "question":
+        # End card: the closing question in a white speech bubble (no call to action: the question is enough).
+        p = ease_out_back(progress(t, 0.0, 0.4))
+        a = min(1.0, max(0.0, p))
+        if a > 0:
+            q = str(overlay.get("text") or "").strip()
+            font, lines = fit_text(draw, q, W - 260, 3, 78, 50)
+            lh = line_height(font)
+            top = int(SAFE_TOP - 40 * (1 - p))
+            box = (100, top, W - 100, top + lh * len(lines) + 60)
+            draw.rounded_rectangle(box, radius=48, fill=(255, 255, 255, int(240 * a)),
+                                   outline=rgba(PALETTE["dark"], a), width=6)
+            tail = [(W // 2 - 50, box[3] - 3), (W // 2 + 30, box[3] - 3), (W // 2 - 70, box[3] + 60)]
+            draw.polygon(tail, fill=(255, 255, 255, int(240 * a)))
+            draw.line([tail[0], tail[2], tail[1]], fill=rgba(PALETTE["dark"], a), width=6)
+            y = top + 30
+            for line in lines:
+                draw.text((W / 2, y), line, font=font, anchor="mt", fill=rgba(PALETTE["dark"], a))
+                y += lh
+    else:
+        return frame
+    frame.paste(layer, (0, 0), layer)
+    return frame
+
+
 # ------------------- ENCODING -------------------
 
 def encode_frames(frames, out_path: str) -> str:

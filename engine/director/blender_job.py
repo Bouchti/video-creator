@@ -14,7 +14,7 @@ import bpy  # noqa: E402
 from bpy_extras.object_utils import world_to_camera_view  # noqa: E402
 from mathutils import Vector  # noqa: E402
 
-WORLDS = {"septic": "engine.director.septic:SepticWorld"}
+WORLDS = {"septic": "engine.director.septic:SepticWorld", "stage": "engine.director.stage:StageWorld"}
 
 
 def measure_actions(world, path):
@@ -50,7 +50,8 @@ def measure_actions(world, path):
 def main():
     job = json.load(open(sys.argv[sys.argv.index("--") + 1], encoding="utf-8"))
     mod, cls = WORLDS[job["world"]].split(":")
-    world = getattr(__import__(mod, fromlist=[cls]), cls)(job["timing"], preview=job.get("preview", False))
+    kw = {"plan": job["plan"]} if job.get("plan") else {}       # data-driven worlds film the plan itself
+    world = getattr(__import__(mod, fromlist=[cls]), cls)(job["timing"], preview=job.get("preview", False), **kw)
     world.film()
     for path, value in (job.get("overrides") or {}).items():   # e.g. {"eevee.use_raytracing": false}
         owner, attr = path.rsplit(".", 1)
@@ -63,6 +64,10 @@ def main():
     scene = bpy.context.scene
     world.anchors.export(os.path.join(out, "anchors.json"), 1, scene.frame_end)
     measure_actions(world, os.path.join(out, "actions.json"))
+    with open(os.path.join(out, "camera_notes.json"), "w") as fh:     # moves the camera had to shorten
+        json.dump(getattr(world.cam, "notes", []), fh)
+    with open(os.path.join(out, "sound_events.json"), "w") as fh:     # footsteps, pops ... where they happen
+        json.dump(getattr(world, "sounds", []), fh)
     if job.get("save_blend"):
         bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, "scene.blend"))
     if job.get("stills"):
@@ -70,6 +75,15 @@ def main():
             scene.frame_set(f)
             scene.render.filepath = os.path.join(out, f"still_{f:05d}.png")
             bpy.ops.render.render(write_still=True)
+        return
+    if job.get("segments"):            # only the beats that changed, each into its own folder
+        scene.render.use_overwrite = False
+        scene.render.use_placeholder = True
+        for seg in job["segments"]:
+            os.makedirs(seg["dir"], exist_ok=True)
+            scene.frame_start, scene.frame_end = seg["f0"], seg["f1"]
+            scene.render.filepath = os.path.join(seg["dir"], "")
+            bpy.ops.render.render(animation=True)
         return
     scene.frame_start = job.get("frame_start", 1)
     scene.frame_end = job.get("frame_end", scene.frame_end)

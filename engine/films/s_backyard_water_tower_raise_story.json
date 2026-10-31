@@ -1,0 +1,78 @@
+{
+  "title": "Max builds a backyard water tower (and it fights back)",
+  "set": "s_backyard_water_tower_raise_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "crash_hook",
+      "action": "crash_hook",
+      "video": "epilogue",
+      "text": "One tonne of water, six metres up, on four skinny poles."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's rewind to how Max got here."
+    },
+    {
+      "id": "fail_ground",
+      "action": "fail_ground",
+      "text": "Max wants a slide that gushes like a real town. Tank on the grass: nothing. Water can't rise above its own surface."
+    },
+    {
+      "id": "raise_tank",
+      "action": "raise_tank",
+      "text": "So he lifts it. Every metre adds about 0.1 bar. Six metres: 0.6 bar, and the slide gushes.",
+      "overlay": {"type": "stat", "value": "0.6 bar", "text": "from 6 m of height"}
+    },
+    {
+      "id": "fail_poles",
+      "action": "fail_poles",
+      "text": "Then he fills it: a thousand litres, one tonne. The thin poles bow and fold.",
+      "overlay": {"type": "stat", "value": "1,000 kg", "text": "of water"}
+    },
+    {
+      "id": "steel_legs",
+      "action": "steel_legs",
+      "text": "Steel legs, braced into rigid triangles, on concrete footings. The weight goes straight into the ground."
+    },
+    {
+      "id": "fail_overflow",
+      "action": "fail_overflow",
+      "text": "Max switches on the fill pump and grabs a lemonade. Nothing tells the pump to stop, so it spills onto him."
+    },
+    {
+      "id": "float_valve",
+      "action": "float_valve",
+      "text": "A float valve: the ball rises with the water and shuts the inlet. Plus an overflow pipe.",
+      "overlay": {"type": "label", "text": "Float valve"}
+    },
+    {
+      "id": "fail_vacuum",
+      "action": "fail_vacuum",
+      "text": "Max bolts on an airtight lid. The water drains, nothing replaces it, and air crushes the tank."
+    },
+    {
+      "id": "fix_vent",
+      "action": "fix_vent",
+      "text": "New tank, screened vent: air flows in as water flows out. Pressure stays equal.",
+      "overlay": {"type": "label", "text": "Screened vent"}
+    },
+    {
+      "id": "city_tanks",
+      "action": "city_tanks",
+      "text": "New York still has rooftop tanks like this, because old city pressure ran out around the sixth floor.",
+      "overlay": {"type": "stat", "value": "10,000 gal", "text": "per rooftop tank"}
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "The tower feeds the slide, and both kids whoosh down. Gravity does the pumping. Would you build one?"
+    }
+  ],
+  "cta": "Would you build one?"
+}

@@ -2,10 +2,11 @@
 Synthesised sound effects, placed on the exact frames the animation recorded
 (engine/events.py): footsteps, hammer taps, engine rumble, scoops, dirt dumps,
 rebar clinks, tile clacks, concrete spray, pouring water, pump hum, clock
-ticks, the splash — plus a soft birdsong ambience under the whole film.
-All sounds are generated here, so there is nothing to license.
+ticks, the splash — plus an ambience bed per scene that fits where it is (birds outdoors, lapping water at
+the sea, muffled water under it, nothing indoors). All sounds are generated here, so there is nothing to
+license.
 """
-import wave
+import re
 
 import numpy as np
 
@@ -256,9 +257,91 @@ FALLBACK = {"rumble": "engine", "stone_thud": "dump", "steel_clank": "clink", "t
 VARY = {"step", "hammer", "clink", "tile", "pop", "scoop", "dump", "boing", "whoosh", "splash", "geiger"}
 
 
-def render_events(events: list, fps: int, total_seconds: float, path: str, ambience: bool = True) -> str:
+# ------------------- AMBIENCE (one bed per scene, from where the scene is) -------------------
+
+# (sound, gain, low-pass Hz): barely there under the voice (birds were far too loud at first)
+AMBIENCES = {"outdoor": [("birds", 0.07, None), ("wind", 0.1, None)],
+             "water": [("lake", 0.1, None), ("wind", 0.06, None)],          # at the sea / a lake: lapping, no birds
+             "underwater": [("lake", 0.16, 450), ("bubbles", 0.04, 900)],    # muffled water, no birds
+             "indoor": [], "none": []}
+# Where a scene is, from what it shows (a set's action may say so itself: "ambience": "underwater"), checked
+# in this order. The tunnel film laid one birdsong bed under everything, the sea included.
+_WHERE = [("underwater", r"\bunder ?water\b|\bunder the (sea|water|lake|river|surface)\b|\bsea ?bed\b|\bsea ?floor\b"
+                         r"|\b(lake|river|ocean) ?(bed|bottom|floor)\b|\bsubmerged\b|\bdivers?\b"),
+          ("indoor", r"\binside\b|\bindoors?\b|\b(in|into|through|along) the (\w+ )?tunnel\b"
+                     r"|\b(room|kitchen|garage|workshop|basement|cellar|lab|cabin|cockpit)\b"),
+          ("water", r"\b(sea|seawater|ocean|lake|beach|boat|ship|harbou?r|dock|river|pond|strait|waves?|shore)\b")]
+
+
+def set_ambience(subject: str) -> str:
+    """The default bed of a whole set, from its SUBJECT: a set at the sea never falls back to birdsong."""
+    text = str(subject or "").lower()
+    if re.search(_WHERE[0][1], text) or re.search(_WHERE[2][1], text):
+        return "water"
+    return "outdoor"
+
+
+def scene_ambience(action: dict, default: str = "outdoor") -> str:
+    """'outdoor' | 'water' | 'underwater' | 'indoor' | 'none' for one set action: its "ambience", else read from
+    what it "shows", else the set's default (set_ambience)."""
+    if action.get("ambience") in AMBIENCES:
+        return action["ambience"]
+    if action.get("kind") == "rewind":
+        return "none"                                   # the record scratch and the VCR whirr own the rewind
+    shows = str(action.get("shows") or "").lower()
+    for where, pattern in _WHERE:
+        if re.search(pattern, shows):
+            return where
+    return default
+
+
+def _bed(where, seconds):
+    """One scene's ambience: its loops tiled to `seconds` (with soft in/out fades), or None for silence."""
+    from agents import sfx_library as lib
+    layers = AMBIENCES.get(where, [])
+    if not layers:
+        return None
+    out = np.zeros(int(SR * seconds))
+    for name, gain, lowpass in layers:
+        x = lib.tiled(name, seconds) if lib.load(name) is not None else (
+            _rms_match(birds(seconds)) if name == "birds" else None)
+        if x is None:
+            continue
+        if lowpass:
+            x = _band(x, hi=lowpass) * 1.6              # (the low-pass takes most of the energy away)
+        m = min(len(out), len(x))
+        out[:m] += x[:m] * gain
+    return out
+
+
+SAME_KIND_GAP = 0.5      # seconds: the same one-shot again sooner than this is dropped (15 clanks in 56 s was noise)
+
+
+def _thin(events, fps):
+    from agents import sfx_library as lib
+    last, kept = {}, []
+    for ev in sorted(events, key=lambda e: e["frame"]):
+        kind, at = ev["kind"], (ev["frame"] - 1) / fps
+        loop = ev.get("duration", 0) > 0 or kind in LOOPS or (lib.load(kind) is not None and lib.is_loop(kind))
+        if not loop and at - last.get(kind, -99.0) < SAME_KIND_GAP:
+            continue
+        last[kind] = at
+        kept.append(ev)
+    return kept
+
+
+def _rms_match(x, rms=0.12):
+    """A synthesised sound at the library samples' loudness (sfx_library.load), so MIX levels both alike."""
+    r = float(np.sqrt(np.mean(x ** 2))) if len(x) else 0.0
+    return x / r * rms if r > 1e-6 else x
+
+
+def render_events(events: list, fps: int, total_seconds: float, path: str, ambience: bool = True,
+                  scenes: list = None) -> str:
     """Mix every event into a mono 16-bit WAV of the film's length. Each event uses the realistic
-    library sound when one exists (agents/sfx_library.py), else the synthesized fallback."""
+    library sound when one exists (agents/sfx_library.py), else the synthesized fallback.
+    scenes: [(start_s, end_s, where)] gives each scene its own bed (scene_ambience); without it the whole
+    film gets the outdoor bed."""
     from agents import sfx_library as lib
     n = int(SR * (total_seconds + 1.5))
     track = np.zeros(n)
@@ -269,7 +352,7 @@ def render_events(events: list, fps: int, total_seconds: float, path: str, ambie
         if j > i:
             track[i:j] += sound[: j - i] * gain
 
-    for k, ev in enumerate(events):
+    for k, ev in enumerate(_thin(events, fps)):
         kind = ev["kind"]
         at = (ev["frame"] - 1) / fps
         dur = ev.get("duration", 0) / fps
@@ -283,32 +366,25 @@ def render_events(events: list, fps: int, total_seconds: float, path: str, ambie
             else:
                 sound = lib.varied(kind, seed=k) if kind in VARY else lib.load(kind)
         elif kind in ONE_SHOTS:
-            sound, gain = ONE_SHOTS[kind](), ev.get("gain", 1.0)
+            sound = _rms_match(ONE_SHOTS[kind]())
         elif kind in LOOPS and dur > 0:
-            sound, gain = LOOPS[kind](dur), ev.get("gain", 1.0)
+            sound = _rms_match(LOOPS[kind](dur))
         if sound is not None:
             add(sound, at, gain)
-    # A barely-there outdoor bed (birds were far too loud); sets with their own ambience (lake water)
-    # skip the birds entirely.
+    # sets with their own ambience (lake water events) skip the outdoor and seaside beds
     own_bed = any(ev["kind"] in ("lake",) for ev in events)
-    if ambience and not own_bed:
-        bed = lib.tiled("birds", total_seconds) if lib.load("birds") is not None else None
-        if bed is not None:
-            add(bed, 0, 0.07)
-            wind = lib.tiled("wind", total_seconds)
-            if wind is not None:
-                add(wind, 0, 0.1)
-        else:
-            add(birds(total_seconds), 0, 0.2)
+    if ambience:
+        for a, b, where in (scenes or [(0.0, total_seconds, "outdoor")]):
+            if own_bed and where in ("outdoor", "water"):
+                continue
+            bed = _bed(where, max(0.0, b - a) + 0.3)      # overlaps the neighbours' fades: a crossfade
+            if bed is not None:
+                add(bed, max(0.0, a - 0.15), 1.0)
     peak = np.abs(track).max()
     if peak > 0.95:
         track *= 0.95 / peak
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes((np.clip(track, -1, 1) * 32767).astype(np.int16).tobytes())
-    return path
+    from agents.media import write_wav
+    return write_wav(path, track, SR)
 
 
 # ------------------- MUSIC BED -------------------

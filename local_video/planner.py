@@ -737,10 +737,6 @@ def h3_prompt(description: str, sound: str) -> str:
             "non_diegetic_music: N/A")
 
 
-def is_h3(prompt: str) -> bool:
-    return prompt.startswith(_H3_HEAD)
-
-
 def with_first_frame(prompt: str) -> str:
     """Tell H3 the supplied image is frame 0, right after the opening style-and-framing sentence."""
     if not prompt.startswith(_H3_HEAD) or FIRST_FRAME_LINE in prompt:

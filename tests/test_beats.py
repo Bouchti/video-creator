@@ -11,7 +11,6 @@ from agents.beats import (
 from agents import evaluator
 from agents.script import beat_word_range, plan_for_duration
 from agents.diagram import TEMPLATES, render_frame, stat_text_at
-from agents.scene_utils import get_scenes
 from agents.photos import is_free_license, parse_imageinfo_pages
 
 
@@ -65,10 +64,6 @@ class BeatSchemaTests(unittest.TestCase):
                          [b["visual"]["kind"] for b in beats])
         self.assertEqual("key_phrase", beats[3]["visual"]["template"])
         self.assertEqual([], validate_beats(beats))
-
-    def test_get_scenes_reads_beat_descriptions(self):
-        script = {"beats": [_beat("a b"), _beat("c d")]}
-        self.assertEqual(["shot of a b", "shot of c d"], get_scenes(script))
 
 
 class LengthTests(unittest.TestCase):
@@ -211,7 +206,7 @@ class VisionTests(unittest.TestCase):
 
     def test_rank_returns_valid_unique_indices(self):
         with tempfile.TemporaryDirectory() as tmp, \
-                patch("agents.claude_cli.ask", return_value={"matches": [2, 0, 2, 9, "x"]}) as ask:
+                patch("agents.llm.ask", return_value={"matches": [2, 0, 2, 9, "x"]}) as ask:
             self.assertEqual([2, 0], vision.rank_images("desc", "line", self._images(tmp, 3)))
         self.assertEqual(3, len(ask.call_args.kwargs["images"]))
 

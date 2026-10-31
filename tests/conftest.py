@@ -47,3 +47,12 @@ def _classic_local_video(monkeypatch):
 def _no_shared_backend_limit(monkeypatch):
     """A usage limit remembered by a real run must not switch the suite's backends, nor a test's leak out."""
     monkeypatch.setenv("SHOWRUNNER_LIMIT_MEMORY", "0")
+
+
+@pytest.fixture(autouse=True)
+def _reference_voice(monkeypatch, tmp_path):
+    """Script sizing follows the measured voice pace (output/voice_rates.json) and VOICE_ENGINE from .env: a test
+    sees the ElevenLabs reference pace unless it sets its own, and never reads or writes the real rates file."""
+    from agents import stage_writer
+    monkeypatch.setenv("VOICE_ENGINE", "elevenlabs")
+    monkeypatch.setattr(stage_writer, "_rates_file", lambda: str(tmp_path / "voice_rates.json"))

@@ -21,6 +21,8 @@ LIGHT      st.key_sky(scene, frame, elevation_deg)      dusk / night skies (key 
 CAMERA     st.max_height(char), st.close_on(rig, f0, f1, who)  keeps a character big (~40% of frame)
            with a slow swing; st.orbit(...), st.establish(...)  moving wide shots
 LABELS     st.label / st.arrow (re-exported callouts)
+INSET      st.Inset(name, center, radius)           a camera-facing magnifier circle for a small detail
+LIQUID     st.Jet(name, base, direction, speed).erupt(f0, f1)   a gusher / burst pipe / fountain: core + drops
 
 Rules the kit follows (keep them in set code too):
 - Never two coplanar faces (offset touching surfaces by >= 5 mm), no bump on strongly squashed objects,
@@ -217,8 +219,9 @@ def glow_mat(name, hexc, strength=3.0):
     return mat
 
 
-def water_volume(name="st_water", color="#2B86C9", density=0.5, scatter=0.12):
-    """Water as a VOLUME: deeper reads bluer; no transparency dithering, so nothing behind it flickers."""
+def water_volume(name="st_water", color="#2B86C9", density=0.5, scatter=0.12, glow=0.0, glow_color="#1F8BFF"):
+    """Water as a VOLUME: deeper reads bluer; no transparency dithering, so nothing behind it flickers.
+    glow (per metre) adds a blue body light: the water reads blue without hiding what is behind it."""
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -235,7 +238,67 @@ def water_volume(name="st_water", color="#2B86C9", density=0.5, scatter=0.12):
     add = nt.nodes.new("ShaderNodeAddShader")
     nt.links.new(absorb.outputs[0], add.inputs[0])
     nt.links.new(scat.outputs[0], add.inputs[1])
+    if glow > 0:
+        emit = nt.nodes.new("ShaderNodeEmission")
+        emit.inputs["Color"].default_value = (*toy.srgb(glow_color), 1)
+        emit.inputs["Strength"].default_value = glow
+        lit = nt.nodes.new("ShaderNodeAddShader")
+        nt.links.new(add.outputs[0], lit.inputs[0])
+        nt.links.new(emit.outputs[0], lit.inputs[1])
+        add = lit
     nt.links.new(add.outputs[0], out.inputs["Volume"])
+    return mat
+
+
+def flowing_water(name="st_flowing_water", hexc="#5CC4E6", along="X", speed=2.0, foam=0.45):
+    """Running water as a SHEET (a slide, a spillway, a gutter, a weir): see-through blue with white foam streaks
+    stretched along the flow that race downhill (a driver on the frame: no keys to break). The water-tower slide was
+    a flat blue slab with ~40 balls and two thick tubes lying on it: it read as solid. along: the object axis the
+    water runs along (its positive direction downhill); speed in m/s; foam: share of the sheet in streaks."""
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    bsdf = nodes.get("Principled BSDF")
+    coord = nodes.new("ShaderNodeTexCoord")
+    mapping = nodes.new("ShaderNodeMapping")
+    k = "XYZ".index(along.upper())
+    stretch = [7.0, 7.0, 7.0]
+    stretch[k] = 0.9                                         # long streaks along the flow
+    mapping.inputs["Scale"].default_value = stretch
+    links.new(coord.outputs["Object"], mapping.inputs["Vector"])
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 2.2
+    noise.inputs["Detail"].default_value = 6.0
+    links.new(mapping.outputs["Vector"], noise.inputs["Vector"])
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].position = 1.0 - foam
+    ramp.color_ramp.elements[0].color = (0, 0, 0, 1)
+    ramp.color_ramp.elements[1].position = min(1.0, 1.0 - foam + 0.12)
+    ramp.color_ramp.elements[1].color = (1, 1, 1, 1)
+    links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+    mix = nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    mix.inputs[6].default_value = (*toy.srgb(hexc), 1)
+    mix.inputs[7].default_value = (0.95, 0.98, 1.0, 1)
+    links.new(ramp.outputs["Color"], mix.inputs[0])
+    links.new(mix.outputs[2], bsdf.inputs["Base Color"])
+    alpha = nodes.new("ShaderNodeMapRange")
+    alpha.inputs["To Min"].default_value = 0.45
+    alpha.inputs["To Max"].default_value = 0.95
+    links.new(ramp.outputs["Color"], alpha.inputs["Value"])
+    links.new(alpha.outputs["Result"], bsdf.inputs["Alpha"])
+    toy._set(bsdf, "Roughness", 0.12)
+    toy._set(bsdf, "IOR", 1.33)
+    # the streaks race downhill: Location along the flow = -frame * speed / fps * scale (a simple expression: it
+    # runs without Python auto-exec in background renders)
+    fc = mapping.inputs["Location"].driver_add("default_value", k)
+    fc.driver.type = "SCRIPTED"
+    fc.driver.expression = f"-frame * {speed * stretch[k] / 30.0:.5f}"
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = "BLENDED"
+    if hasattr(mat, "use_backface_culling"):
+        mat.use_backface_culling = True
     return mat
 
 
@@ -516,10 +579,10 @@ class Reservoir:
     Parent res.parts() to a moving container if the basin moves.
     """
 
-    def __init__(self, name, x0, x1, y0, y1, bottom, level, color="#2B86C9", density=0.5):
+    def __init__(self, name, x0, x1, y0, y1, bottom, level, color="#2B86C9", density=0.5, scatter=0.12, glow=0.0):
         self.name, self.bottom = name, bottom
-        self.vol = toy.box(f"{name}_water", (1, 1, 1), (0, 0, 0), mat=water_volume(f"{name}_vol", color, density),
-                           bevel=0)
+        self.vol = toy.box(f"{name}_water", (1, 1, 1), (0, 0, 0),
+                           mat=water_volume(f"{name}_vol", color, density, scatter, glow), bevel=0)
         self.vol.location = ((x0 + x1) / 2, (y0 + y1) / 2, 0)
         self.vol.scale = (x1 - x0 - 0.02, y1 - y0, 1)
         bpy.ops.mesh.primitive_grid_add(x_subdivisions=max(8, int((x1 - x0) * 4)), y_subdivisions=max(8, int((y1 - y0) * 4)),
@@ -597,6 +660,65 @@ class Reservoir:
     def hide(self, frame, hidden):
         toy.hide_tree(self.vol, frame, hidden)
         toy.hide_tree(self.surf, frame, hidden)
+
+
+WATER_CLEAR = 0.5       # share of the red light that crosses the whole body to the camera: see-through
+WATER_SCATTER = 0.012   # per metre: more haze turns a deep body into a milky wall
+WATER_GLOW = 0.6        # blue body light over the whole depth: the blue of water, without hiding anything
+
+
+class Water(Reservoir):
+    """THE water for anything the viewer looks INTO (a sea, a lake, a pool, a flooded dock): a Reservoir that
+    stays see-through at any size, with a visible waterline on the cut face.
+
+        sea = st.Water("sea", -14, 9, 0.05, 5, bottom=-12, level=0)
+        sea.key_level(f0, 0.0); sea.empty(f1)                    # every Reservoir method works
+
+    Its density is computed from its own depth into the picture (y1 - y0), so WATER_CLEAR of the light always
+    reaches the camera and whatever is in or behind the water (a tunnel, fish, the far bank) stays readable.
+    A fixed density made the tunnel film's 5 m sea a solid blue wall (and the look repair, asked for a "bright
+    blue tint", made it denser still): never raise it. The blue comes from a faint body glow (glow), which tints
+    without hiding anything; measured by engine/water_still.py (tests/test_water.py).
+    The waterline is a thin bright strip on the cut face at the level, keyed with it."""
+
+    def __init__(self, name, x0, x1, y0, y1, bottom, level, color="#1E8FE6", clear=WATER_CLEAR, glow=WATER_GLOW):
+        depth = max(0.2, y1 - y0)
+        density = -math.log(min(0.95, max(0.2, clear))) / depth
+        super().__init__(name, x0, x1, y0, y1, bottom, level, color=color, density=density,
+                         scatter=min(WATER_SCATTER, density * 0.25), glow=glow / depth)
+        line = bpy.data.materials.new(f"{name}_waterline")
+        bsdf = toy._principled(line)
+        toy._set(bsdf, "Base Color", (*toy.srgb("#E8FBFF"), 1))
+        toy._set(bsdf, "Emission Color", (*toy.srgb("#CFF5FF"), 1))
+        toy._set(bsdf, "Emission Strength", 1.4)
+        self.line = toy.box(f"{name}_waterline", (x1 - x0 - 0.02, 0.01, 0.045), ((x0 + x1) / 2, y0 - 0.006, level),
+                            mat=line, bevel=0)
+        no_shadow(self.line)
+        self.line.location.z = level - 0.0225
+
+    def _apply(self, level):
+        super()._apply(level)
+        if hasattr(self, "line"):
+            self.line.location.z = level - 0.0225
+
+    def key_level(self, frame, level, hold=True):
+        super().key_level(frame, level, hold)
+        self.line.keyframe_insert("location", frame=frame)
+
+    def parts(self):
+        return super().parts() + [self.line]
+
+    def empty(self, frame):
+        super().empty(frame)
+        toy.hide_tree(self.line, frame, True)
+
+    def fill(self, frame):
+        super().fill(frame)
+        toy.hide_tree(self.line, frame, False)
+
+    def hide(self, frame, hidden):
+        super().hide(frame, hidden)
+        toy.hide_tree(self.line, frame, hidden)
 
 
 # ------------------- objects -------------------
@@ -897,6 +1019,165 @@ def lantern(name, color="#FFC45E"):
     return root
 
 
+# ------------------- liquid jet -------------------
+
+class Jet:
+    """A liquid jet (an oil gusher, a burst pipe, a fountain, a hose): one CONTINUOUS core stream that arcs under
+    gravity plus many SMALL drops flying off it, so it reads as liquid, never as a stack of balls (the oil film's
+    first gusher was 34 big black spheres).
+
+        gush = st.Jet("gush", base=(0, 0, 0.4), direction=(0.1, 0, 1), speed=9, color="#121212")
+        gush.erupt(f0, f1, rise=3)           # shoots out within `rise` frames (a hook: rise=2-3), stops at f1
+
+    speed (m/s) sets the height (~speed^2 / 19.6 m straight up). color: oil #121212, water #8FD3FF, mud #6B4A2E."""
+
+    def __init__(self, name, base, direction=(0, 0, 1), speed=8.0, color="#8FD3FF", radius=0.09, drops=90,
+                 drop_size=0.065, spread=0.3, seed=1, fps=30):
+        self.name, self.base, self.fps = name, V(base), fps
+        d = V(direction).normalized()
+        self.v = d * speed
+        self.gravity = V((0, 0, -9.81))
+        water = color.upper() in ("#8FD3FF", "#5CC4E6") or color.upper().startswith("#8")
+        self.mat = toy.material(f"st_jet_{color}", toy.srgb(color), roughness=0.06 if water else 0.12, coat=0.6)
+        self.root = toy.empty(f"{name}_jet", base)
+        # a steep jet's stream rises to its peak and breaks into a crown of falling drops (a column that bends back
+        # to the ground reads as a hose arch); a sideways one (a burst pipe) arcs all the way down as one stream
+        steep = d.z > 0.7
+        t_end = self.v.z / 9.81 if steep else self._flight(self.v)
+        pts = [self._at(self.v, t_end * k / 24) - self.base for k in range(25)]
+        cu = bpy.data.curves.new(f"{name}_core", "CURVE")
+        cu.dimensions = "3D"
+        cu.bevel_mode = "ROUND"
+        cu.bevel_depth = radius
+        cu.bevel_resolution = 3
+        cu.use_fill_caps = True
+        if hasattr(cu, "bevel_factor_mapping_end"):
+            cu.bevel_factor_mapping_start = cu.bevel_factor_mapping_end = "SPLINE"
+        sp = cu.splines.new("POLY")
+        sp.points.add(len(pts) - 1)
+        for k, (pt, q) in enumerate(zip(sp.points, pts)):
+            pt.co = (q.x, q.y, q.z, 1)
+            pt.radius = 1.0 + (2.2 if steep else 0.6) * (k / 24) ** 1.5      # it widens as it slows and breaks up
+        self.core = _link(bpy.data.objects.new(f"{name}_core", cu))
+        self.core.data.materials.append(self.mat)
+        self.core.parent = self.root
+        rnd = random.Random(seed)
+        top = self._at(self.v, t_end)
+        self.drops = []
+        for i in range(drops):
+            if steep:                         # the crown: drops burst out of the column's top and rain around it
+                start = top + V((rnd.gauss(0, radius * 2), rnd.gauss(0, radius * 2), rnd.uniform(-0.3, 0.1)))
+                a = rnd.uniform(0, 2 * math.pi)
+                out = speed * spread * rnd.uniform(0.45, 1.2)
+                v = V((math.cos(a) * out, math.sin(a) * out, speed * rnd.uniform(0.0, 0.3))) + 0.3 * V((self.v.x, self.v.y, 0))
+            else:
+                start = self.base
+                jitter = V((rnd.gauss(0, spread), rnd.gauss(0, spread), rnd.gauss(0, spread * 0.5)))
+                v = (d + jitter).normalized() * speed * rnd.uniform(0.75, 1.08)
+            r = drop_size * rnd.uniform(0.55, 1.25)
+            drop = toy.sphere(f"{name}_drop_{i}", r, (0, 0, 0), mat=self.mat, subdiv=1, parent=self.root)
+            self.drops.append((drop, start, v, rnd.random()))
+        no_shadow(self.core, *[dr for dr, *_rest in self.drops])
+        toy.hide_tree(self.root, 1, True)
+
+    def _at(self, v, t, start=None):
+        return (self.base if start is None else start) + v * t + 0.5 * self.gravity * t * t
+
+    def _flight(self, v, start=None):
+        """Seconds until a drop launched at `start` (default: the nozzle) falls back to the nozzle's height."""
+        drop = 0.0 if start is None else max(0.0, start.z - self.base.z)
+        return max(0.4, (v.z + math.sqrt(v.z * v.z + 2 * 9.81 * drop)) / 9.81)
+
+    def erupt(self, f0, f1, rise=4):
+        """Shoots out from f0 (full length after `rise` frames), runs to f1, then the stream drains away."""
+        cu = self.core.data
+        toy.hide_tree(self.root, f0, False)
+        for f, end, start in ((f0, 0.0, 0.0), (f0 + rise, 1.0, 0.0), (f1, 1.0, 0.0), (f1 + 10, 1.0, 1.0)):
+            cu.bevel_factor_end, cu.bevel_factor_start = end, start
+            cu.keyframe_insert("bevel_factor_end", frame=f)
+            cu.keyframe_insert("bevel_factor_start", frame=f)
+        toy.hide_tree(self.core, f1 + 11, True)
+        last = f1 + 11
+        for drop, start, v, phase in self.drops:
+            flight = self._flight(v, start)
+            period = max(8, int(round(flight * self.fps)))
+            launch = f0 + int(phase * period * 0.9) + rise // 2
+            for k in range(9):                                 # one flight, repeated by a CYCLES modifier
+                drop.location = self._at(v, flight * k / 8, start) - self.base
+                drop.keyframe_insert("location", frame=launch + period * k / 8)
+            for fc in toy.fcurves(drop):
+                if fc.data_path == "location":
+                    for kp in fc.keyframe_points:
+                        kp.interpolation = "LINEAR"
+                    fc.modifiers.new("CYCLES")
+            toy.hide_tree(drop, 1, True)
+            toy.hide_tree(drop, launch, False)
+            n = max(0, (f1 - launch) // period + 1)            # it lands after the stream has stopped
+            toy.hide_tree(drop, launch + n * period, True)
+            last = max(last, launch + n * period)
+        events.add(f0, "splash", gain=0.6)
+        return last
+
+
+# ------------------- magnifier inset -------------------
+
+class Inset:
+    """A magnifier circle (brass ring, dark backdrop) that ALWAYS faces the camera, for a detail too small to read
+    in the shot (the layers of a gasket, a valve's seat). Build its contents at the origin of the inset's local
+    space and attach them: x right, z up, y < 0 in front of the backdrop (toward the camera).
+
+        ins = st.Inset("seal", (2.6, 1.0, 2.8), radius=0.7)
+        ins.attach(toy.sphere("seal_ball", 0.12, (0, -0.05, 0)))
+        ins.show(f0, f1)                     # pops in at f0, out at f1; hidden otherwise
+
+    It is a SUPPLEMENT, never the explanation: the story is told by the big mechanism itself. The render step
+    hides it on any frame where the camera cuts it at the frame edge (engine/overlays.py), so show it in
+    medium / wide shots and keep it beside, not above, the subject (in a close-up on Max it would be cut)."""
+
+    def __init__(self, name, center, radius=0.7, rim="#C9A227", backdrop="#173E7A"):
+        self.root = toy.empty(f"inset_{name}", center)
+        self.radius = radius
+        cam = bpy.context.scene.camera
+        if cam is not None:
+            con = self.root.constraints.new("DAMPED_TRACK")
+            con.target = cam
+            con.track_axis = "TRACK_NEGATIVE_Y"
+        brass = tx.metal(f"st_inset_rim_{rim}", rim, 0.3)
+        bpy.ops.mesh.primitive_torus_add(major_radius=radius, minor_radius=radius * 0.07, major_segments=64,
+                                         minor_segments=12, location=(0, 0, 0))
+        ring = bpy.context.active_object
+        ring.name = f"inset_{name}_ring"
+        ring.rotation_euler = (R(90), 0, 0)
+        ring.data.materials.append(brass)
+        back = toy.cylinder(f"inset_{name}_back", radius * 0.97, 0.02, (0, 0.03, 0), rotation=(R(90), 0, 0),
+                            mat=toy.material(f"st_inset_back_{backdrop}", toy.srgb(backdrop), roughness=0.8),
+                            vertices=64)
+        for o in (ring, back):
+            o.parent = self.root
+        no_shadow(ring, back)
+        self.parts = [ring, back]
+        toy.hide_tree(self.root, 1, True)
+
+    def attach(self, obj, location=None):
+        """Parent obj to the inset (location: its place in the inset's local space)."""
+        obj.parent = self.root
+        if location is not None:
+            obj.location = location
+        no_shadow(obj)
+        self.parts.append(obj)
+        if self.root.hide_render:
+            toy.hide_tree(obj, 1, True)
+        return obj
+
+    def show(self, f0, f1, pop=8):
+        """Visible (popping in and out) from f0 to f1."""
+        toy.hide_tree(self.root, f0, False)
+        toy.hide_tree(self.root, f1 + 1, True)
+        for f, s in ((f0, 0.05), (f0 + pop, 1.0), (max(f0 + pop, f1 - pop), 1.0), (f1, 0.05)):
+            self.root.scale = (s, s, s)
+            self.root.keyframe_insert("scale", frame=f)
+
+
 # ------------------- cutaway -------------------
 
 def section_clip(obj, section):
@@ -998,7 +1279,7 @@ def frame_distance(height, frac, lens):
 
 
 def _root_at(char, f):
-    return V(toy.value_at(char.root, "location", f))
+    return V(toy.world_location_at(char.root, f))          # (world: Max may ride a boat or a rising house)
 
 
 def close_on(rig, f0, f1, who, frac=0.42, angle=-90.0, swing=16.0, rise=0.25, lens=32.0, look=0.62,

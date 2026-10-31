@@ -10,12 +10,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from agents import ai_router
+from agents import llm
 from agents.beats import _norm_words, script_word_timings
 from agents.media import get_duration
 from agents.transcription import transcribe_with_whisper
-from agents.voice import elevenlabs_keys, generate_voiceover
-from local_video.assembly import assemble_project
+from agents.voice import elevenlabs_keys
+from local_video.assembly import assemble_project, ensure_narration
 from local_video.config import PipelineConfig
 from local_video.models import ProjectManifest, ProjectState
 from local_video.validation import validate_clip, validate_final
@@ -44,7 +44,7 @@ def plan_actions(recipe: dict[str, Any], script: dict[str, Any]) -> None:
               f"action); the second line usually 'establish'; the last line must be 'finale'; vary the "
               f"shots, and apart from the cold open never show a step before the narration reaches it.\n\n{lines}")
     try:
-        result = ai_router.ask("You plan shots for an engineering explainer video.", prompt, schema, effort="low")
+        result = llm.ask("You plan shots for an engineering explainer video.", prompt, schema, effort="low")
         actions = result.get("actions") if isinstance(result, dict) else None
     except Exception:                                     # noqa: BLE001 (no backend: keyword choice stands)
         actions = None
@@ -99,7 +99,7 @@ class UnrealPipeline:
         checks["ffmpeg"] = bool(shutil.which(self.config.ffmpeg) or Path(self.config.ffmpeg).is_file())
         checks["ffprobe"] = bool(shutil.which(self.config.ffprobe) or Path(self.config.ffprobe).is_file())
         checks["free_disk_gb"] = round(shutil.disk_usage(manifest.project_dir).free / 1024 ** 3, 2)
-        checks["visual_qc_backend"] = ai_router.available()
+        checks["visual_qc_backend"] = llm.available()
         if not self.config.editor:
             problems.append("Unreal Engine 5 was not found; install UE 5.8 or set UNREAL_EDITOR_CMD")
         if not checks["project"]:
@@ -126,16 +126,6 @@ class UnrealPipeline:
                             encoding="utf-8", errors="replace")
         if result.returncode != 0:
             raise RuntimeError(f"{label} failed (exit {result.returncode}); see {log_path}")
-
-    def _narration(self, manifest: ProjectManifest) -> Path:
-        root = Path(manifest.project_dir)
-        narration = root / "audio" / "narration.mp3"
-        if not narration.is_file():
-            source, seconds = generate_voiceover(manifest.script["spoken_script"], voice=manifest.voice)
-            shutil.move(source, narration)
-            manifest.record("narration_created", duration=seconds, path=str(narration.relative_to(root)))
-            manifest.save()
-        return narration
 
     def _fit_to_narration(self, manifest: ProjectManifest, narration: Path, recipe_path: Path) -> None:
         """Size the film to the spoken narration and start each shot as its sentence is spoken."""
@@ -208,7 +198,7 @@ class UnrealPipeline:
             })
             # Voice first: the film is as long as the narration and every shot starts on its own
             # sentence (a fixed 75 s cut a 92 s voiceover off mid-sentence).
-            narration = self._narration(manifest) if manifest.narration_enabled else None
+            narration = ensure_narration(manifest)
             if not handoff_path.is_file():
                 if narration:
                     self._fit_to_narration(manifest, narration, recipe)

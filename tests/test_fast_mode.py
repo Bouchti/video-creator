@@ -341,7 +341,7 @@ class FastReviewTests(unittest.TestCase):
         answer = dict(scores, fatal_problems=list(fatal), problems=[], revision_prompt="")
         seen = {}
         with patch.object(visual_review, "review_enabled", return_value=True), \
-                patch.object(visual_review.ai_router, "ask",
+                patch.object(visual_review.llm, "ask",
                              side_effect=lambda system, prompt, schema, **k: seen.update(p=prompt) or answer):
             return visual_review.review_clip(clip, project.shots[3], None, project), seen["p"]
 

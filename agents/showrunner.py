@@ -21,22 +21,38 @@ import json
 import logging
 import os
 import re
-import threading
 
 from dotenv import load_dotenv
 
-from config.paths import get_env_path, get_output_dir
+from agents import llm
+from agents.llm import BudgetExceeded, UsageLimit
+from config.paths import get_env_path, get_output_dir, slug
 from engine import sets
 
 load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
 
-WORDS_PER_SECOND = 2.4                 # measured: 206 words → 76.5 s; 198 words → 82.8 s (pauses)
-# The film is capped at FILM_MAX_SECONDS (65 s). The voice runs ~2.35 words/s; minus the tail and the
-# beat pauses that leaves ~60 s of speech: 110-140 words, at most MAX_BEAT_WORDS per beat.
-FILM_MAX_SECONDS = float(os.getenv("FILM_MAX_SECONDS") or 65)
-TARGET_WORDS = (110, 140)
-MAX_BEAT_WORDS = 22
+# Scripts are sized in SECONDS of voice and turned into words with the pace the voice really has in these
+# films (output/voice_rates.json, "<engine>/cutaway", measured by engine/make_film after every recording).
+# A fixed 2.4 words/s (ElevenLabs) sized the tunnel film for a voice that spoke 3.27 words/s (Chatterbox):
+# every action timed to the voice ran ~35 % faster than designed and nobody could follow.
+TARGET_SECONDS = (58, 80)              # narration; the film is longer (action holds + tail), only > 60 s matters
+SECONDS_PER_BEAT, MAX_SECONDS = 7.5, 96   # long story ladders: ~7.5 s a beat, never over ~96 s of narration
+
+
+def words_per_second():
+    from agents import stage_writer
+    return round(stage_writer.voice_rate(route="cutaway"), 2)
+
+
+def _words(seconds):
+    return int(round(seconds * words_per_second()))
+
+
+def target_words():
+    return _words(TARGET_SECONDS[0]), _words(TARGET_SECONDS[1])
+
+
 HOOK_MAX_WORDS = 13
 PASS_SCORE = 8                         # what the editor and writer aim for
 # What actually ships: no rule breaks and EVERY score >= SHIP_FLOOR. Calibrated on the editor's real
@@ -51,10 +67,11 @@ FACTS_MAX_AGE_DAYS = 30
 HISTORY = os.path.join(get_output_dir(), "explainer_history.json")
 WISHLIST = os.path.join(get_output_dir(), "set_wishlist.json")
 FILMS_DIR = os.path.join(get_output_dir(), "films")
+ENGINE_FILMS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine", "films")
 
 # ------------------- the house style (shared by writer + editor) -------------------
 
-STYLE = """You write narration for vertical 3D CUTAWAY explainer videos capped at 65 seconds (TikTok, Reels,
+STYLE = """You write narration for 60-80 second vertical 3D CUTAWAY explainer videos (TikTok, Reels,
 Shorts), the format of channels like @youbuiltit: the world is sliced open so viewers watch what
 is normally hidden: soil layers, pipes, tanks, water and machines at work.
 
@@ -86,7 +103,7 @@ What makes these videos great:
 - Spoken English only: no emojis, no markdown, no stage directions, digits are fine."""
 
 
-STORY_STYLE = """You write narration for vertical 3D cutaway CARTOON videos capped at 65 seconds (TikTok, Reels,
+STORY_STYLE = """You write narration for 60-80 second vertical 3D cutaway CARTOON videos (TikTok, Reels,
 Shorts): the world is sliced open so viewers see what is hidden underground, starring a hero who
 learns how things are really built by getting it hilariously wrong first.
 
@@ -147,343 +164,6 @@ def _style(set_id):
     return STORY_STYLE if getattr(sets.spec(set_id), "HERO", None) else STYLE
 
 
-# ------------------- low-level call -------------------
-#
-# Three backends:
-#   subscription (default): Claude Code's headless mode (`claude -p`) on Claude Pro/Max.
-#   codex: Codex CLI headless mode on the logged-in ChatGPT plan (the default fallback).
-
-BACKEND = os.getenv("SHOWRUNNER_BACKEND", "subscription").strip().lower()
-CLI_MODEL = os.getenv("SHOWRUNNER_CLI_MODEL", "opus")
-CODEX_MODEL = os.getenv("SHOWRUNNER_CODEX_MODEL", "gpt-5.6-sol")
-_API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
-_notional = [0.0]
-CLAUDE_USAGE = {"calls": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 0, "output_tokens": 0}
-_ACTIVE_BACKEND = [None]
-_PRIMARY_RESET = [None]                # when the primary backend's usage limit lifts (from its error text)
-_BACKEND_LOCK = threading.Lock()
-
-
-_LIMIT_LOADED = [False]
-
-
-def _limit_file():
-    """Where a usage limit is remembered between processes (SHOWRUNNER_LIMIT_MEMORY=0 turns it off)."""
-    if os.getenv("SHOWRUNNER_LIMIT_MEMORY", "1").strip() == "0":
-        return None
-    return os.path.join(os.path.dirname(get_output_dir()), "logs", ".ai_backend_limit.json")
-
-
-def _restore_limit():
-    """Start on the fallback while the primary's last usage limit has not lifted.
-
-    Every new process used to try the exhausted Codex first: ~40 s lost per run and per resume, and a
-    local-ai run has a one-hour budget. An unknown reset time is trusted for one hour.
-    """
-    path = _limit_file()
-    if not path or not os.path.isfile(path):
-        return
-    try:
-        with open(path, encoding="utf-8") as stream:
-            state = json.load(stream)
-        written = float(state.get("written") or 0)
-        until = (datetime.datetime.fromisoformat(state["until"]) if state.get("until")
-                 else datetime.datetime.fromtimestamp(written + 3600))
-    except (OSError, ValueError, KeyError, TypeError):
-        return
-    fallback = state.get("fallback")
-    if (state.get("backend") == BACKEND and fallback in ("codex", "subscription") and fallback != BACKEND
-            and datetime.datetime.now() < until):
-        _ACTIVE_BACKEND[0] = fallback
-        _PRIMARY_RESET[0] = until
-        log.info("[showrunner] %s is still at its usage limit (until %s); using %s", BACKEND,
-                 until.strftime("%Y-%m-%d %H:%M"), fallback)
-
-
-def _remember_limit(failed, fallback):
-    path = _limit_file()
-    if not path:
-        return
-    reset = _PRIMARY_RESET[0]
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as stream:
-            json.dump({"backend": failed, "fallback": fallback, "until": reset.isoformat() if reset else None,
-                       "written": datetime.datetime.now().timestamp()}, stream)
-    except OSError:
-        pass
-
-
-def active_backend():
-    """Backend currently serving this process; changes once after a usage limit."""
-    if _ACTIVE_BACKEND[0] is None and not _LIMIT_LOADED[0]:
-        _LIMIT_LOADED[0] = True
-        _restore_limit()
-    return _ACTIVE_BACKEND[0] or BACKEND
-
-
-def activate_fallback(reason="Primary backend usage limit reached", failed_backend=None):
-    """Switch this process to the configured fallback. Returns True if switched."""
-    fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
-    if fallback == "claude":
-        fallback = "subscription"
-    current = active_backend()
-    # A command-line/process override can change the primary without changing `.env`. For example,
-    # SHOWRUNNER_BACKEND=subscription with an `.env` written for codex -> subscription used to make
-    # the fallback point straight back at the exhausted primary. An explicitly blank value still
-    # disables fallback; a same-as-primary value means use the other installed subscription model.
-    if fallback == current and current in ("codex", "subscription"):
-        fallback = "codex" if current == "subscription" else "subscription"
-    # Another worker may already have switched the process while this request was in flight.
-    if failed_backend and current != failed_backend:
-        return current == fallback
-    if fallback not in ("codex", "subscription") or current == fallback:
-        return False
-    with _BACKEND_LOCK:
-        if active_backend() != current:
-            return True
-        _ACTIVE_BACKEND[0] = fallback
-        _PRIMARY_RESET[0] = parse_reset(str(reason))
-        _remember_limit(current, fallback)
-        log.warning("[showrunner] %s; switching all remaining AI work to %s", str(reason)[:180], fallback)
-    return True
-
-
-def primary_reset():
-    """When the backend this process fell back from becomes available again (None = unknown)."""
-    return _PRIMARY_RESET[0]
-
-
-def _capped_effort(requested, env_name="SHOWRUNNER_CLAUDE_EFFORT_CAP", default="medium"):
-    """Cap subscription reasoning so a stray high-effort call cannot consume the session."""
-    order = ("low", "medium", "high", "max")
-    requested = requested if requested in order else default
-    cap = (os.getenv(env_name) or default).strip().lower()
-    if cap not in order:
-        cap = default
-    return order[min(order.index(requested), order.index(cap))]
-
-
-def _record_claude_usage(data, label="claude"):
-    """Collect Claude CLI usage across showrunner, vision and set-builder calls."""
-    usage = data.get("usage") or {}
-    if not usage and isinstance(data.get("modelUsage"), dict):
-        rows = list(data["modelUsage"].values())
-        usage = {
-            "input_tokens": sum(int(r.get("inputTokens") or 0) for r in rows),
-            "cache_read_input_tokens": sum(int(r.get("cacheReadInputTokens") or 0) for r in rows),
-            "cache_creation_input_tokens": sum(int(r.get("cacheCreationInputTokens") or 0) for r in rows),
-            "output_tokens": sum(int(r.get("outputTokens") or 0) for r in rows),
-        }
-    CLAUDE_USAGE["calls"] += 1
-    for key in CLAUDE_USAGE:
-        if key != "calls":
-            CLAUDE_USAGE[key] += int(usage.get(key) or 0)
-    # Always log, even when the CLI reported nothing: a silent expensive call (the set-builder agent
-    # turns are the costliest in the pipeline) is how a subscription gets spent unnoticed.
-    log.info("[claude] %s usage: %s input (%s cache-read, %s cache-write), %s output%s", label,
-             f"{int(usage.get('input_tokens') or 0):,}",
-             f"{int(usage.get('cache_read_input_tokens') or 0):,}",
-             f"{int(usage.get('cache_creation_input_tokens') or 0):,}",
-             f"{int(usage.get('output_tokens') or 0):,}",
-             "" if usage else "  (NOT REPORTED by the CLI; this call is unmetered)")
-    budget = token_budget()
-    if budget:
-        log.info("[claude] budget: %s / %s tokens used this run (%.0f%%)",
-                 f"{tokens_used():,}", f"{budget:,}", 100.0 * tokens_used() / budget)
-
-
-def claude_usage_summary():
-    u = CLAUDE_USAGE
-    return (f"{u['calls']} call(s), {u['input_tokens']:,} input tokens "
-            f"({u['cache_read_input_tokens']:,} cache-read, "
-            f"{u['cache_creation_input_tokens']:,} cache-write), {u['output_tokens']:,} output tokens")
-
-
-class BudgetExceeded(RuntimeError):
-    """The CLAUDE_TOKEN_BUDGET for this process is spent; retrying cannot help."""
-
-
-def token_budget() -> int:
-    """Token ceiling for one process. 0 / unset = no ceiling."""
-    try:
-        return max(0, int(os.getenv("CLAUDE_TOKEN_BUDGET") or 0))
-    except ValueError:
-        return 0
-
-
-_CARRIED = [0]                         # tokens an interrupted run already spent before this process resumed it
-
-
-def carry_tokens(n):
-    """Count tokens spent by earlier processes of the same run (autopilot --resume) against the budget,
-    so stopping and resuming a run never hands it a fresh CLAUDE_TOKEN_BUDGET."""
-    _CARRIED[0] = max(0, int(n or 0))
-
-
-def tokens_used() -> int:
-    u = CLAUDE_USAGE
-    return (_CARRIED[0] + u["input_tokens"] + u["cache_read_input_tokens"]
-            + u["cache_creation_input_tokens"] + u["output_tokens"])
-
-
-def check_budget(label="claude"):
-    """Refuse a new Claude call once the run's budget is spent. Checked before the call so work is
-    never abandoned half-done, and only for the Claude subscription (Codex has its own quota)."""
-    budget = token_budget()
-    if budget and active_backend() != "codex" and tokens_used() >= budget:
-        raise BudgetExceeded(
-            f"CLAUDE_TOKEN_BUDGET reached before the {label} call: {tokens_used():,} of {budget:,} "
-            f"tokens used by {CLAUDE_USAGE['calls']} call(s). Raise CLAUDE_TOKEN_BUDGET, switch "
-            f"SHOWRUNNER_BACKEND to codex, or resume the run later.")
-
-
-def _call_once(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    backend = active_backend()
-    if backend == "codex":
-        return _call_codex(system, prompt, schema, effort, web=bool(tools))
-    return _call_cli(system, prompt, schema, effort, web=bool(tools))
-
-
-class UsageLimit(RuntimeError):
-    """A subscription backend hit its session/usage limit."""
-
-    def __init__(self, msg):
-        super().__init__(msg)
-        self.reset = parse_reset(msg)
-
-
-def parse_reset(msg):
-    """When a usage limit lifts, from Claude ("resets 3pm") or Codex ("try again at 9:41 AM",
-    "try again at Oct 29th, 2026 9:41 AM", "try again in 2 days 3 hours 5 minutes"). None if unknown."""
-    import datetime as _dt
-    import re as _re
-    now = _dt.datetime.now()
-    m = _re.search(r"try again in\s+((?:\d+\s*(?:days?|hours?|hrs?|minutes?|mins?)[\s,and]*)+)", msg, _re.I)
-    if m:
-        delta = _dt.timedelta()
-        for n, unit in _re.findall(r"(\d+)\s*(day|hour|hr|min)", m.group(1), _re.I):
-            delta += {"day": _dt.timedelta(days=int(n)), "hour": _dt.timedelta(hours=int(n)),
-                      "hr": _dt.timedelta(hours=int(n)), "min": _dt.timedelta(minutes=int(n))}[unit.lower()]
-        return now + delta if delta else None
-    m = _re.search(r"(?:resets|try again at)\s+(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+)?"
-                   r"([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)", msg, _re.I)
-    if not m:
-        return None
-    h, mi = int(m.group(4)) % 12 + (12 if m.group(6).lower() == "pm" else 0), int(m.group(5) or 0)
-    if m.group(1):
-        try:
-            day = _dt.datetime.strptime(f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y")
-            return day.replace(hour=h, minute=mi)
-        except ValueError:
-            pass
-    t = now.replace(hour=h, minute=mi, second=0, microsecond=0)
-    return t if t > now else t + _dt.timedelta(days=1)
-
-
-def codex_unavailable(exc):
-    """True when a Codex subscription call should immediately move to the fallback.
-
-    Codex reports both quota exhaustion and transient model saturation as ordinary CLI
-    failures. Neither can be repaired by repeating the same expensive pipeline stage.
-    """
-    text = str(exc).lower()
-    limited = "limit" in text and any(
-        word in text for word in ("reset", "rate", "usage", "quota", "plan")
-    )
-    saturated = any(phrase in text for phrase in (
-        "model is at capacity", "model at capacity", "selected model is at capacity",
-        "server is overloaded", "service is overloaded", "temporarily unavailable",
-        "try a different model",
-    ))
-    return limited or saturated
-
-
-def _call(system, prompt, schema=None, effort="high", tools=None, max_tokens=16000):
-    """Call the selected backend; on a usage limit, wait up to SHOWRUNNER_MAX_WAIT
-    minutes) and retries once, so an unattended run finishes instead of dying."""
-    import time as _t
-    backend = active_backend()
-    try:
-        return _call_once(system, prompt, schema, effort, tools, max_tokens)
-    except UsageLimit as e:
-        if activate_fallback(str(e), failed_backend=backend):
-            try:
-                return _call_once(system, prompt, schema, effort, tools, max_tokens)
-            except UsageLimit as fallback_error:
-                e = fallback_error
-        wait = (e.reset - __import__("datetime").datetime.now()).total_seconds() + 60 if e.reset else None
-        max_wait = float(os.getenv("SHOWRUNNER_MAX_WAIT", "65")) * 60
-        if wait is None or wait > max_wait:
-            raise
-        log.warning(f"[showrunner] subscription usage limit hit; waiting {wait / 60:.0f} min for the reset")
-        _t.sleep(max(0, wait))
-        return _call_once(system, prompt, schema, effort, tools, max_tokens)
-
-
-def _call_cli(system, prompt, schema=None, effort="high", web=False):
-    """One call through Claude Code headless mode, authenticated with the claude.ai login.
-    API credentials are stripped from its environment (your .env holds an API key: if it leaked
-    through, Claude Code would bill the API instead of the subscription). Runs in an empty temp
-    dir with no project settings, no MCP servers and no tools except web search when asked."""
-    import shutil
-    import subprocess
-    import tempfile
-
-    check_budget("showrunner")
-    exe = shutil.which("claude")
-    if not exe:
-        raise RuntimeError("Claude Code CLI not found: install it and run `claude` once to log in")
-    env = {k: v for k, v in os.environ.items() if k not in _API_ENV}
-    tools = ["WebSearch", "WebFetch"] if web else [""]
-    with tempfile.TemporaryDirectory() as tmp:
-        sys_file = os.path.join(tmp, "system.txt")
-        with open(sys_file, "w", encoding="utf-8") as f:
-            f.write(system)
-        cmd = [exe, "-p", "--output-format", "json", "--model", CLI_MODEL, "--effort",
-               _capped_effort(effort),
-               "--system-prompt-file", sys_file, "--no-session-persistence", "--strict-mcp-config",
-               "--setting-sources", "", "--tools", *tools]
-        if web:
-            cmd += ["--allowedTools", "WebSearch", "WebFetch"]
-        if schema is not None:
-            cmd += ["--json-schema", json.dumps(schema)]
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                           cwd=tmp, env=env, timeout=1800)
-    try:
-        data = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(r.stderr or r.stdout)[-400:]}")
-    result_text = str(data.get("result") or "")
-    if data.get("is_error") and ("limit" in result_text.lower() and "reset" in result_text.lower()):
-        raise UsageLimit(result_text[:200])
-    if data.get("is_error") or data.get("subtype") != "success":
-        raise RuntimeError(f"claude -p error ({data.get('subtype')}): {str(data.get('result'))[:300]}")
-    _notional[0] += float(data.get("total_cost_usd") or 0)
-    _record_claude_usage(data, "showrunner")
-    if schema is not None:
-        out = data.get("structured_output")
-        return out if out is not None else json.loads(data["result"])
-    return data["result"].strip()
-
-
-def _call_codex(system, prompt, schema=None, effort="high", web=False):
-    """One isolated Codex CLI turn authenticated by the user's ChatGPT login."""
-    from agents import codex_cli
-
-    full = ("Follow the role and constraints below. Do the task directly; do not inspect or edit local files.\n\n"
-            f"ROLE AND RULES:\n{system}\n\nTASK:\n{prompt}")
-    try:
-        out, _ = codex_cli.run(full, schema=schema, effort=effort, web=web, model=CODEX_MODEL)
-        return out
-    except RuntimeError as exc:
-        if codex_unavailable(exc):
-            raise UsageLimit(str(exc)[:500]) from exc
-        raise
-
-
 def _obj(props, required=None):
     return {"type": "object", "properties": props, "required": required or list(props),
             "additionalProperties": False}
@@ -499,19 +179,21 @@ class NoUnusedStorySets(RuntimeError):
 
 
 def _history():
-    """Logged scripts plus any film JSON in FILMS_DIR the log missed (e.g. a film written or
-    rendered by hand), so a subject already filmed is never offered again as unused."""
+    """Logged scripts plus any film JSON the log missed (in FILMS_DIR, or the hero films committed in
+    engine/films: the pool, boat and pumpkin films were not in the log and their sets were offered again),
+    so a subject already filmed is never offered again as unused."""
     try:
         hist = json.load(open(HISTORY, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         hist = []
     known = {os.path.normcase(os.path.abspath(h["film"])) for h in hist if h.get("film")}
-    try:
-        names = sorted(n for n in os.listdir(FILMS_DIR) if n.endswith(".json"))
-    except OSError:
-        names = []
-    for name in names:
-        path = os.path.join(FILMS_DIR, name)
+    paths = []
+    for folder in (FILMS_DIR, ENGINE_FILMS_DIR):
+        try:
+            paths += [os.path.join(folder, n) for n in sorted(os.listdir(folder)) if n.endswith(".json")]
+        except OSError:
+            pass
+    for path in paths:
         if os.path.normcase(os.path.abspath(path)) in known:
             continue
         try:
@@ -535,6 +217,10 @@ def available_topic_sets(set_ids=None, history=None):
     requested = list(set_ids or sets.AVAILABLE)
     if os.getenv("SHOWRUNNER_ALLOW_REPEATS", "0").lower() in ("1", "true", "yes"):
         return requested
+    if os.getenv("SHOWRUNNER_FORCE_NEW_SET", "0").lower() in ("1", "true", "yes") and set_ids is None:
+        # (only when choosing among ALL sets: the new set itself, named explicitly, must stay scriptable)
+        # producer switch: research and build a NEW subject even if older built sets are still unused
+        return [set_id for set_id in requested if not getattr(sets.spec(set_id), "HERO", None)]
     history = _history() if history is None else history
     consumed = {item.get("set") for item in history if item.get("set")}
     return [set_id for set_id in requested
@@ -553,7 +239,12 @@ NEW_STORY_SCHEMA = _obj({
     "why_people_care_now": S,
     "build_brief": S,
     "fact_sheet": S,
+    "largest_part_m": {"type": "number"},
+    "mechanism_size_cm": {"type": "number"},
 })
+NEW_STORY_CANDIDATES = _obj({"candidates": {"type": "array", "items": NEW_STORY_SCHEMA}})
+STORY_MAX_SCALE_M = float(os.getenv("STORY_MAX_SCALE_M", "12"))   # largest part Max works on, in metres
+STORY_MIN_MECHANISM_CM = float(os.getenv("STORY_MIN_MECHANISM_CM", "10"))   # the thing that explains it, seen working
 
 
 def _wishlist():
@@ -565,7 +256,7 @@ def _wishlist():
 
 def _new_story_set_id(subject):
     words = re.sub(r"\b(max|builds?|makes?|creates?|a|an|the|his|her)\b", " ", subject.lower())
-    stem = re.sub(r"[^a-z0-9]+", "_", words).strip("_")[:28] or "new_max_project"
+    stem = slug(words, 28) or "new_max_project"
     base = stem + "_story"
     candidate, n = base, 2
     while os.path.exists(os.path.join(os.path.dirname(__file__), "..", "engine", "sets", candidate + ".py")):
@@ -573,11 +264,31 @@ def _new_story_set_id(subject):
     return candidate
 
 
-def plan_new_story_set():
+def _subjects_in_progress():
+    """Subjects other autopilot runs are building right now (two runs at once must not build the same one)."""
+    import glob
+    out = []
+    for path in glob.glob(os.path.join(os.path.dirname(__file__), "..", "output", "autopilot", "*.json")):
+        try:
+            run = json.load(open(path, encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        plan = run.get("new_set_plan") or {}
+        if run.get("status") == "running" and plan.get("subject"):
+            out.append(f"- {plan.get('set_id')}: {plan['subject']} (being built now)")
+    return out
+
+
+def plan_new_story_set(allow_assets=False):
     """Research and choose a genuinely new, timely Max subject that can become a 3D set."""
-    published = "\n".join(f"- {h.get('set')}: {h.get('title')}" for h in _history()) or "- none"
+    published = "\n".join([f"- {h.get('set')}: {h.get('title')}" for h in _history()]
+                          + _subjects_in_progress()) or "- none"
     ideas = _wishlist()[-30:]
     wishlist = "\n".join(f"- {i.get('topic')}: {i.get('set_needed')}" for i in ideas) or "- none"
+    asset_rule = ("Whole recognisable objects (vehicles, ships, cranes, houses, trees, furniture) may come from "
+                  "BlenderKit models; the mechanism (what is cut open, floods, cracks or moves piece by piece) must "
+                  "be feasible with Blender primitives. No logos." if allow_assets else
+                  "It must be feasible using Blender primitives and must not need logos or downloaded assets.")
     prompt = f"""Today is {datetime.date.today().isoformat()}. Search current sources from the last
 14 days and choose one genuinely new Max trial-and-error engineering story to build next. Search
 across home projects, infrastructure, transport, energy, water, machines and practical science.
@@ -589,7 +300,7 @@ OLDER SET WISHLIST (inspiration only; live research wins):
 USED SUBJECTS (never repeat or rename these):
 {published}
 
-Return:
+Return 3 CANDIDATES: three genuinely different subjects (different fields, a different wow), each with:
 - subject: a short concrete name for the thing Max builds
 - title, angle, hook_line (13 words maximum), hook_action, and payoff for the eventual video
 - trend_signal and the exact direct trend_source_url from the live research
@@ -600,12 +311,75 @@ Return:
 - build_brief: a self-contained production brief describing the single coherent cutaway world,
   Max's goal, two children in the payoff, 3-5 escalating visible failures, the real engineering fix
   immediately after each failure, the final working result, and the physical principles viewers
-  learn. It must be feasible using Blender primitives and must not need logos or downloaded assets.
+  learn. {asset_rule}
+
+IMPRESSIVE, NOT ORDINARY: the subject must make a viewer say "no way!": a spectacular visible disaster or an
+"impossible" result (a brand-new pool that floats out of the ground, a steel slab that sinks while a steel
+hull floats, a pumpkin heavier than a car). A useful but ordinary object (a garden wall, a fence, a shelf) is
+NOT enough, even with a good lesson.
+
+MAX'S OWN VERSION, AT HUMAN SCALE: Max builds HIS OWN backyard / garden / lake-size version of the thing, the
+way he built his own pool, his own boat and grew his own pumpkin: every part a viewer must see working fits
+within about 10 metres of Max, so he and the mechanism are both big on a phone screen. A giant real-world
+version (a sea tunnel, a dam, a skyscraper) appears only as the closing number and scale card. Give
+largest_part_m: the largest dimension, in metres, of anything Max builds or that must be read in a shot.
+
+A BIG, VISIBLE MECHANISM: the thing whose behaviour explains each failure and fix must be seen working with the
+naked eye, as itself: a gusher, a pipe bursting, a hull tilting, a wall sliding, water rising, a pump spinning.
+NOT a microscopic or invisible cause (bacteria, molecules, crystals, grain contacts, electrons, chemistry): the
+sandcastle film explained bacteria cementing sand grains in a small magnifier circle and nobody understood what
+was in the video. Give mechanism_size_cm: the size, in centimetres, of the smallest thing the viewer must watch
+to understand the story (a 2 cm grain = 2, a 40 cm pipe = 40, a gusher = 500).
 
 Do not choose a subject merely because it appears in the old wishlist. It needs a credible current
 signal and must be different from every used subject."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
-    plan = _call(STORY_STYLE, prompt, NEW_STORY_SCHEMA, effort="medium", tools=tools)
+    # the novelty gate: the viewer must LEARN something (a subject everyone knows was a wasted set build).
+    # Each search returns 3 candidates, judged in PARALLEL (three searches in a row, each told why the last one
+    # failed, took 11 min); up to NEW_SET_SEARCHES searches, and the best of all is used anyway
+    from concurrent.futures import ThreadPoolExecutor
+    from agents.leader import novelty_problem
+
+    def judge(plan):
+        size = float(plan.get("largest_part_m") or 0)
+        if size > STORY_MAX_SCALE_M:
+            # the tunnel set staged a tens-of-metres tube beside a 1.8 m Max: no phone shot could show both, and
+            # 9 of 13 scenes were rejected for "Max too small" / "labels too small" / "mechanism a thin line"
+            return (f"too big to read on a phone: the largest part is {size:g} m (max {STORY_MAX_SCALE_M:g} m); "
+                    "Max must build his own human-scale version, with the giant real one as the closing number"), \
+                (-1, -100)                          # a last resort only: never a crash when every pick is too big
+        mech = float(plan.get("mechanism_size_cm") or 0)
+        if 0 < mech < STORY_MIN_MECHANISM_CM:
+            return (f"the mechanism is too small to see ({mech:g} cm; min {STORY_MIN_MECHANISM_CM:g} cm): the story "
+                    "must be explained by something big that visibly moves, not a microscopic cause in an inset"),                 (-1, -100)
+        report = {}
+        problem, known = novelty_problem(f"{plan.get('subject', '')}: {plan.get('hook_line', '')} "
+                                         f"{plan.get('payoff', '')}", need_demo=False, report=report)
+        return problem, (int(report.get("impressive") or 0), -known)
+
+    tried, rejected, plan = [], [], None
+    for _ in range(max(1, int(os.getenv("NEW_SET_SEARCHES", "3")))):
+        retry = ("\n\nREJECTED (do not choose these or close variants):\n- " + "\n- ".join(rejected)) if rejected else ""
+        found = llm.ask(STORY_STYLE, prompt + retry, NEW_STORY_CANDIDATES, effort="medium", web=True)
+        cands = [c for c in found.get("candidates", []) if c.get("subject")][:3]
+        if not cands:
+            continue
+        with ThreadPoolExecutor(max_workers=len(cands)) as pool:
+            verdicts = list(pool.map(judge, cands))
+        for c, (problem, rank) in zip(cands, verdicts):
+            tried.append((rank, c))
+            if problem:
+                rejected.append(f"{c.get('subject', '')} ({problem})")
+                log.warning("[showrunner] new subject rejected: %s: %s", c.get("subject", ""), problem)
+        passed = [(rank, c) for c, (problem, rank) in zip(cands, verdicts) if not problem]
+        if passed:
+            plan = max(passed, key=lambda t: t[0])[1]
+            break
+    if plan is None:
+        if not tried:
+            raise NoUnusedStorySets("Fresh topic research returned no candidate subject; no set was built.")
+        (impressive, known), plan = max(tried, key=lambda t: t[0])
+        log.warning("QUALITY WARNING: no new subject passed the novelty check; using the most impressive one "
+                    "(%d/10, %d%% already know it)", impressive, -known)
     url = str(plan.get("trend_source_url", ""))
     if not url.startswith(("http://", "https://")):
         raise NoUnusedStorySets("Fresh topic research returned no verifiable trend source; no set was built.")
@@ -650,7 +424,7 @@ TOPIC_SCHEMA = _obj({
 def pick_topic(set_ids=None, forced_angle=None):
     requested = list(set_ids or sets.AVAILABLE)
     history = _history()
-    set_ids = available_topic_sets(requested, history)
+    set_ids = available_topic_sets(set_ids and requested, history)
     if not set_ids:
         consumed = sorted({h.get("set") for h in history if h.get("set") in requested})
         raise NoUnusedStorySets(
@@ -704,8 +478,7 @@ viewer nothing. The hook line must make sense on its own to someone who has seen
     from agents import buildup
     if any(buildup.enabled(s_) for s_ in set_ids):
         prompt += buildup.TOPIC_NOTE
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
-    out = _call(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium", tools=tools)
+    out = llm.ask(_style(set_ids[0]), prompt, TOPIC_SCHEMA, effort="medium", web=True)
     _save_wishlist(out.get("wishlist", []))
     cands = out["candidates"]
     best = cands[max(0, min(out["best"], len(cands) - 1))]
@@ -776,16 +549,15 @@ Search the web and return a compact FACT SHEET (plain text, max ~250 words): 8-1
 with concrete numbers about this subject, each with its source domain in brackets; correct any of
 the model facts that are wrong. Start with a verdict on the example hook (TRUE / NEEDS REWORDING). Prefer engineering, trade and government
 sources. Include 2-3 surprising details that would delight a viewer."""
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
     try:
-        facts = _call("You are a meticulous fact-checker for an engineering explainer channel.", prompt,
-                      tools=tools, effort="medium")
+        facts = llm.ask("You are a meticulous fact-checker for an engineering explainer channel.", prompt,
+                        web=True, effort="medium")
     except UsageLimit:
         raise
     except RuntimeError as e:  # web search unavailable / failed
         log.warning(f"[showrunner] web search failed ({str(e)[:100]}); using model knowledge")
-        facts = _call("You are a meticulous fact-checker for an engineering explainer channel.",
-                      prompt.replace("Search the web and return", "From reliable knowledge, return"), effort="medium")
+        facts = llm.ask("You are a meticulous fact-checker for an engineering explainer channel.",
+                        prompt.replace("Search the web and return", "From reliable knowledge, return"), effort="medium")
     log.info(f"[showrunner] fact sheet: {len(facts.split())} words")
     return facts
 
@@ -814,7 +586,7 @@ CRITIQUE_SCHEMA = _obj({
 def _rules(set_id):
     from agents import buildup
     if buildup.enabled(set_id):
-        return buildup.rules(set_id, WORDS_PER_SECOND, word_budget(set_id))
+        return buildup.rules(set_id, words_per_second(), word_budget(set_id))
     sp = sets.spec(set_id)
     order = getattr(sp, "STORY_ORDER", None) or sp.BUILD_ORDER
     hooks = ", ".join(k for k, v in sp.ACTIONS.items() if v["kind"] == "hook")
@@ -827,6 +599,7 @@ def _rules(set_id):
               f"\n  real cause, and make the NEXT beat the fix that answers it. Never use stickers for fail counts,"
               f"\n  scores or attempts (no 'Fail #', no scoreboards).") if fails else ""
     lo, hi = word_budget(set_id)
+    wps = words_per_second()
     return f"""STRUCTURE RULES (the renderer enforces them):
 - Beat 1 = a hook action ({hooks}): pick the one whose VISUAL matches your hook line (the viewer must
   see what the first words say); beat 2 = rewind.
@@ -835,9 +608,9 @@ def _rules(set_id):
 - A beat plays ONE action, or a quick MONTAGE of 2-{max_group} consecutive actions ("actions": ["rebar",
   "shotcrete"]) to race through steps that are not the point. Hooks, the rewind{' and failures' if fails else ''} are single.
 - A beat needs enough words for what it shows: at least (sum of its actions' minimum seconds) x
-  {WORDS_PER_SECOND} x 0.75 words. No beat over 32 words. 10-17 beats in total.
+  {wps} x 0.75 words. No beat over 32 words. 10-17 beats in total.
 - Word budget: aim for {hi - 37}-{hi - 12} words and count before returning. The hard allowed range is
-  {lo}-{hi} words in total (~{WORDS_PER_SECOND} words/s); do not draft at
+  {lo}-{hi} words in total (~{wps} words/s, this voice's measured pace); do not draft at
   the upper boundary. Hook <= {HOOK_MAX_WORDS} words.
 - overlay: optional 2D sticker for that beat. type "stat" = a number that counts up (value like
   "50 tons", text like "of dirt": a REAL measurement only); "label" = a short badge naming a real
@@ -898,7 +671,7 @@ Write the improved script."""
             prompt += ("\nTONE EXAMPLE: another writer's script for this same set. Do NOT reuse its jokes, lines "
                        f"or hook; beat it.\n{example}\n")
         prompt += "\nWrite the script. Make the hook impossible to scroll past and every beat earn its place."
-    return _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort=effort)
+    return llm.ask(_style(set_id), prompt, SCRIPT_SCHEMA, effort=effort)
 
 
 def _hook_idea(topic):
@@ -946,7 +719,7 @@ FACT SHEET (for reference only):
 
 SCRIPT:
 {json.dumps(script, ensure_ascii=False, indent=1)}"""
-    out = _call(_style(topic["set"]), prompt, SCRIPT_SCHEMA, effort="low")
+    out = llm.ask(_style(topic["set"]), prompt, SCRIPT_SCHEMA, effort="low")
     if [b["actions"] for b in out["beats"]] != [b["actions"] for b in script["beats"]]:
         return script                                   # polish must not restructure
     return out
@@ -987,7 +760,7 @@ only if every score is {PASS_SCORE}+ and there are no factual errors or rule bre
     from agents import buildup
     if buildup.enabled(topic["set"]):
         prompt += buildup.CRITIQUE_NOTE
-    return _call(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
+    return llm.ask(_style(topic["set"]), prompt, CRITIQUE_SCHEMA, effort="medium")
 
 
 def closing_question(text):
@@ -1012,33 +785,44 @@ CTA_RE = re.compile(r"\bcomments?\b|\bsubscrib\w*|\bfollow\s+(?:us|me|for|along)
 
 
 def is_length_problem(problem: str) -> bool:
-    """A narration-length rule (the 65 s cap): reference scripts written before the cap break only these."""
+    """A narration-length rule: reference scripts written for an older word budget break only these."""
     return problem.startswith("total narration is") or bool(re.match(r"beat \d+ has \d+ words; max", problem))
 
 
 def word_budget(set_id):
-    """(min, max) narration words. One budget for every set: the 65 s cap does not grow with the story
-    (scaling it for long ladders produced a 93 s film). A story too long for it is a planning error."""
-    return TARGET_WORDS
+    """(min, max) narration words for a set, for the voice's measured pace. A Max story ladder gets
+    ~SECONDS_PER_BEAT of narration per beat (its actions + hook + rewind), at least TARGET_SECONDS' maximum and
+    at most MAX_SECONDS: a 12-beat ladder with four failure mechanisms could not be both clear and funny in 80 s
+    (16 words a beat) - every revision traded one for the other. Other formats keep TARGET_SECONDS."""
+    lo, hi = target_words()
+    try:
+        sp = sets.spec(set_id)
+    except Exception:                                    # noqa: BLE001  unknown set: the default budget
+        return lo, hi
+    order = getattr(sp, "STORY_ORDER", None)
+    if not (getattr(sp, "HERO", None) and order):
+        return lo, hi
+    return lo, min(_words(MAX_SECONDS), max(hi, _words(SECONDS_PER_BEAT * (len(order) + 2))))
 
 
 def hard_checks(script, set_id):
     from agents import buildup
     if buildup.enabled(set_id):
-        return buildup.checks(script, set_id, WORDS_PER_SECOND, word_budget(set_id))
+        return buildup.checks(script, set_id, words_per_second(), word_budget(set_id))
     sp = sets.spec(set_id)
     beats = script["beats"]
     problems = list(sp.validate(beats))
+    wps = words_per_second()
     for k, b in enumerate(beats):
         if GAG_RE.search(b["text"]):
             problems.append(f"beat {k + 1}: score/counter gag ('{GAG_RE.search(b['text']).group(0)}') carries no "
                             "information; replace it with story or explanation")
         n = len(b["text"].split())
-        need = int(sp.min_seconds(b) * WORDS_PER_SECOND * 0.75)
+        need = int(sp.min_seconds(b) * wps * 0.75)
         if k > 1 and n < need:
             problems.append(f"beat {k + 1} {sp.beat_actions(b)} has {n} words; it needs at least {need} to show its actions")
-        if n > MAX_BEAT_WORDS:
-            problems.append(f"beat {k + 1} has {n} words; max {MAX_BEAT_WORDS}")
+        if n > 32:
+            problems.append(f"beat {k + 1} has {n} words; max 32")
     words = sum(len(b["text"].split()) for b in beats)
     lo, hi = word_budget(set_id)
     if not lo <= words <= hi:
@@ -1054,6 +838,7 @@ def hard_checks(script, set_id):
         q = closing_question(beats[-1]["text"])
         if not q:
             problems.append("the last beat must END with a short question to the viewer that invites comments")
+        # call-to-action words only: "what would you like Max to build?" or "follow the water" are fine
         elif CTA_RE.search(q):
             problems.append("the closing question must not mention comments, likes, subscribing or following")
         elif len(q.split()) > 14:
@@ -1173,6 +958,10 @@ def _last_rejected(topic):
             last = d.get("last") or {}
             if last.get("review"):
                 newest = (last["script"], hard_checks(last["script"], topic["set"]), last["review"])
+                if newest[1] and _ships(newest[2], []):
+                    # good enough except a mechanical rule (a beat one word over): trim it and ship it
+                    fixed, left = repair_rules(newest[0], topic["set"], newest[1])
+                    newest = (fixed, left, newest[2])
                 return max((best, newest), key=lambda candidate: _rank(candidate[2], candidate[1]))
             return best
     return None
@@ -1195,7 +984,7 @@ Return the same script with the SMALLEST edits that fix every rule above: keep e
 its overlay and every line that is not involved exactly as it is. When a word budget is exceeded, cut
 a few filler words so the total lands well inside the limit (not on the boundary)."""
         try:
-            fixed = _call(_style(set_id), prompt, SCRIPT_SCHEMA, effort="low")
+            fixed = llm.ask(_style(set_id), prompt, SCRIPT_SCHEMA, effort="low")
         except (UsageLimit, BudgetExceeded):
             raise
         except Exception as exc:                         # noqa: BLE001  the unrepaired script still fails loudly
@@ -1231,6 +1020,10 @@ def _revise(topic, facts, script, problems, review, best, trace=None):
                      "when a beat cannot hold both its lesson and a gag, keep the lesson.")},
             effort="high")
         fixed_problems = hard_checks(fixed, topic["set"])
+        if fixed_problems:
+            # mechanical breaks (a beat one word over, a counter word) are trimmed BEFORE grading: a revision that
+            # met the bar lost to an older fun-6 draft over one word, and the retry was heading for a new subject
+            fixed, fixed_problems = repair_rules(fixed, topic["set"], fixed_problems)
         new_review = critique_script(fixed, topic, facts, fixed_problems)
         log.info(f"[showrunner] revision {round_ + 1}: {json.dumps(new_review['scores'])} | "
                  f"hard problems: {fixed_problems or 0}")
@@ -1259,41 +1052,50 @@ def to_film(script, topic, facts, review=None):
         ov = b.get("overlay") or {}
         if ov.get("type") == "label" and re.search(r"\d", str(ov.get("text", ""))):
             ov = {}                     # no counters/scores/"Fail #N" labels; numbers belong in real stats
-        if sp.ACTIONS[acts[0]].get("label"):
+        if sp.ACTIONS[acts[0]].get("label") or (ov and sets.repeats_label(ov, sets.scene_labels(topic["set"], acts))):
             ov = {}                     # the scene already shows this beat's label: a sticker would stack on it
         if ov.get("type") == "stat" and ov.get("value"):
             beat["overlay"] = {"type": "stat", "value": ov["value"], "text": ov.get("text", "")}
         elif ov.get("type") == "label" and ov.get("text"):
             beat["overlay"] = {"type": "label", "text": ov["text"]}
         beats.append(beat)
-    backend = active_backend()
+    backend = llm.active_backend()
     film = {"title": script["title"], "set": topic["set"], "voice": "energetic", "captions": "word",
             "music": "synth", "beats": beats, "cta": closing_question(beats[-1]["text"]) if beats else None,
             # story sets end on a reunion: hold the payoff after the last word so it can land
-            "tail": 1.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2, "beat_pause": 0.35,
+            "tail": 2.5 if getattr(sets.spec(topic["set"]), "HERO", None) else 1.2,
             "meta": {"angle": topic["angle"], "caption": script.get("caption", ""),
                      "hashtags": script.get("hashtags", []), "facts": facts, "review": review,
                      "created": datetime.datetime.now().isoformat(timespec="seconds"),
-                     "model": CODEX_MODEL if backend == "codex" else CLI_MODEL}}
+                     "model": llm.CODEX_MODEL if backend == "codex" else llm.CLI_MODEL}}
     from agents import buildup
     if buildup.enabled(topic["set"]):                  # starts on the first build step: no hook, no question
         film.update(buildup.film_extras())
     return film
 
 
-def slug(text):
-    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48]
+def _hook_for(set_id, prose):
+    """The set's hook action whose "shows" shares the most words with a hook described in prose ('' if none)."""
+    hooks = [(k, v) for k, v in sets.spec(set_id).ACTIONS.items() if v.get("kind") == "hook"]
+    if not hooks:
+        return ""
+    words = set(re.findall(r"[a-z]{4,}", prose.lower()))
+    return max(hooks, key=lambda kv: len(words & set(re.findall(r"[a-z]{4,}", kv[1].get("shows", "").lower()))))[0]
 
 
 def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on_topic=None):
     import time
     t0 = time.time()
-    backend = active_backend()
-    detail = f"codex exec, model {CODEX_MODEL}" if backend == "codex" else f"claude -p, model {CLI_MODEL}"
+    backend = llm.active_backend()
+    detail = f"codex exec, model {llm.CODEX_MODEL}" if backend == "codex" else f"claude -p, model {llm.CLI_MODEL}"
     fallback = (os.getenv("SHOWRUNNER_FALLBACK_BACKEND") or "").strip().lower()
     log.info(f"[showrunner] backend: {backend} ({detail}), quality: {QUALITY}"
              + (f", fallback: {fallback}" if fallback else ""))
     needed = ("title", "angle", "hook_line", "hook_action", "payoff", "trend_signal", "trend_source_url")
+    if topic_hint and set_id and topic_hint.get("hook_action") not in sets.spec(set_id).ACTIONS:
+        # a new-set plan describes its hook in prose: film it with the set's hook action that shows it, instead
+        # of throwing the planned angle away for a fresh web topic search
+        topic_hint = dict(topic_hint, hook_action=_hook_for(set_id, str(topic_hint.get("hook_action") or "")))
     hint_is_filmable = (topic_hint and set_id and all(topic_hint.get(k) for k in needed)
                         and topic_hint.get("hook_action") in sets.spec(set_id).ACTIONS)
     if hint_is_filmable:
@@ -1319,9 +1121,8 @@ def run(angle=None, render=True, preview=False, set_id=None, topic_hint=None, on
     from agents.codex_cli import TOTAL_USAGE, usage_summary
     if TOTAL_USAGE["calls"]:
         log.info(f"[showrunner] Codex subscription usage this process: {usage_summary()}")
-    if CLAUDE_USAGE["calls"]:
-        log.info(f"[showrunner] Claude subscription usage this process: {claude_usage_summary()} "
-                 f"(API-equivalent reported by CLI: ~${_notional[0]:.2f})")
+    if llm.CLAUDE_USAGE["calls"]:
+        log.info(f"[showrunner] Claude subscription usage this process: {llm.usage_summary()}")
     for b in film["beats"]:
         log.info(f"   [{b['id']:>24}] {b['text']}")
     hist = _history()

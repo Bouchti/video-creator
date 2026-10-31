@@ -92,6 +92,13 @@ class Shot:
         return self.duration_frames / 30.0
 
 
+def caption_settings(enabled: bool, burn_in: bool = True, export_srt: bool = True,
+                     word_highlight: bool = True) -> dict[str, Any]:
+    """A project's caption settings: burned-in word-highlight captions and/or an exported SRT."""
+    return {"enabled": enabled, "burn_in": burn_in, "export_srt": export_srt, "word_highlight": word_highlight,
+            "safe_position": "lower-middle"}
+
+
 @dataclass
 class ProjectManifest:
     id: str
@@ -197,5 +204,3 @@ def estimated_remaining_seconds(manifest: ProjectManifest, default_shot_seconds:
     return per_shot * (len(manifest.shots) - completed_shots(manifest))
 
 
-def total_timeline_frames(manifest: ProjectManifest) -> int:
-    return sum(shot.duration_frames for shot in manifest.shots)

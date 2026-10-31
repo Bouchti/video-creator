@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from local_video.config import slugify
-from local_video.models import ProjectManifest, ProjectState, Shot
+from local_video.models import ProjectManifest, ProjectState, Shot, caption_settings
+from local_video.project import new_project_dir
 
 from .config import UnrealConfig
 from .planner import build_recipe
@@ -19,15 +18,7 @@ def create_project(script: dict[str, Any], duration: int, voice: str, music: str
                    config: UnrealConfig | None = None) -> ProjectManifest:
     config = config or UnrealConfig()
     concept = str(script.get("video_title") or script.get("description") or "Unreal video")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    base = f"{stamp}-{slugify(concept)}"
-    project_dir = config.output_root / base
-    suffix = 2
-    while project_dir.exists():
-        project_dir = config.output_root / f"{base}-{suffix}"
-        suffix += 1
-    for folder in ("audio", "frames", "logs", "render"):
-        (project_dir / folder).mkdir(parents=True, exist_ok=True)
+    project_dir = new_project_dir(config.output_root, concept, ("audio", "frames", "logs", "render"))
     recipe = build_recipe(script, duration, config.width, config.height, config.fps)
     recipe_path = project_dir / "recipe.json"
     recipe_path.write_text(json.dumps(recipe, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -46,8 +37,7 @@ def create_project(script: dict[str, Any], duration: int, voice: str, music: str
         voice=voice,
         music=music,
         ambience="silent authored Unreal world",
-        captions={"enabled": captions, "burn_in": captions, "export_srt": captions,
-                  "word_highlight": True, "safe_position": "lower-middle"},
+        captions=caption_settings(captions, burn_in=captions, export_srt=captions),
         shots=[Shot(id="unreal-sequence", index=0, duration_frames=duration * config.fps,
                     prompt="Full validated Unreal Level Sequence", negative_prompt="", seed=0)],
         settings={

@@ -11,7 +11,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from agents import ai_router
+from agents import llm
 from config.paths import CLAUDE_MODEL, get_env_path
 
 from .faces import face_crops
@@ -114,7 +114,7 @@ FINAL_REVIEW_TOOL = {
 
 def review_enabled() -> bool:
     value = os.getenv("LOCAL_VIDEO_VISION_QC", "1").strip().lower()
-    return value not in {"0", "false", "no", "off"} and ai_router.available()
+    return value not in {"0", "false", "no", "off"} and llm.available()
 
 
 def _sample_frames(path: str | Path, ratios=(0.05, 0.5, 0.95)) -> list[bytes]:
@@ -309,9 +309,9 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
                 still = Path(tmp) / f"{index}.jpg"
                 still.write_bytes(data)
                 images.append((label, still))
-            values = ai_router.ask(
+            values = llm.ask(
                 "You are a film editor reviewing generated video clips.", prompt, REVIEW_TOOL["input_schema"],
-                model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=images,
+                images=images,
             )
         if not isinstance(values, dict):
             raise ValueError("vision reviewer returned no structured result")
@@ -378,7 +378,7 @@ def describe_identity(path: str | Path, name: str, lock: str) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "identity.jpg"
             image.write_bytes(still)
-            values = ai_router.ask("You write character identity cards for a film.", prompt,
+            values = llm.ask("You write character identity cards for a film.", prompt,
                                    IDENTITY_CARD_TOOL["input_schema"],
                                    model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=[(name, image)])
         return str((values or {}).get("appearance") or "").strip() if isinstance(values, dict) else ""
@@ -410,7 +410,7 @@ def describe_subject(path: str | Path, label: str, lock: str) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "subject.jpg"
             image.write_bytes(still)
-            values = ai_router.ask("You write continuity cards for a film's recurring subjects.", prompt,
+            values = llm.ask("You write continuity cards for a film's recurring subjects.", prompt,
                                    IDENTITY_CARD_TOOL["input_schema"],
                                    model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=[(label, image)])
         return str((values or {}).get("appearance") or "").strip() if isinstance(values, dict) else ""
@@ -440,7 +440,7 @@ def describe_outfit(path: str | Path, name: str, lock: str) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "outfit.jpg"
             image.write_bytes(still)
-            values = ai_router.ask("You keep wardrobe continuity for a film.", prompt,
+            values = llm.ask("You keep wardrobe continuity for a film.", prompt,
                                    {"type": "object", "properties": {"outfit": {"type": "string"}},
                                     "required": ["outfit"]},
                                    model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=[(name, image)])
@@ -604,7 +604,7 @@ def review_keyframe(path: str | Path, shot: Any, identities: list[tuple[str, Pat
                     face = Path(tmp) / f"candidate-face-{crop_number}.jpg"
                     face.write_bytes(crop)
                     images.append((f"Face crop {crop_number + 1} from the candidate frame (largest first)", face))
-            values = ai_router.ask(
+            values = llm.ask(
                 "You are a film editor checking first frames before shots are generated.", prompt,
                 KEYFRAME_REVIEW_TOOL["input_schema"], model=os.getenv("VISION_MODEL") or CLAUDE_MODEL,
                 images=images,
@@ -694,10 +694,9 @@ def review_final_video(path: str | Path, manifest: Any) -> dict[str, Any]:
                 still = Path(tmp) / f"final_{index:02d}.jpg"
                 still.write_bytes(frame)
                 images.append((f"Chronological final-video frame {index} of {len(frames)}", still))
-            values = ai_router.ask(
+            values = llm.ask(
                 "You are a film editor reviewing a finished short video.", prompt,
-                FINAL_REVIEW_TOOL["input_schema"], model=os.getenv("VISION_MODEL") or CLAUDE_MODEL,
-                images=images,
+                FINAL_REVIEW_TOOL["input_schema"], images=images,
             )
         if not isinstance(values, dict):
             raise ValueError("final reviewer returned no structured result")

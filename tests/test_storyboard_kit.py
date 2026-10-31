@@ -123,7 +123,7 @@ class PlannerTests(unittest.TestCase):
     def test_a_valid_plan_needs_one_call(self):
         calls = []
 
-        def call(system, prompt, schema, effort="high", tools=None):
+        def call(system, prompt, schema, effort="high", web=False):
             calls.append(schema)
             return self._plan(copy.deepcopy(sbm.LEVEE))
         plan = kit_planner.plan_kit_story(call=call)
@@ -135,7 +135,7 @@ class PlannerTests(unittest.TestCase):
         answers = [self._plan(broken), copy.deepcopy(sbm.LEVEE)]
         efforts = []
 
-        def call(system, prompt, schema, effort="high", tools=None):
+        def call(system, prompt, schema, effort="high", web=False):
             efforts.append(effort)
             return answers.pop(0)
         plan = kit_planner.plan_kit_story(call=call)
@@ -149,7 +149,7 @@ class PlannerTests(unittest.TestCase):
         seen = {}
         linear = kit_planner._linear_example("embankment")
 
-        def call(system, prompt, schema, effort="high", tools=None):
+        def call(system, prompt, schema, effort="high", web=False):
             seen.update(system=system, prompt=prompt, schema=schema)
             return self._plan(copy.deepcopy(linear))
         plan = kit_planner.plan_kit_explainer(angle="how levees hold back a flood", call=call)

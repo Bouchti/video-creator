@@ -1,7 +1,7 @@
 """
 Film production driver (runs in the project venv):
 
-  python -m engine.make_film pool [--reuse-voice] [--preview | --frames=450,470]
+  python -m engine.make_film pool_cut [--reuse-voice] [--preview | --frames=450,470]
 
 voiceover → word timings + lip-sync envelope → Blender render timed to the words
 → overlay stickers → restrained sound design (authored SFX, ambience, music)
@@ -25,25 +25,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from config.paths import PROJECT_ROOT, get_output_dir  # noqa: E402
+from config.paths import PROJECT_ROOT, get_blender, get_output_dir  # noqa: E402
 from agents.beats import align_beats, script_word_timings, FPS  # noqa: E402
-from agents.media import FFMPEG, FFPROBE, get_duration, merge_audio_video, burn_subtitles  # noqa: E402
+from agents.media import FFMPEG, FFPROBE, get_duration, merge_audio_video, burn_subtitles, read_pcm, write_wav  # noqa: E402
 from agents.transcription import transcribe_with_whisper  # noqa: E402
 from agents.voice import generate_voiceover  # noqa: E402
 from agents.audio_fx import build_fx_track, mix_audio, SR  # noqa: E402
 from agents.captions import words_to_ass  # noqa: E402
-from agents.animate import _draw_overlay  # noqa: E402
+from agents.render import draw_overlay  # noqa: E402
 from agents import sfx  # noqa: E402
 
 log = logging.getLogger("pipeline")
-BLENDER = os.getenv("BLENDER_EXE", r"C:\blender-5.2.3-windows-x64\blender.exe")
+BLENDER = get_blender()
 
 
 def voice_envelope(path: str, frames: int) -> list:
     """Per-frame loudness (0..1) of the voiceover — drives lip-sync."""
-    raw = subprocess.run([FFMPEG, "-v", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
-                         capture_output=True, check=True).stdout
-    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+    x = read_pcm(path, 16000)
     hop = 16000 / FPS
     rms = np.zeros(frames)
     for i in range(frames):
@@ -60,20 +58,11 @@ def _read_wav(path):
         return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
 
 
-def _write_wav(path, x):
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes((np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes())
-    return path
-
-
 def _sticker_job(job):
     """Draw a sticker on a COPY of a raw frame (raw renders stay clean, so they can be re-used by
     --redo / --resume without stickers piling up)."""
     src, overlay, t, dst = job
-    _draw_overlay(Image.open(src).convert("RGB"), overlay, t).save(dst)
+    draw_overlay(Image.open(src).convert("RGB"), overlay, t).save(dst)
 
 
 def _parse_redo(spec, film, beats, spans):
@@ -294,6 +283,14 @@ def _scene_verdict(args, film, watcher, spans, work):
         log.warning(f"{len(rep['rejected'])} scene window(s) rejected; assembling anyway (SCENE_POLICY=warn)")
         return None
     attempt = getattr(args, "_scene_attempt", 0)
+    before = getattr(args, "_scene_rejected", None)
+    args._scene_rejected = len(rep["rejected"])
+    if before is not None and len(rep["rejected"]) >= before:
+        # the last repair round fixed nothing (the floating-cabin film: 11 rejected windows before and after, each
+        # round re-rendering most of the film): another round with the same inputs only burns another hour
+        log.warning(f"QUALITY WARNING: the repair round did not reduce the rejected windows ({before} -> "
+                    f"{len(rep['rejected'])}); no more repair rounds")
+        raise sv.SceneRejected(rep["rejected"], watcher.report_path)
     if watcher.policy == "fix" and attempt < int(os.getenv("SCENE_FIX_ATTEMPTS") or "2"):
         from agents.set_builder import fix_scenes, freeze_methods, restore_methods
         log.info(f"Auto-fix round {attempt + 1}: asking Claude to fix {len(rep['rejected'])} rejected window(s)")
@@ -429,6 +426,43 @@ def _kit_film(film):
     return bool(getattr(_sets.spec(film["set"]), "KIT", None))
 
 
+# Where each 2D sticker kind is drawn (agents/render.draw_overlay), in image units (x0, y0, x1, y1, y down).
+STICKER_BOX = {"label": (0.15, 0.10, 0.85, 0.18), "stat": (0.08, 0.13, 0.92, 0.34)}
+STICKER_CLASH = 0.15         # share of the beat's measured frames a 3D label may overlap the sticker
+
+
+def _overlap(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def drop_clashing_stickers(beats, spans, boxes_path):
+    """One text per moment: a sticker whose place is taken by one of the scene's 3D labels or insets (measured
+    frame by frame in Blender: engine/overlays.py) for more than STICKER_CLASH of its beat is dropped, the
+    scene's own label wins. The sandcastle film stacked a "2 m" sticker on DRY SAND and a yellow pill on
+    1% WATER. Returns the ids of the beats that lost their sticker."""
+    try:
+        boxes = {int(k): v for k, v in json.load(open(boxes_path, encoding="utf-8")).items()}
+    except (OSError, ValueError):
+        return []
+    dropped = []
+    for b, span in zip(beats, spans):
+        sticker = _overlay(b)
+        region = STICKER_BOX.get((sticker or {}).get("type"))
+        if not region:
+            continue
+        measured = [f for f in boxes if span["start"] + 1 <= f <= span["end"] + 1]
+        # (frames without any label are measured too, but text_boxes keeps only frames that HAVE labels)
+        n = max(1, (span["end"] - span["start"] + 1) // 2)          # settle() measures every 2nd frame
+        clash = sum(1 for f in measured if any(_overlap(region, box) for box in boxes[f]))
+        if clash > STICKER_CLASH * n:
+            log.info(f"Sticker dropped on '{b.get('id') or b.get('action')}': a 3D label/inset sits where it would "
+                     f"be drawn ({clash}/{n} measured frames) - {sticker}")
+            b.pop("overlay", None)
+            b["callouts"] = [c for c in b.get("callouts", []) if c is not sticker]
+            dropped.append(b.get("id") or b.get("action"))
+    return dropped
+
+
 def _cta_start(film, words, n_frames):
     """Frame where the closing question starts being spoken (it stays on screen until the end)."""
     q = [w.strip(".,!?;:\"'").lower() for w in film["cta"].split()]
@@ -559,13 +593,13 @@ def _replace_file(source, destination):
 
 
 def _fit_cap(voice_path, text, film):
-    """Keep every film inside FILM_MAX_SECONDS (65 s by default): if the voiced narration plus the tail is
-    longer, voice it again once, proportionally faster (up to MAX_SPEED); if even that cannot fit, stop
-    before any frame is rendered."""
-    cap = float(os.getenv("FILM_MAX_SECONDS") or 65)
+    """Keep a film inside FILM_MAX_SECONDS when it is set (off by default: scripts are sized by the voice's
+    measured pace): if the voiced narration plus the tail is longer, voice it again once, proportionally
+    faster (up to MAX_SPEED); if even that cannot fit, stop before any frame is rendered."""
+    cap = float(os.getenv("FILM_MAX_SECONDS") or 0)
     tail = film.get("tail", 0.8)
     duration = get_duration(voice_path)
-    if duration + tail <= cap:
+    if not cap or duration + tail <= cap:
         return duration
     base = float(os.getenv("VOICE_SPEED", "0.92"))
     speed = min(MAX_SPEED, base * duration / max(1.0, cap - tail - 0.4))
@@ -606,10 +640,11 @@ def _stream_durations(path):
 
 
 def _assert_file_cap(path):
-    """The encoded deliverable is the last authority: it must be complete and not one frame over the cap."""
-    cap = float(os.getenv("FILM_MAX_SECONDS") or 65)
+    """The encoded deliverable is the last authority: it must be complete and, with FILM_MAX_SECONDS set,
+    not one frame over the cap."""
+    cap = float(os.getenv("FILM_MAX_SECONDS") or 0)
     duration = get_duration(path)
-    if duration > cap:
+    if cap and duration > cap:
         raise FilmTooLong(f"final file is {duration:.2f}s; it passes the {cap:.0f}s cap")
     streams = _stream_durations(path)
     if "video" not in streams or "audio" not in streams:
@@ -620,7 +655,99 @@ def _assert_file_cap(path):
     return duration
 
 
+def _hold_actions(film, beats, words, duration, voice_path):
+    """Silence in the voice wherever a beat's line is shorter than its action's minimum seconds (the set spec),
+    so every action plays out on screen. Returns the shifted word timings and the new voice length."""
+    from agents.beats import action_holds, shift_words
+    if not film.get("set") or not film.get("action_hold", True):
+        return words, duration
+    from engine import sets as _sets
+    min_seconds = getattr(_sets.spec(film["set"]), "min_seconds", None)
+    if min_seconds is None:
+        return words, duration
+    holds = action_holds(beats, words, duration, film.get("tail", 0.8), min_seconds)
+    if not holds:
+        return words, duration
+    sr = 44100
+    x = read_pcm(voice_path, sr)
+    parts, last = [], 0
+    for at, pad in holds:
+        i = min(len(x), int(at * sr))
+        parts += [x[last:i], np.zeros(int(pad * sr), dtype=np.float32)]
+        last = i
+    parts.append(x[last:])
+    tmp = voice_path + ".hold.wav"
+    write_wav(tmp, np.concatenate(parts), sr)
+    os.replace(tmp, voice_path)                    # (WAV data under voice.mp3, as the Chatterbox voice already is)
+    log.info(f"Action holds: +{sum(p for _, p in holds):.1f}s over {len(holds)} beats, so each action reads "
+             f"({', '.join(f'{a:.1f}s+{p:.1f}' for a, p in holds)})")
+    return shift_words(words, holds), get_duration(voice_path)
+
+
+WORK_LOCK = ".make_film.lock"
+
+
+def _pid_alive(pid):
+    if pid <= 0:
+        return False
+    if os.name == "nt":                                # (os.kill(pid, 0) can change a Windows process's exit code)
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        handle = k32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(k32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code))) and code.value == 259
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(handle))
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def work_in_use(work):
+    """The pid of ANOTHER live make_film that holds this work dir (its frames are in use), else None."""
+    try:
+        pid = int(open(os.path.join(work, WORK_LOCK), encoding="utf-8").read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pid if pid != os.getpid() and _pid_alive(pid) else None
+
+
 def produce(args):
+    """produce_film() holding the film's work dir: a second make_film on the same film (a manual --redo while the
+    autopilot runs) and the autopilot's frame cleanup both wait for it instead of deleting frames it is using."""
+    film_source = getattr(args, "_film_json", args.film)
+    name = os.path.splitext(os.path.basename(film_source))[0] if film_source.endswith(".json") else film_source
+    work = os.path.join(PROJECT_ROOT, "output", f"{name}_work")
+    os.makedirs(work, exist_ok=True)
+    lock = os.path.join(work, WORK_LOCK)
+    other = work_in_use(work)
+    if other:
+        raise RuntimeError(f"another make_film (pid {other}) is rendering {name}; wait for it to finish")
+    try:
+        holder = int(open(lock, encoding="utf-8").read().split()[0])
+    except (OSError, ValueError, IndexError):
+        holder = None
+    mine = holder is None or (holder != os.getpid() and not _pid_alive(holder))   # (a repair re-render nests)
+    if mine:
+        open(lock, "w", encoding="utf-8").write(str(os.getpid()))
+    try:
+        return produce_film(args)
+    finally:
+        if mine:
+            try:
+                if open(lock, encoding="utf-8").read().split()[0] == str(os.getpid()):
+                    os.remove(lock)
+            except (OSError, IndexError):
+                pass
+
+
+def produce_film(args):
     """Voice → timings → Blender render → post. `args.film` is a film name in engine/films/ or a
     path to a film JSON (e.g. a script written by agents/showrunner.py). Returns the final mp4."""
     films = os.path.join(PROJECT_ROOT, "engine", "films")
@@ -643,9 +770,15 @@ def produce(args):
     # build-up explainers ("If you ...", agents/buildup.py) render with the cutaway runner but, like
     # evolution films, start on the first build step: no epilogue hook to render, no rewind.
     hookless = evolution or film.get("format") == "buildup"
-    film_py = os.path.join(films, "evolution_film.py" if evolution else
-                           "cutaway_film.py" if film.get("set") else f"{name}_film.py")
+    film_py = os.path.join(films, "evolution_film.py" if evolution else "cutaway_film.py")
     beats = film["beats"]
+    if film.get("set"):                               # one text per idea: the scene's own label wins over a sticker
+        from engine import sets as _sets
+        for b in beats:
+            acts = b.get("actions") or [b.get("action")]
+            if b.get("overlay") and _sets.repeats_label(b["overlay"], _sets.scene_labels(film["set"], acts)):
+                log.info(f"Sticker dropped on '{b.get('id')}': the scene already labels it ({b['overlay']})")
+                b.pop("overlay")
     work = os.path.join(PROJECT_ROOT, "output", f"{name}_work")
     os.makedirs(work, exist_ok=True)
 
@@ -660,11 +793,16 @@ def produce(args):
     # exact text even when reusing audio: an old overlong voice must be re-voiced or rejected, never reused.
     gap = film.get("beat_pause", 0.55)
     text = f' <break time="{gap:.2f}s" /> '.join(b["text"] for b in beats) if gap else " ".join(b["text"] for b in beats)
-    if not ((args.reuse_voice or args.remix) and os.path.exists(voice_path)):
+    fresh_voice = not ((args.reuse_voice or args.remix) and os.path.exists(voice_path))
+    if fresh_voice:
         tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
         _replace_file(tmp, voice_path)
     duration = _fit_cap(voice_path, text, film)
     words = transcribe_with_whisper(voice_path)
+    if fresh_voice:                                    # (a reused voice already carries its holds: same timings)
+        from agents import stage_writer
+        stage_writer.record_rate(sum(len(b["text"].split()) for b in beats), duration, route="cutaway")
+        words, duration = _hold_actions(film, beats, words, duration, voice_path)
     total = duration + film.get("tail", 0.8)      # time after the last word (let the ending land)
     slots = align_beats(beats, words, total)
     total_frames = sum(s["frames"] for s in slots)
@@ -756,6 +894,10 @@ def produce(args):
         args.preview = args.frames = None
     elif not (args.preview or args.frames or resume):
         shutil.rmtree(os.path.join(work, "frames"), ignore_errors=True)
+    if film.get("set"):     # the set's BlenderKit props (cutaway-bk sets only; a no-op for sets that build all)
+        from agents import blenderkit
+        blenderkit.resolve_set_props(os.path.join(PROJECT_ROOT, "engine", "sets", f"{film['set']}.py"),
+                                     story=str(film.get("title", "")))
     if not redo:
         log.info("Rendering in Blender...")
     cmd = [BLENDER, "--background", "--factory-startup", "--python", film_py, "--", film_json, timings_path, work]
@@ -809,6 +951,8 @@ def produce(args):
 
     # ---- stickers (spread over all CPU cores: one PNG load/draw/save per frame adds up) ----
     stickers = not _kit_film(film)
+    if stickers:
+        drop_clashing_stickers(beats, spans, os.path.join(work, "text_boxes.json"))
     cta = film.get("cta") if stickers else None
     cta_from = _cta_start(film, words, len(frames)) if cta else len(frames)
     comp = os.path.join(work, "comp")                  # final frames = raw render + stickers
@@ -833,9 +977,12 @@ def produce(args):
             except OSError:
                 shutil.copyfile(frames[i], dst(i))
     if jobs:
-        from concurrent.futures import ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
-            list(pool.map(_sticker_job, jobs, chunksize=16))
+        # Threads, never processes: on Windows each pool process re-imports the calling script, and a script that
+        # calls produce() without a __main__ guard started a whole render per worker (the oil film: 23 duplicate
+        # renders deleting each other's frames). PNG decode/encode releases the GIL, so threads still scale.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as pool:
+            list(pool.map(_sticker_job, jobs))
 
     subprocess.run([FFMPEG, "-y", "-framerate", str(FPS), "-i", os.path.join(comp, "f_%04d.png"),
                     "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-pix_fmt", "yuv420p", video],
@@ -845,6 +992,18 @@ def produce(args):
 
 # Effects sit well under the narration: the voice must always win.
 SFX_GAIN, WHOOSH_GAIN = 0.32, 0.45
+
+
+def _ambience_scenes(film, beats, spans):
+    """[(start_s, end_s, where)] per beat from its set action (sfx.scene_ambience), or None (one outdoor bed)."""
+    if not film.get("set"):
+        return None
+    from engine import sets as _sets
+    sp = _sets.spec(film["set"])
+    actions, default = getattr(sp, "ACTIONS", {}), sfx.set_ambience(getattr(sp, "SUBJECT", ""))
+    return [(s["start"] / FPS, (s["end"] + 1) / FPS,
+             sfx.scene_ambience(actions.get(b.get("action") or (b.get("actions") or [""])[0], {}), default))
+            for b, s in zip(beats, spans)]
 
 
 def _finish(args, film, beats, spans, words, total, work, voice_path, video):
@@ -863,17 +1022,18 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
         events.append({"frame": r["start"] + 1, "kind": "scratch", "duration": 0, "gain": 1.0})
         events.append({"frame": r["start"] + hold + 1, "kind": "rewind",
                        "duration": r["end"] - r["start"] - hold, "gain": 1.0})
-    synced = _read_wav(sfx.render_events(events, FPS, total, os.path.join(work, "sfx.wav")))
+    synced = _read_wav(sfx.render_events(events, FPS, total, os.path.join(work, "sfx.wav"),
+                                         scenes=_ambience_scenes(film, beats, spans)))
     n = max(len(whoosh), len(synced))
     fx = np.zeros(n)
     fx[:len(whoosh)] += whoosh * WHOOSH_GAIN
     fx[:len(synced)] += synced * SFX_GAIN
-    fx_path = _write_wav(os.path.join(work, "fx_all.wav"), fx)
+    fx_path = write_wav(os.path.join(work, "fx_all.wav"), fx, SR)
     music = None
     if film.get("music") == "synth":                       # generated bed (no licensed tracks needed)
         # the whole film's length: a shorter bed is looped by the mixer, and its fade-out/in plus the
         # chord jump at the seam were audible ~60 s into every 90 s film
-        music = _write_wav(os.path.join(work, "music.wav"), sfx.music(total + 0.5))
+        music = write_wav(os.path.join(work, "music.wav"), sfx.music(total + 0.5), SR)
     mixed = mix_audio(voice_path, fx_path, os.path.join(work, "mix.m4a"), total, music=music)
     merged = merge_audio_video(video, mixed)
 

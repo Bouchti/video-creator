@@ -182,9 +182,15 @@ def _token_times(script_tokens: list, words: list, speech_end: float) -> list:
 
     times = [None] * len(script_tokens)
     sm = SequenceMatcher(None, script_tokens, w_tokens, autojunk=False)
-    for a, b, size in sm.get_matching_blocks():
-        for k in range(size):
-            times[a + k] = w_times[b + k]
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            for k in range(i2 - i1):
+                times[i1 + k] = w_times[j1 + k]
+        elif op == "replace":
+            # what Whisper heard in their place ("bulkheads" as "bulk heads"): interpolating across the pause
+            # before them put the cut half a second (or a whole action hold) too early
+            for k in range(i2 - i1):
+                times[i1 + k] = w_times[j1 + (k * (j2 - j1)) // (i2 - i1)]
 
     anchors = [(-1, 0.0)] + [(i, t) for i, t in enumerate(times) if t is not None]         + [(len(script_tokens), speech_end)]
     for (i0, t0), (i1, t1) in zip(anchors, anchors[1:]):
@@ -232,6 +238,57 @@ def align_beats(beats: list, words: list, total_duration: float) -> list:
         f0, f1 = frame_starts[i], max(frame_starts[i + 1], frame_starts[i] + 1)
         slots.append({"start": f0 / FPS, "end": f1 / FPS, "frames": f1 - f0})
     return slots
+
+
+MAX_HOLD_SECONDS = 3.0   # silence added to one beat, at most: longer holds read as dead air
+
+
+def action_holds(beats: list, words: list, voice_seconds: float, tail: float, min_seconds,
+                 max_hold: float = MAX_HOLD_SECONDS) -> list:
+    """[(at, pad)]: seconds of silence to insert into the voice at `at` so every beat lasts at least
+    min_seconds(beat), the time its action needs to read. Every action is timed to the voice, so a fast
+    voice played the tunnel film's fixes in half their minimum time (2.7 s for a 6 s action).
+
+    The silence goes in the pause after the beat's last word (the action plays on once the line is said);
+    for the last beat it extends the end of the voice. Holds are applied to the voice and to the word
+    timings (shift_words) together."""
+    total = voice_seconds + tail
+    slots = align_beats(beats, words, total)
+    script_tokens, beat_first = [], []
+    for beat in beats:
+        beat_first.append(len(script_tokens))
+        script_tokens.extend(_norm_words(str(beat.get("text") or "")))
+    times = _token_times(script_tokens, words, _speech_end(words, total))
+    spoken = sorted((float(w.get("start") or 0.0), float(w.get("end") or w.get("start") or 0.0)) for w in words)
+    gaps = [(a_end, b_start) for (_, a_end), (b_start, _) in zip(spoken, spoken[1:]) if b_start > a_end]
+    holds = []
+    for k, (beat, slot) in enumerate(zip(beats, slots)):
+        pad = min(max_hold, float(min_seconds(beat) or 0) - (slot["end"] - slot["start"]))
+        if pad < 0.1:
+            continue
+        if k + 1 < len(beats):
+            # the beat pause is the longest silence near the cut; the cut itself may be an estimate (Whisper
+            # heard "Bulk heads" for "bulkheads"), so the silence must still land before it, in this beat
+            cut = slot["end"]
+            before = [g for g in gaps if (g[0] + g[1]) / 2 < cut and g[1] >= cut - 1.5]
+            if before:
+                a, b = max(before, key=lambda g: g[1] - g[0])
+                at = (a + b) / 2
+            else:                                   # no pause found: just before the cut
+                at = cut - 0.01
+        else:
+            at = voice_seconds
+        holds.append((round(at, 3), round(pad, 3)))
+    return holds
+
+
+def shift_words(words: list, holds: list) -> list:
+    """Word timings after the holds' silences were inserted into the voice."""
+    out = []
+    for w in words:
+        shift = sum(pad for at, pad in holds if at <= float(w.get("start") or 0.0))
+        out.append(dict(w, start=float(w.get("start") or 0.0) + shift, end=float(w.get("end") or 0.0) + shift))
+    return out
 
 
 def script_word_timings(beats: list, words: list, total_duration: float) -> list:

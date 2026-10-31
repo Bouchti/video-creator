@@ -24,3 +24,14 @@ class PostTextTests(unittest.TestCase):
         self.assertIn("Would you ride it?", text)
         self.assertIn("#boats", text)
         self.assertNotRegex(text.lower(), r"\b(subscribe|like and)\b")
+        self.assertNotIn("CREDITS", text)
+
+    def test_credits_and_sources_are_in_the_post(self):
+        film = dict(FILM, credits=["Music: Kevin MacLeod, CC BY 4.0"],
+                    research_sources=[{"title": "USGS", "url": "https://usgs.gov/x"}, {"title": "no url"}])
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(post_text, "_ask_claude", side_effect=RuntimeError("no claude")):
+            text = open(post_text.write(film, os.path.join(d, "film.mp4")), encoding="utf-8").read()
+        self.assertIn("- Music: Kevin MacLeod, CC BY 4.0", text)
+        self.assertIn("- USGS: https://usgs.gov/x", text)
+        self.assertNotIn("no url", text)

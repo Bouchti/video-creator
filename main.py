@@ -51,42 +51,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-DEFAULT_TOPIC = "The hidden science behind why ocean waves never stop moving"
 DEFAULT_TONE = "mysterious"
 DEFAULT_VOICE = "mysterious"
 DEFAULT_SOURCE = "local-ai"
 
 OUTPUT_DIR = get_output_dir()
-
-# Older names for a source that now runs through another pipeline.
-SOURCE_ALIASES = {"comfy": "local-ai"}
-
-
-def normalize_source(source: str) -> str:
-    """Map legacy source names onto the pipeline that now handles them."""
-    return SOURCE_ALIASES.get(source, source)
-
-
-def write_post_notes(video_path: str, script: dict, credits: list) -> str:
-    """Write title/description/hashtags + photo credits next to the video.
-
-    CC BY / BY-SA photos require attribution — paste the credits into the post
-    description (or pinned comment) when publishing.
-    """
-    notes_path = os.path.splitext(video_path)[0] + ".txt"
-    lines = [script.get("video_title", ""), "", script.get("description", ""), "",
-             " ".join(script.get("hashtags", []))]
-    if credits:
-        lines += ["", "Photo credits (Wikimedia Commons):"] + [f"- {c}" for c in credits]
-    sources = script.get("research_sources") or []
-    if sources:
-        lines += ["", "Research sources:"] + [
-            f"- {source.get('title', 'Source')}: {source.get('url')}"
-            for source in sources if source.get("url")
-        ]
-    with open(notes_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    return notes_path
 
 
 def run_pipeline(
@@ -108,10 +77,6 @@ def run_pipeline(
     started = datetime.now()
     # Local-ai fast mode fits the whole run, topic to final video, into LOCAL_VIDEO_BUDGET_MINUTES.
     os.environ["PIPELINE_STARTED_AT"] = str(started.timestamp())
-    if source in SOURCE_ALIASES:
-        log.info(f"Source '{source}' runs through '{normalize_source(source)}' "
-                 f"(MiniMax H3 first, Wan fallback).")
-        source = normalize_source(source)
     if source == "local-ai":
         # Fail before the paid script step, not after it.
         from local_video.planner import validate_duration
@@ -188,6 +153,25 @@ def run_pipeline(
 
         log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
 
+        if source == "director":
+            # Max and his kids on the generic stage: the plan (script + staging as data) is written and
+            # checked by agents/stage_writer.py, then the director films, scores, mixes and composes it.
+            log.info("\n[STAGE 1-6] Director: stage plan -> BlenderKit assets -> film")
+            from agents import director
+            try:
+                final_path, plan = director.make(topic, research, selection.get("angle") if selection else None,
+                                                 (selection or {}).get("grounding"))
+            except Exception as e:
+                log.error(f"Director failed for this topic: {e}", exc_info=True)
+                failure = {"success": False, "stage_failed": "director", "topic": topic, "error": str(e)}
+                given_up.append(topic)
+                continue
+            script = {"video_title": plan["title"], "description": plan.get("caption", ""),
+                      "hashtags": plan.get("hashtags", []), "spoken_script": director.narration(plan),
+                      "quality_warnings": plan.get("quality_warnings", []), "director_final": final_path,
+                      "credits": plan.get("credits", [])}
+            break
+
         log.info("\n[STAGE 1] Script generation + evaluation")
         angle = selection.get("angle") if selection else None
         # Claims the topic grounder already struck out. The writer otherwise re-supplies them from its
@@ -214,8 +198,10 @@ def run_pipeline(
 
     log.info(f"\n[STAGE 2] Video generation ({source})")
 
-    if source == "pexels":
-        from agents.editor_pexels import process_video
+    if source == "director":
+        process_video = None
+    elif source == "pexels":
+        from agents.editor_beats import process_video
     elif source == "local-ai":
         from agents.editor_local_ai import process_video
     elif source == "unreal":
@@ -225,7 +211,9 @@ def run_pipeline(
         return {"success": False, "stage_failed": "source_invalid", "topic": topic}
 
     try:
-        if source == "local-ai":
+        if source == "director":
+            final_path = script["director_final"]
+        elif source == "local-ai":
             final_path = process_video(
                 script,
                 voice=voice,
@@ -258,7 +246,7 @@ def run_pipeline(
     safe_title = "".join(c if c.isalnum() else "_" for c in script["video_title"])[:60]
     output_path = os.path.join(OUTPUT_DIR, f"{ts}_{source}_{safe_title}.mp4")
     try:
-        if source in ("local-ai", "unreal"):
+        if source in ("local-ai", "unreal", "director"):
             # The durable project keeps its canonical final render; preserve the
             # legacy top-level output convention with a copy.
             shutil.copy2(final_path, output_path)
@@ -269,11 +257,7 @@ def run_pipeline(
         output_path = str(final_path)
     # The video exists from here on; nothing below may turn a finished render into a failed run.
     credits = script.get("credits") or []
-    notes_path = post_text_path = None
-    try:
-        notes_path = write_post_notes(output_path, script, credits)
-    except Exception as e:
-        log.error(f"Writing post notes failed: {e}", exc_info=True)
+    post_text_path = None
     try:
         from agents.post_text import write as write_post_text
         post_text_path = write_post_text(script, output_path)
@@ -327,7 +311,6 @@ def run_pipeline(
             "word_count": len(script["spoken_script"].split()),
             "credits": credits,
         },
-        "notes_path": notes_path,
         "post_text_path": post_text_path,
         "publishing": publishing,
         "quality_warnings": quality_warnings,
@@ -341,10 +324,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
                         help="Custom topic (optional). If not provided, Leader Agent picks a trending one.")
-    parser.add_argument("--source", choices=["cutaway", "explainer", "evolution", "pexels", "local-ai", "unreal"],
+    parser.add_argument("--source", choices=["cutaway", "cutaway-bk", "explainer", "evolution", "pexels", "local-ai",
+                                             "unreal", "director"],
                         default=DEFAULT_SOURCE,
                         help="local-ai (durable MiniMax/Wan production; default), cutaway (3D cross-section "
-                             "story starring Max: trial and error, critiqued and rendered), "
+                             "story starring Max: trial and error, critiqued and rendered), cutaway-bk (the same "
+                             "Max stories, with whole objects taken from BlenderKit and only the mechanism built), "
                              "explainer (no-hero 3D cutaway explainer in the @youbuiltit format: the build in "
                              "physical order, problem -> fix; builds a new set when none fits), "
                              "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
@@ -375,13 +360,14 @@ if __name__ == "__main__":
     if args.publish_live and not args.publish:
         parser.error("--publish-live requires at least one --publish PLATFORM")
 
-    if args.source in ("evolution", "cutaway", "explainer"):
+    if args.source in ("evolution", "cutaway", "cutaway-bk", "explainer"):
         # Every downloadable library (CC0 assets, the compositor's npm packages) is fetched before a 3D run
         # starts, so a fresh clone is ready to produce; later runs skip this in milliseconds. The local-ai,
         # unreal and pexels routes use none of them, so they never wait on the ~45 GB first fetch.
         from agents.libraries import ensure as ensure_libraries
         ensure_libraries()
 
+    if args.source in ("evolution", "cutaway", "cutaway-bk", "explainer"):
         # The 3D pipelines run under the autopilot: script → voice → exact-timing low-res rehearsal
         # (every ~3 s window must pass) → Blender production render with free technical rechecks →
         # sound + captions → final check. This gate is shared by Max cutaways, no-hero explainers and
@@ -425,7 +411,6 @@ if __name__ == "__main__":
         print(f"  Source: {result['source']}")
         print(f"  Video:  {result['video_path']}")
         print(f"  Title:  {result['title']}")
-        print(f"  Notes:  {result['notes_path']}")
         print(f"  Posts:  {result['post_text_path']}")
         for package in result.get("publishing", []):
             print(f"  Publish ({package['platform']}): {package['status']}")

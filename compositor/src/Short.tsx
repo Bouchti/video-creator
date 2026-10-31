@@ -2,7 +2,8 @@ import React from 'react';
 import {AbsoluteFill, Audio, Freeze, interpolate, OffthreadVideo, random, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {fontFamily} from './font';
 import {Captions} from './Captions';
-import {CalloutCard, ChecklistCard, PinnedLabel, TitleCard} from './Overlays';
+import {XrayDiagram} from './diagram/Xray';
+import {CalloutCard, ChecklistCard, ExplainArrow, PinnedLabel, TitleCard} from './Overlays';
 import {DEFAULT_STYLE, PunchIn, Rewind, ShortProps} from './types';
 
 // Punch-in zoom on the beauty pass (towards a focus point), sprung in and out.
@@ -98,6 +99,12 @@ export const Short: React.FC<ShortProps> = (props) => {
 
       {(props.labels ?? []).map((l, i) => (
         <PinnedLabel key={`l${i}`} label={l} track={l.anchor ? props.anchors?.[l.anchor] : undefined} style={style} />
+      ))}
+      {(props.diagrams ?? []).map((d, i) => (
+        <XrayDiagram key={`d${i}`} cue={d} track={d.anchor ? props.anchors?.[d.anchor] : undefined} />
+      ))}
+      {(props.arrows ?? []).map((a, i) => (
+        <ExplainArrow key={`a${i}`} arrow={a} track={props.anchors?.[a.anchor]} style={style} />
       ))}
       {(props.callouts ?? []).map((c, i) => (
         <CalloutCard key={`c${i}`} callout={c} style={style} />

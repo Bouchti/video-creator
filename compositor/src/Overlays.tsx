@@ -2,7 +2,7 @@ import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {fontFamily, outline} from './font';
 import {clamp, SAFE, ZONES} from './safe';
-import {Callout, Checklist, Label, Style, Title, Track} from './types';
+import {Arrow, Callout, Checklist, Label, Style, Title, Track} from './types';
 
 const pop = (frame: number, from: number, to: number, fps: number) => {
   const inn = spring({frame: frame - from, fps, config: {damping: 12, mass: 0.6}});
@@ -233,6 +233,96 @@ export const ChecklistCard: React.FC<{list: Checklist; style: Style}> = ({list, 
           );
         })}
       </div>
+    </AbsoluteFill>
+  );
+};
+
+// An explanation arrow on a prop (which way it leans, turns, is pushed, spins): a ring pulses on the object,
+// then a thick arrow draws itself across it and its caption pops beside the head. It follows the object.
+export const ExplainArrow: React.FC<{arrow: Arrow; track?: Track; style: Style}> = ({arrow, track, style}) => {
+  const frame = useCurrentFrame();
+  const {fps, width, height} = useVideoConfig();
+  if (frame < arrow.from || frame > arrow.to) return null;
+  const p = at(track, frame);
+  if (!p) return null;
+  const k = pop(frame, arrow.from, arrow.to, fps);
+  const draw = interpolate(frame, [arrow.from + 4, arrow.from + 18], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const cx = clamp(p[0] * width, width * (SAFE.left + 0.12), width * (1 - SAFE.right - 0.12));
+  // ON the object (labels stop at labelMaxY; an arrow up there floated over the house, not the bike)
+  const cy = clamp(p[1] * height, height * (SAFE.top + 0.1), height * ZONES.arrowMaxY);
+  const L = width * 0.36;
+  const stroke = width * 0.022;
+  let d: string;
+  let head: [number, number, number]; // x, y, direction (rad)
+  if (arrow.dir === 'cw' || arrow.dir === 'ccw') {
+    const r = width * 0.15;
+    const sweep = 1.5 * Math.PI * draw;
+    const a0 = -Math.PI * 0.75;
+    const s = arrow.dir === 'cw' ? 1 : -1;
+    const a1 = a0 + s * sweep;
+    const x0 = cx + r * Math.cos(a0);
+    const y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1);
+    const y1 = cy + r * Math.sin(a1);
+    d = `M ${x0} ${y0} A ${r} ${r} 0 ${sweep > Math.PI ? 1 : 0} ${s > 0 ? 1 : 0} ${x1} ${y1}`;
+    head = [x1, y1, a1 + (s * Math.PI) / 2];
+  } else {
+    const v = {left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1]}[arrow.dir];
+    const x0 = cx - (v[0] * L) / 2;
+    const y0 = cy - (v[1] * L) / 2;
+    const x1 = x0 + v[0] * L * draw;
+    const y1 = y0 + v[1] * L * draw;
+    d = `M ${x0} ${y0} L ${x1} ${y1}`;
+    head = [x1, y1, Math.atan2(v[1], v[0])];
+  }
+  const hs = stroke * 2.2;
+  const tip = (dx: number, dy: number) =>
+    `${head[0] + dx * Math.cos(head[2]) - dy * Math.sin(head[2])},${head[1] + dx * Math.sin(head[2]) + dy * Math.cos(head[2])}`;
+  const tri = `${tip(hs * 0.9, 0)} ${tip(-hs * 0.5, hs * 0.8)} ${tip(-hs * 0.5, -hs * 0.8)}`;
+  const ring = interpolate(frame, [arrow.from, arrow.from + 14], [0.4, 1.25], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const ringFade = interpolate(frame, [arrow.from, arrow.from + 14], [1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const size = height * 0.026;
+  const tx = clamp(head[0], width * (SAFE.left + 0.14), width * (1 - SAFE.right - 0.14));
+  const ty = clamp(head[1] + (arrow.dir === 'down' ? size * 2 : -size * 2), height * ZONES.labelMinY, height * ZONES.labelMaxY);
+  return (
+    <AbsoluteFill style={{opacity: k}}>
+      <svg width={width} height={height} style={{position: 'absolute', left: 0, top: 0}}>
+        <circle cx={cx} cy={cy} r={width * 0.12 * ring} fill="none" stroke="white" strokeWidth={8} opacity={ringFade} />
+        <path d={d} fill="none" stroke="#111" strokeWidth={stroke + 10} strokeLinecap="round" opacity={0.55} />
+        <path d={d} fill="none" stroke={style.accent} strokeWidth={stroke} strokeLinecap="round" />
+        {draw > 0.05 ? <polygon points={tri} fill={style.accent} stroke="#111" strokeWidth={5} strokeLinejoin="round" /> : null}
+      </svg>
+      {arrow.text && draw > 0.6 ? (
+        <div
+          style={{
+            position: 'absolute',
+            left: tx,
+            top: ty,
+            transform: `translate(-50%, -50%) scale(${interpolate(draw, [0.6, 1], [0.6, 1])})`,
+            padding: `${size * 0.22}px ${size * 0.55}px`,
+            background: style.accent,
+            borderRadius: size,
+            fontFamily,
+            fontWeight: 900,
+            fontSize: size,
+            whiteSpace: 'nowrap',
+            textTransform: 'uppercase',
+            color: '#111',
+            boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+          }}
+        >
+          {arrow.text}
+        </div>
+      ) : null}
     </AbsoluteFill>
   );
 };

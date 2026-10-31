@@ -2,6 +2,8 @@
 import os
 import tempfile
 import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from unittest.mock import patch
 
 from agents import set_builder as sb
@@ -115,17 +117,34 @@ class LoopTests(FreezeTests):
         self.assertTrue(status["accepted"])
         self.assertIn('"one v2"', open(self.path, encoding="utf-8").read())
 
-    def test_two_repairs_in_a_row_that_change_nothing_stop_the_build(self):
+    def test_two_repairs_in_a_row_that_change_nothing_stop_the_build_with_its_best_draft(self):
         self._files()
         with patch.object(sb, "static_checks", return_value=[]), \
                 patch.object(sb, "preview_render", return_value=""), \
                 patch.object(sb, "review_preview",
                              return_value=[_report(1, "one", True), _report(2, "two", False)]), \
                 patch.object(sb, "contact_sheet", return_value=None), \
+                patch.object(sb, "register") as reg, \
                 patch.object(sb, "fix_scenes", side_effect=sb.RepairNotApplied("no changes")) as fix:
-            with self.assertRaises(sb.RepairNotApplied):
-                sb.build_set("demo", "demo_story", rounds=4, story=True)
+            status = sb.build_set("demo", "demo_story", rounds=4, story=True)
         self.assertEqual(fix.call_count, 2)
+        # the run goes on with the draft instead of ending without a film
+        self.assertFalse(status["accepted"])
+        self.assertTrue(status["draft"])
+        self.assertEqual((status["accepted_beats"], status["beats"]), (1, 2))
+        self.assertIn("beat 2 [two]: missing", status["warnings"])
+        reg.assert_called_once_with("demo_story", "AVAILABLE")
+
+    def test_a_set_that_never_rendered_has_no_draft_to_hand_over(self):
+        self._files()
+        with patch.object(sb, "static_checks", return_value=[]), \
+                patch.object(sb, "preview_render", return_value="Traceback: boom"), \
+                patch.object(sb, "claude_agent", return_value=""), \
+                patch.object(sb, "register") as reg:
+            status = sb.build_set("demo", "demo_story", rounds=2, story=True)
+        self.assertFalse(status["accepted"])
+        self.assertFalse(status.get("draft"))
+        reg.assert_not_called()
 
 
 if __name__ == "__main__":
@@ -216,7 +235,7 @@ class MustSeeBackfillTests(FreezeTests):
         spec_path = os.path.join(self.root, "engine", "sets", "demo_story_spec.py")
         open(spec_path, "w", encoding="utf-8").write(SPEC)
         answer = {"actions": [{"action": "hook", "must_see": ["jet"]}, {"action": "one", "must_see": ["levee"]}]}
-        with patch("agents.showrunner._call", return_value=answer) as call, \
+        with patch("agents.llm.ask", return_value=answer) as call, \
                 patch.object(sb, "claude_agent", side_effect=AssertionError("no agent turn")):
             self.assertTrue(sb.backfill_must_see("demo_story"))
         self.assertEqual(call.call_args.kwargs["effort"], "low")
@@ -228,10 +247,101 @@ class ExtrasBackfillTests(FreezeTests):
         spec_path = os.path.join(self.root, "engine", "sets", "demo_story_spec.py")
         open(spec_path, "w", encoding="utf-8").write(SPEC)
         answer = {"actions": [{"action": "one", "extras": "the duck surfs the leak"}, {"action": "hook", "extras": ""}]}
-        with patch("agents.showrunner._call", return_value=answer), \
+        with patch("agents.llm.ask", return_value=answer), \
                 patch.object(sb, "claude_agent", side_effect=AssertionError("no agent turn")):
             self.assertTrue(sb.backfill_extras("demo_story"))
         ns = {}
         exec(compile(open(spec_path, encoding="utf-8").read(), "spec", "exec"), ns)
         self.assertEqual(ns["ACTIONS"]["one"]["extras"], "the duck surfs the leak")
         self.assertNotIn("extras", ns["ACTIONS"]["hook"])
+
+
+PATCHED_SET = '''import math
+
+SPEED = 1.0
+
+
+def helper(x):
+    return x
+
+
+class DemoStorySet:
+    def a_one(self, i, f0, f1):
+        return "one v1"
+
+    def a_two(self, i, f0, f1):
+        return "two v1"
+'''
+
+
+class RepairPatchTests(unittest.TestCase):
+    """A repair writes only what changes (a 2,000-line rewrite took 10+ minutes per turn)."""
+
+    def setUp(self):
+        self.path = os.path.join(tempfile.mkdtemp(), "demo_story.py")
+        open(self.path, "w", encoding="utf-8").write(PATCHED_SET)
+
+    def test_methods_helpers_constants_and_imports_are_spliced_in_by_name(self):
+        patch_src = '''import random
+
+SPEED = 2.5
+
+
+def helper(x):
+    return 2 * x
+
+
+def new_helper():
+    return random.random()
+
+
+class Patch:
+    def a_two(self, i, f0, f1):
+        return "two v2"
+
+    def a_three(self, i, f0, f1):
+        return helper(3)
+'''
+        names = sb.apply_patch(self.path, patch_src)
+        src = open(self.path, encoding="utf-8").read()
+        self.assertEqual(set(names), {"import random", "SPEED", "helper", "new_helper", "a_two", "a_three"})
+        self.assertIn('return "one v1"', src)                    # untouched
+        self.assertIn('return "two v2"', src)
+        self.assertNotIn('"two v1"', src)
+        self.assertEqual(src.count("SPEED ="), 1)
+        ns = {}
+        exec(compile(src, self.path, "exec"), ns)
+        s = ns["DemoStorySet"]()
+        self.assertEqual((s.a_two(0, 0, 0), s.a_three(0, 0, 0), ns["SPEED"]), ("two v2", 6, 2.5))
+        self.assertTrue(src.index("def new_helper") < src.index("class DemoStorySet"))
+
+    def test_a_broken_patch_leaves_the_set_as_it_was(self):
+        with self.assertRaises(sb.RepairNotApplied):
+            sb.apply_patch(self.path, "class Patch:\n    def a_two(self:\n        pass\n")
+        self.assertEqual(open(self.path, encoding="utf-8").read(), PATCHED_SET)
+
+
+class ReviewPreviewRunsTests(unittest.TestCase):
+    """review_preview was always mocked, so a name the backend cleanup removed (sv._backend) stopped a live run
+    after the set design. Run it for real: only the paid reviewer and the Blender measurement are mocked."""
+
+    def test_the_preview_review_runs_end_to_end(self):
+        import shutil
+        set_id = "immersed_undersea_tunnel_con_story"
+        src = os.path.join(ROOT, "output", "sets", set_id)
+        stills = sorted(f for f in os.listdir(src) if f.startswith("preview_")) if os.path.isdir(src) else []
+        if not stills or not os.path.isfile(os.path.join(src, "timings.json")):
+            self.skipTest("no preview stills of the tunnel set on this machine")
+        work = tempfile.mkdtemp()
+        for f in stills + ["timings.json"]:
+            shutil.copy2(os.path.join(src, f), work)
+
+        def review(items, subject):
+            return {w["window"]: {"valid": True, "fatal_problems": [], "problems": [], "fix": "",
+                                  "average_score": 8} for w, _ in items}
+        with patch.object(sb, "qa_check", return_value={}), \
+                patch("agents.scene_validator.review_batch", side_effect=review), \
+                patch("agents.scene_validator.technical_check", return_value={"valid": True}):
+            reports = sb.review_preview(set_id, work)
+        self.assertTrue(reports)
+        self.assertTrue(all(r.get("valid") for r in reports))

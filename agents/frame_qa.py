@@ -10,7 +10,8 @@ from PIL import Image
 
 FLICKER_MAX = 1.5        # % of pixels allowed to strobe between consecutive frames
 PAN_MAX = 0.015          # frame widths per frame: faster than this, a pan without motion blur stutters
-COLORFUL_MIN = 40.0      # below this a frame reads as washed out on a phone
+COLORFUL_MIN = 65.0      # below this a cartoon frame reads as washed out on a phone (AgX frames scored ~50)
+HIGHLIGHT_MIN = 0.8      # the brightest 2 % of a frame must reach this (AgX capped them at 0.71: grey, faded)
 
 
 def _gray(img, size=(270, 480)):
@@ -52,17 +53,6 @@ def flicker(frames, threshold=8.0):
     return max((float(_spikes(g, i, threshold).mean() * 100) for i in range(1, len(g) - 1)), default=0.0)
 
 
-def flicker_map(frames, threshold=8.0):
-    """Which third of the frame strobes most (top / middle / bottom), for the warning text."""
-    g = [_gray(f) for f in frames]
-    acc = np.zeros_like(g[0])
-    for i in range(1, len(g) - 1):
-        acc += _spikes(g, i, threshold)
-    h = acc.shape[0]
-    parts = {"top": acc[: h // 3].mean(), "middle": acc[h // 3: 2 * h // 3].mean(), "bottom": acc[2 * h // 3:].mean()}
-    return max(parts, key=parts.get)
-
-
 def colorfulness(img):
     if isinstance(img, str):
         img = Image.open(img)
@@ -75,3 +65,32 @@ def colorfulness(img):
 def pan_speed(frames, size=(540, 960)):
     g = [_gray(f, size) for f in frames]
     return max((max(abs(v) for v in _shift(g[i + 1], g[i])) / size[0] for i in range(len(g) - 1)), default=0.0)
+
+
+def scan(frames, size=(90, 160), threshold=12.0, cut_level=40.0):
+    # coarse on purpose: real flicker (a pop, a one-frame glitch, a jittering actor) survives downscaling,
+    # while sub-pixel texture motion under a slow zoom averages away (it read as 2-9 % "strobe" at 180 px)
+    """Every frame, not samples: [(frame_no, strobe %, pan in frame widths)] (frame_no is 1-based).
+    A cut (the whole picture changes) is neither flicker nor a pan, so it reads as (0, 0)."""
+    out = []
+    prev = cur = None
+    for k, path in enumerate(frames):
+        nxt = _gray(path, size)
+        if cur is not None and prev is not None:
+            a, b = np.abs(cur - prev).mean(), np.abs(cur - nxt).mean()
+            if a > cut_level or b > cut_level:
+                out.append((k, 0.0, 0.0))
+            else:
+                strobe = float(_spikes([prev, cur, nxt], 1, threshold).mean() * 100)
+                pan = max(abs(v) for v in _shift(nxt, cur)) / size[0]
+                out.append((k, strobe, pan))
+        prev, cur = cur, nxt
+    return out
+
+
+def highlights(img):
+    """Brightness (0..1) of the brightest 2 % of the frame: low means the picture never reaches white."""
+    if isinstance(img, str):
+        img = Image.open(img)
+    x = np.asarray(img.convert("RGB").resize((270, 480)), dtype=np.float32) / 255
+    return float(np.percentile(x.mean(axis=2), 98))

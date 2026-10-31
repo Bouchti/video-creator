@@ -11,7 +11,7 @@ from datetime import datetime
 
 import requests
 
-from config.paths import get_temp_dir
+from config.paths import PROJECT_ROOT, get_temp_dir
 from agents.media import get_duration
 
 log = logging.getLogger("pipeline")
@@ -39,8 +39,6 @@ def elevenlabs_keys() -> list[tuple[str, str]]:
             seen.add(key)
     return result
 
-
-_elevenlabs_keys = elevenlabs_keys
 
 
 def _rotation_start(size: int) -> int:
@@ -83,7 +81,12 @@ def _credits_left(key: str):
     return status["remaining"] if status["valid"] else None
 
 
-def _tts_with_rotation(url: str, payload: dict, characters: int):
+def elevenlabs_post(url: str, payload: dict, characters: int = 0, timeout: int = 60):
+    """POST to ElevenLabs with the first configured key that has `characters` credits left, starting from the
+    key that worked last time; a 429 is retried once and an unusable key moves on to the next one.
+    ELEVENLABS_DISABLED=1 refuses every call (test runs: the voice uses VOICE_ENGINE, effects the free libraries)."""
+    if os.getenv("ELEVENLABS_DISABLED") == "1":
+        raise RuntimeError("ElevenLabs is disabled (ELEVENLABS_DISABLED=1)")
     keys = elevenlabs_keys()
     if not keys:
         raise RuntimeError("No ElevenLabs key configured (ELEVENLABS_API_KEY, ELEVENLABS_API_KEY_2, ...)")
@@ -101,7 +104,7 @@ def _tts_with_rotation(url: str, payload: dict, characters: int):
             continue
         headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": key}
         for attempt in range(2):
-            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            response = requests.post(url, json=payload, headers=headers, timeout=timeout)
             if response.status_code == 429 and attempt == 0:
                 time.sleep(5)
                 continue
@@ -184,6 +187,9 @@ CHATTERBOX_STYLES = {                   # (exaggeration, cfg_weight): livelier a
     "energetic": (0.6, 0.4),
     "mysterious": (0.4, 0.5),
     "storyteller": (0.5, 0.5),
+    "playful": (0.75, 0.4),
+    "calm": (0.4, 0.5),
+    "dramatic": (0.8, 0.35),
 }
 
 _DRAMATIC = re.compile(r"\b(?:secret|danger\w*|grave|death|died|dead|kill\w*|never|nobody|suddenly|disaster|"
@@ -241,7 +247,11 @@ def _venv_python(name: str, env: str) -> str:
 
 
 def chatterbox_python() -> str:
-    return _venv_python("chatterbox", "CHATTERBOX_PYTHON")
+    """The Chatterbox venv: CHATTERBOX_PYTHON, else the per-user one, else tools/chatterbox/.venv (agents.libraries)."""
+    chosen = _venv_python("chatterbox", "CHATTERBOX_PYTHON")
+    bundled = os.path.join(PROJECT_ROOT, "tools", "chatterbox", ".venv", "Scripts" if os.name == "nt" else "bin",
+                           "python.exe" if os.name == "nt" else "python")
+    return chosen if os.getenv("CHATTERBOX_PYTHON") or os.path.isfile(chosen) or not os.path.isfile(bundled)         else bundled
 
 
 def chatterbox_available() -> bool:
@@ -379,13 +389,25 @@ def _chatterbox_voiceover(spoken_script: str, voice: str) -> str:
     if not chatterbox_available():
         raise RuntimeError(f"Chatterbox is not installed at {chatterbox_python()} (set CHATTERBOX_PYTHON)")
     exaggeration, cfg_weight = CHATTERBOX_STYLES.get(voice, CHATTERBOX_STYLES["energetic"])
-    return _run_local_tts("chatterbox", chatterbox_python(), {
+    path = _run_local_tts("chatterbox", chatterbox_python(), {
         "device": os.getenv("CHATTERBOX_DEVICE") or "auto",
         "exaggeration": float(os.getenv("CHATTERBOX_EXAGGERATION") or exaggeration),
         "cfg_weight": float(os.getenv("CHATTERBOX_CFG") or cfg_weight),
         "voice_prompt": os.getenv("CHATTERBOX_VOICE") or "",
         "sentence_pause": float(os.getenv("CHATTERBOX_SENTENCE_PAUSE") or 0.4),
         **({"style": voice} if os.getenv("CHATTERBOX_EXPRESSIVE", "1") != "0" else {})}, spoken_script)
+    # Chatterbox speaks ~3 words/s even with the beat pauses (the published films: ~2.4); a 0.92 tempo
+    # (VOICE_SPEED, as the other voices) keeps the lively read at ~2.73 words/s.
+    tempo = min(1.5, max(0.7, float(os.getenv("VOICE_SPEED") or 0.92)))
+    if abs(tempo - 1) > 0.005:
+        import subprocess
+
+        from agents.media import FFMPEG
+        slow = path[:-4] + "_tempo.mp3"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", path, "-filter:a", f"atempo={tempo:.3f}",
+                        "-c:a", "libmp3lame", "-b:a", "160k", slow], check=True)
+        os.replace(slow, path)
+    return path
 
 
 FREE_VOICES = {"kokoro": ("kokoro", "chatterbox", "edge"), "chatterbox": ("chatterbox", "edge"), "edge": ("edge",)}
@@ -415,6 +437,12 @@ def generate_voiceover(spoken_script: str, voice: str = "energetic") -> tuple[st
         return path, get_duration(path)
     fallback = (os.getenv("VOICE_FALLBACK") or "edge").strip().lower()
     free = fallback in FREE_VOICES
+    # VOICE_ENGINE: elevenlabs (default, premium) | chatterbox / kokoro (free, local) | edge (free, online).
+    # A free engine chosen here speaks first and the next free voice covers it, so a run never loses its voice.
+    engine = (os.getenv("VOICE_ENGINE") or "elevenlabs").strip().lower()
+    if engine in FREE_VOICES:
+        path = _fallback_voiceover(spoken_script, voice, engine)
+        return path, get_duration(path)
     if not elevenlabs_keys() and provider != "elevenlabs":
         if free:
             path = _fallback_voiceover(spoken_script, voice, fallback)
@@ -446,7 +474,7 @@ def _elevenlabs_voiceover(spoken_script: str, voice: str) -> str:
             "speed": float(os.getenv("VOICE_SPEED", "0.92")),
         },
     }
-    response = _tts_with_rotation(
+    response = elevenlabs_post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}", payload, len(spoken_script),
     )
     path = os.path.join(get_temp_dir(), f"voiceover_{datetime.now():%Y%m%d_%H%M%S_%f}.mp3")

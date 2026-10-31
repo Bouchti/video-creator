@@ -21,7 +21,7 @@ from mathutils.bvhtree import BVHTree
 # meshes that are allowed to touch (seated pilot inside the cockpit; held tools)
 ALLOWED = {("MaxPilot", "fuselage"), ("MaxPilot", "seat"), ("MaxPilot", "fus_stripe")}
 # volumes and effects a character may legitimately be inside (swimming, rain, splashes, dust)
-SOFT = re.compile(r"(pool_water|lake_water|_carver|flood|water_surface|rain|splash|bubble|_p\d+$|puff|spray|dust)", re.I)
+SOFT = re.compile(r"(pool_water|lake_water|_carver|flood|water_surface|rain|splash|bubble|_p\d+$|puff|spray|dust|jet|leak|chunk|debris|mud|drip|droplet)", re.I)
 # a shoe resting on a floor/edge is standing, not a collision
 FLOORS = re.compile(r"(floor|turf|coping|slab|deck|dock|ground|strip|step|apron|pad)", re.I)
 SKIP_PREFIX = ("field", "airstrip", "g_", "grass", "lawn", "hill", "cloud", "label_", "lbl", "air_", "cutaway_card", "wing_section",
@@ -210,12 +210,17 @@ def run_objects(scene, frames, allow=None, skip=None):
 # ------------------- production quality gates (the channel's standard) -------------------
 
 HERO_MIN = 0.18          # Max's on-screen height (fraction of the frame) when he is the one acting...
+CLOSE_UP = 0.35          # Max this big (share of the frame height) is a close-up: his face must read
+FACE_AWAY = -0.15        # head forward . direction to the camera below this = the back of his head
 HERO_SHARE = 0.35        # ...for at least this share of each beat (the rest may be wide/establishing)
 STATIC_SECONDS = 2.5     # a camera that does not move for longer than this is "static"
 FLAT_AREA = 0.03         # a flat (untextured) surface covering more than this share of the frame is flagged
 FAR = 30.0               # ...unless it is background this far from the camera (soft in depth of field)
 TEXT_MIN = 0.018         # a label's letters must be at least this share of the frame height
 TEXT_MAX = 0.10          # ...and at most this share: bigger letters bury the shot (a camera inside the label)
+# The burned-in captions (agents/captions.py: centred at y 1330-1390 of 1920, ~70 % wide), in camera-view units
+# (y from the bottom). A 3D label there sits under the caption: the tunnel film's BUOYANCY did.
+CAPTION_BAND = (0.22, 0.35, 0.15, 0.85)           # y0, y1, x0, x1
 _TEXTURE_NODES = {"TEX_NOISE", "TEX_VORONOI", "TEX_WAVE", "TEX_IMAGE", "TEX_MUSGRAVE", "TEX_GRADIENT",
                   "TEX_MAGIC", "TEX_CHECKER", "TEX_BRICK", "TEX_WHITE_NOISE", "BUMP", "ATTRIBUTE",
                   "NEW_GEOMETRY", "VALTORGB"}
@@ -283,8 +288,10 @@ def _coplanar_pairs(objs, dg, max_faces=250):
         ev.to_mesh_clear()
     found = []
     names = list(data)
-    same = {n: (objs_by[n].data.name, tuple(round(x, 4) for row in objs_by[n].matrix_world for x in row))
-            for n in names}
+    # identical copies parked together (same shape, materials and place: spray drops waiting at their nozzle) render
+    # as one surface; each copy has its own mesh data, so compare what renders, not the data block's name
+    same = {n: (len(objs_by[n].data.vertices), tuple(m.name for m in objs_by[n].data.materials if m),
+                tuple(round(x, 4) for row in objs_by[n].matrix_world for x in row)) for n in names}
     for i, a in enumerate(names):
         ta, ca, ba = data[a]
         for b in names[i + 1:]:
@@ -369,6 +376,52 @@ def _named(scene, characters, name):
     return found
 
 
+def _see_through(obj):
+    """Rays pass it in the render: shader-clipped cutaways (studio.section_clip), glass, water, blended alpha."""
+    if SOFT.search(obj.name) or _FX.search(obj.name) or obj.name.startswith(("label_", "inset_")):
+        return True
+    for m in getattr(obj.data, "materials", []) or []:
+        if m is None:
+            continue
+        if "~clip" in m.name or getattr(m, "surface_render_method", "") == "BLENDED":
+            return True
+        bsdf = next((n for n in (m.node_tree.nodes if m.use_nodes else []) if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is not None and (bsdf.inputs["Alpha"].is_linked or bsdf.inputs["Alpha"].default_value < 0.9):
+            return True
+    return False
+
+
+def _blocker(scene, cam, objs, characters=None, share=0.8):
+    """The opaque prop hiding `objs` from the camera (>= share of the rays to points spread over their biggest parts
+    stop on it), or None. The oil derrick stood in front of Max; the sandcastle finale's sign pole in front of the
+    castle. Parts of the same assembly (same name prefix: c3_turret in front of c3_tower) and characters (Max in
+    front of the thing in his own close-up) do not count."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    eye = cam.matrix_world.translation
+    own = {o.name for o in objs}
+    stems = {o.name.split("_")[0].lower() for o in objs}
+    people = {o.name for root in (characters or {}).values() for o in [root] + list(root.children_recursive)}
+    hits, n = {}, 0
+    for o in sorted(objs, key=lambda o: -o.dimensions.length)[:3]:
+        lo = Vector(map(min, *[Vector(c) for c in o.bound_box]))
+        hi = Vector(map(max, *[Vector(c) for c in o.bound_box]))
+        for fx, fz in ((0.5, 0.5), (0.25, 0.3), (0.75, 0.3), (0.25, 0.7), (0.75, 0.7)):
+            local = Vector((lo.x + (hi.x - lo.x) * fx, (lo.y + hi.y) / 2, lo.z + (hi.z - lo.z) * fz))
+            target = o.matrix_world @ local
+            d = target - eye
+            if d.length < 0.2:
+                continue
+            n += 1
+            hit, _loc, _nrm, _i, obj, _m = scene.ray_cast(dg, eye, d.normalized(), distance=d.length * 0.97)
+            if (hit and obj is not None and obj.name not in own and obj.name not in people
+                    and obj.name.split("_")[0].lower() not in stems and not _see_through(obj)):
+                hits[obj.name] = hits.get(obj.name, 0) + 1
+    if not n or not hits:
+        return None
+    name, count = max(hits.items(), key=lambda kv: kv[1])
+    return name if count >= share * n else None
+
+
 def must_see(scene, characters, beats, frame_map):
     """The beat's MUST-SEE things (spec ACTIONS[action]["must_see"]) at the middle and 7/8 of the beat,
     the moments the reviewer judges: each must be on screen, readable in size and mostly in frame.
@@ -408,9 +461,145 @@ def must_see(scene, characters, beats, frame_map):
                 elif max(cw, ch) < MUST_MIN:
                     hits.append((f, f"must_see: '{name}' is too small at the {part} of the beat ({max(cw, ch):.0%} "
                                     f"of the frame, needs >= {MUST_MIN:.0%}); frame it closer (studio.frame_all)"))
+                else:
+                    blocker = _blocker(scene, cam, objs, characters)
+                    if blocker:
+                        hits.append((f, f"must_see: '{name}' is hidden behind {blocker} at the {part} of the beat; "
+                                        "move the camera to the side it is seen from, or move that prop"))
         if hits:
             issues[label] = [{"frames": [f, f], "issue": m} for f, m in hits]
     return issues
+
+
+HOOK_SECOND = 0.10       # in its first second the hook must move something by >= this angle (rad, ~10% of the frame)
+LAST_HOOK = []           # (motion in 1 s, motion in 10 frames, the object) of the last hook measured
+HOOK_BIG = 0.25          # a hook "thing" spans at least this angle at its largest (a wave, a gusher, not a puff)
+HOOK_PART = 0.12         # ...with at least one real-sized part (a cloud of tiny puffs spans wide but is spray)
+HOOK_START = 0.035       # ...and already start moving within its first 10 frames (the spectacle is not a setup)
+_STAGE = re.compile(r"^(field|g_|hill|cloud|sky|ground|lawn|grass|terrain|world|label_|lbl|Rig|Cam|Aim)|"
+                    r"(cloud|sky|terrain|world_floor|ground|turf|lawn|tuft|leaf)", re.I)
+
+
+def _stem(name):
+    """Parts of one thing share a stem: gush_drop_12 / gush_drop_13 -> gush_drop, wave.001 -> wave."""
+    return re.sub(r"([._]\d+)+$", "", name)
+
+
+def hook_motion(scene, characters, hook, frame_map, fps=30):
+    """The hook's measured MOTION: how far (as an angle seen from the camera, so a camera move never counts)
+    the most-moving BIG visible thing travels, grows or bursts into view in the hook's first second and first
+    10 frames. A thing is one object or a family of parts sharing a name stem (40 gusher drops are one gush),
+    and it must be big on screen (>= HOOK_BIG of the view, at its largest): a few spray puffs flying beside a
+    wave that never moves are not a hook. The sandcastle hook's wave crept 15 cm in 5 s and stood beside the
+    castle like a frozen wall; the oil hook opened on gas arrows and erupted at 40% of the beat. Characters do
+    not count: the hook is a physical spectacle (a burst, a gush, a crash), not Max walking. Returns
+    [(frame, issue)]."""
+    label, b0, b1 = hook
+    char_names = {o.name for root in characters.values() for o in [root] + list(root.children_recursive)}
+    meshes = [o for o in scene.objects if o.type == "MESH" and o.name not in char_names and not _STAGE.search(o.name)]
+    end = min(b1, b0 + fps)
+    track = {}                                                # stem -> [(frame, lo, hi, dist)]
+    for f in range(b0, end + 1, 2):
+        scene.frame_set(frame_map(f))
+        dg = bpy.context.evaluated_depsgraph_get()
+        eye = scene.camera.matrix_world.translation
+        boxes = {}
+        for o in meshes:
+            if not _visible(o):
+                continue
+            ev = o.evaluated_get(dg)
+            pts = [ev.matrix_world @ Vector(c) for c in ev.bound_box]
+            if (pts[6] - pts[0]).length < 1e-3:                  # popped down to nothing
+                continue
+            if not _on_screen(_screen_box(scene, scene.camera, [o])):     # (props of other beats, off camera)
+                continue
+            lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+            hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+            k = _stem(o.name)
+            part = (hi - lo).length / max(0.5, ((lo + hi) / 2 - eye).length)
+            if k in boxes:
+                lo = Vector(map(min, lo, boxes[k][0]))
+                hi = Vector(map(max, hi, boxes[k][1]))
+                part = max(part, boxes[k][2])
+            boxes[k] = (lo, hi, part)
+        for k, (lo, hi, part) in boxes.items():
+            track.setdefault(k, []).append((f, lo, hi, max(0.5, ((lo + hi) / 2 - eye).length), part))
+    scores = []
+    for k, rows in track.items():
+        big = max((hi - lo).length / d for _f, lo, hi, d, _p in rows)
+        if big < HOOK_BIG or max(p for *_r, p in rows) < HOOK_PART:      # (a cloud of specks is spray, not a body)
+            continue
+        f0, lo0, hi0, d0, _p0 = rows[0]
+        appeared = f0 > b0                                    # bursts into view after the first frame
+        best_second = best_start = 0.0
+        for f, lo, hi, d, _p in rows[1:] if not appeared else rows:
+            if appeared:
+                move = (hi - lo).length / d
+            else:
+                move = (((lo + hi) / 2 - (lo0 + hi0) / 2).length + abs((hi - lo).length - (hi0 - lo0).length)) / min(d, d0)
+            best_second = max(best_second, min(1.0, move))
+            if f <= b0 + 10:
+                best_start = max(best_start, min(1.0, move))
+        scores.append((best_second, best_start, k))
+    scores.sort(reverse=True)
+    best_second, best_start, who = scores[0] if scores else (0.0, 0.0, "")
+    best_start = max((s[1] for s in scores), default=0.0)
+    LAST_HOOK[:] = [round(best_second, 3), round(best_start, 3), who, [(round(a, 2), round(b, 2), c) for a, b, c in scores[:5]]]
+    out = []
+    if best_second < HOOK_SECOND:
+        out.append((b0, f"hook_still: nothing big moves in the hook's first second (largest motion {best_second:.2f} "
+                        f"rad, {who or 'none'}; need >= {HOOK_SECOND:.2f}): open on the spectacle itself, already "
+                        "happening (the burst, gush or crash flies across the frame from frame 1), not a setup shot"))
+    elif best_start < HOOK_START:
+        out.append((b0, f"hook_late: the hook's first 10 frames are static (largest motion {best_start:.2f} rad; "
+                        f"need >= {HOOK_START:.2f}): start the spectacle at frame 1 (an eruption at 40% of the "
+                        "beat lost the scroll)"))
+    return out
+
+
+def _bk_prop(o):
+    """Part of a BlenderKit model (engine/props puts every imported object under a BK_<name> empty)."""
+    p = o.parent
+    while p is not None:
+        if p.name.startswith("BK_"):
+            return True
+        p = p.parent
+    return False
+
+
+LINE_THIN = 0.05         # a rod / cable: both cross dimensions under this (m)...
+LINE_LONG = 4.0          # ...and at least this long
+LINE_SPAN = 0.45         # it crosses at least this share of the frame on screen...
+LINE_OUT = 0.4           # ...while at least this share of its projected length lies outside the frame
+
+
+def _dangling(scene, cam, o):
+    """A long thin object crossing the frame with most of its length off screen (dangling_line)."""
+    dims = sorted(zip(o.dimensions, range(3)))
+    if dims[1][0] > LINE_THIN or dims[2][0] < LINE_LONG:
+        return False
+    k = dims[2][1]
+    centre = sum((Vector(c) for c in o.bound_box), Vector()) / 8
+    lo = min(c[k] for c in o.bound_box)
+    hi = max(c[k] for c in o.bound_box)
+    ends = []
+    for v in (lo, hi):
+        p = centre.copy()
+        p[k] = v
+        q = world_to_camera_view(scene, cam, o.matrix_world @ p)
+        if q.z <= 0:
+            return False
+        ends.append(Vector((q.x, q.y)))
+    a, b = ends
+    total = (b - a).length
+    if total < 1e-6:
+        return False
+    inside, n = 0, 40
+    for i in range(n):                                         # share of the segment inside the frame
+        p = a + (b - a) * ((i + 0.5) / n)
+        inside += 0 <= p.x <= 1 and 0 <= p.y <= 1
+    on = total * inside / n
+    return inside > 0 and on >= LINE_SPAN and 1 - inside / n >= LINE_OUT
 
 
 def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=None):
@@ -420,10 +609,14 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
       static       the camera does not move for > STATIC_SECONDS
       flat         large surfaces in one flat colour (no texture): toy-like, unrecognisable
       text_small   a label's letters are too small to read on a phone
+      text_caption a label sits where the captions are drawn (CAPTION_BAND)
       floating     a character stands on nothing (no surface under the feet, not seated)
       coplanar     two surfaces in the same plane: they flicker (z-fighting)
       squashed     a bumped material on an object squashed > 12x (black/glossy artefacts)
       live_boolean a boolean modifier on/with an animated object (re-meshes every frame: flicker)
+      face_hidden  in Max's close-ups (>= CLOSE_UP of the frame height) his face turns away or bends down
+      dangling_line a thin rod / cable runs off the frame for most of its length (the water-tower film's crane cable,
+                   with no crane in the shot, read as a stray black line across the rise)
     characters: {name: root}; hero: the hero's name prefix (or None); beats: [(label, f0, f1)] timeline frames."""
     cam = scene.camera
     issues = {}
@@ -431,8 +624,14 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                  for name, root in characters.items()}
     char_names = {o.name for objs in char_objs.values() for o in objs}
     meshes = [o for o in scene.objects if o.type == "MESH" and o.name not in char_names]
+    # BlenderKit models (engine/props: under a BK_* root) are flat toy-coloured BY DESIGN (props.toon) and carry their
+    # own modifiers; the set cannot change them, so the construction and flat-colour gates skip them (a downloaded
+    # tree and cake once rejected every beat of the floating-cabin set)
+    built = [o for o in meshes if not _bk_prop(o)]
+    heads = [o for name, root in characters.items() if hero is not None and name.startswith(hero)
+             for o in [root] + list(root.children_recursive) if o.type == "EMPTY" and o.name.endswith("_head")]
     # ---- scene construction problems (independent of the frame) ----
-    for o in meshes:
+    for o in built:
         chain, p = [o], o.parent
         while p is not None:
             chain.append(p)
@@ -456,7 +655,10 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
         hits = []
         frames = list(range(b0, b1 + 1, step)) or [b0]
         hero_fracs, track, flat_seen, text_seen, float_frames = [], [], {}, {}, {}
-        text_big = {}
+        close_ups, faces_away = 0, 0
+        inside = {}
+        text_big, text_caption = {}, {}
+        dangling = {}
         for f in frames:
             scene.frame_set(frame_map(f))
             dg = bpy.context.evaluated_depsgraph_get()
@@ -466,7 +668,25 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                 vis = [o for nm, objs in char_objs.items() if nm.startswith(hero) for o in objs if _visible(o)]
                 box = _screen_box(scene, cam, vis) if vis else None
                 hero_fracs.append(min(1.0, box[3]) - max(0.0, box[1]) if _on_screen(box) else 0.0)
-            for o in meshes:
+                if hero_fracs[-1] >= CLOSE_UP and heads and _visible(heads[0]):
+                    close_ups += 1
+                    hm = heads[0].matrix_world
+                    face = (hm.to_3x3() @ Vector((0, -1, 0))).normalized()         # the rig faces -Y
+                    to_cam = (cm.translation - hm.translation).normalized()
+                    if (face.dot(to_cam) < FACE_AWAY or (face.z < -0.55 and face.dot(to_cam) < 0.45)
+                            or to_cam.z > 0.8):                       # from overhead: only the hat dome shows
+                        faces_away += 1
+            eye = cm.translation
+            for name, objs in char_objs.items():          # the camera inside a character: a giant hat fills the frame
+                for o in objs:
+                    if not _visible(o):
+                        continue
+                    lo, hi = o.matrix_world @ Vector(o.bound_box[0]), o.matrix_world @ Vector(o.bound_box[6])
+                    lo, hi = Vector(map(min, lo, hi)), Vector(map(max, lo, hi))
+                    if all(lo[k] - 0.08 <= eye[k] <= hi[k] + 0.08 for k in range(3)):
+                        inside.setdefault(name, []).append(f)
+                        break
+            for o in built:
                 if not _visible(o) or _FX.search(o.name):
                     continue
                 mats = [m for m in getattr(o.data, "materials", []) if m is not None]
@@ -481,6 +701,9 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                 area = (min(1.0, box[2]) - max(0.0, box[0])) * (min(1.0, box[3]) - max(0.0, box[1]))
                 if area > FLAT_AREA:
                     flat_seen[o.name] = max(flat_seen.get(o.name, 0.0), area)
+            for o in built:
+                if _visible(o) and _dangling(scene, cam, o):
+                    dangling[o.name] = dangling.get(o.name, 0) + 1
             for o in scene.objects:
                 # labels pop in and out (cutaway._pop: ~8 frames): judge them at full size, not mid-pop
                 if o.type != "FONT" or not _visible(o) or max(o.matrix_world.to_scale()) < 0.85 or _painted(o):
@@ -496,6 +719,9 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                 # edges (every corner outside the frame, so the crop check never saw it)
                 if h > TEXT_MAX or box[0] < -0.02 and box[2] > 1.02:
                     text_big[key] = max(text_big.get(key, 0.0), h)
+                y0, y1, x0, x1 = CAPTION_BAND
+                if box[1] < y1 and box[3] > y0 and box[0] < x1 and box[2] > x0:
+                    text_caption[key] = text_caption.get(key, 0) + 1
             for name, objs in char_objs.items():
                 vis = [o for o in objs if _visible(o)]
                 if not vis:
@@ -530,6 +756,14 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
                 hits.append((b0, f"hero_small: Max fills at most {max(hero_fracs):.0%} of the frame height (median "
                                  f"{sorted(hero_fracs)[len(hero_fracs) // 2]:.0%}); frame him at >= {HERO_MIN:.0%} "
                                  f"for at least {HERO_SHARE:.0%} of the beat (studio.close_on)"))
+        for name, fl in inside.items():
+            hits.append((fl[0], f"camera_inside: the camera is inside {name} in {len(fl)} sampled frames (from frame "
+                                f"{fl[0]}): a giant hat or face fills the frame; pull the camera back (studio.close_on "
+                                "keeps it outside the character)"))
+        if close_ups >= 3 and faces_away / close_ups > 0.4:
+            hits.append((b0, f"face_hidden: in {faces_away} of {close_ups} sampled close-up frames Max's face is turned "
+                             "away from the camera or bent down (the viewer sees his hat or the back of his head): "
+                             "frame the close-up from the side he faces, or turn him toward the camera (look_at)"))
         still = _longest_still(track, fps)
         if still > STATIC_SECONDS * fps:
             hits.append((b0, f"static: the camera holds still for {still / fps:.1f} s; keep it moving "
@@ -543,6 +777,15 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
         for body, h in text_big.items():
             hits.append((b0, f"text_big: label '{body}' letters are {h:.0%} of the frame height or run past both "
                              f"frame edges (max {TEXT_MAX:.0%}): size the label from the camera distance"))
+        for body, n in text_caption.items():
+            if n >= max(2, 0.3 * len(frames)):
+                hits.append((b0, f"text_caption: label '{body}' sits in the caption band (65-78% down the frame, "
+                                 "centre), where the captions are drawn: place it higher or to the side"))
+        for nm, n in sorted(dangling.items(), key=lambda kv: -kv[1])[:3]:
+            if n >= max(2, 0.25 * len(frames)):
+                hits.append((b0, f"dangling_line: {nm} (a thin rod / cable) runs off the frame for most of its length "
+                                 f"in {n} sampled frames: with nothing holding it in the shot it reads as a stray line "
+                                 "across the picture; show what holds it (the crane, the pole) or hide it here"))
         for name, fl in float_frames.items():
             if len(fl) * step >= 10 and len(fl) >= 0.4 * len(frames):        # a jump is fine, standing on air is not
                 hits.append((fl[0], f"floating: {name} has no surface under the feet in {len(fl)} of "
@@ -553,7 +796,7 @@ def quality(scene, characters, hero, beats, frame_map, fps=30, step=5, out_path=
     for label, b0, b1 in beats:                              # z-fighting, at each beat's end frame
         scene.frame_set(frame_map(b1))
         dg = bpy.context.evaluated_depsgraph_get()
-        objs = [o for o in meshes if _visible(o) and not SOFT.search(o.name) and not _FX.search(o.name)]
+        objs = [o for o in built if _visible(o) and not SOFT.search(o.name) and not _FX.search(o.name)]
         for pair in _coplanar_pairs(objs, dg):
             if pair not in seen:
                 seen.add(pair)

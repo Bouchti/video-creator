@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from agents import ai_router
+from agents import llm
 from config.paths import CLAUDE_MODEL
 
 log = logging.getLogger("pipeline")
@@ -165,7 +165,7 @@ def examine(shot: Any, end_state: str, keyframe: Path | None,
                     images.append(("First frame of the shot", still))
             for attempt in range(2):
                 try:
-                    values = ai_router.ask("You are a cinematographer planning shots for a video generator.",
+                    values = llm.ask("You are a cinematographer planning shots for a video generator.",
                                            prompt, SCHEMA, model=os.getenv("VISION_MODEL") or CLAUDE_MODEL,
                                            images=images)
                     break

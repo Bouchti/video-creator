@@ -1,0 +1,73 @@
+{
+  "title": "Max builds a house that floats (it floated away first)",
+  "set": "s_floating_riverside_cabin_a_story",
+  "voice": "energetic",
+  "captions": "word",
+  "music": "synth",
+  "tail": 2.5,
+  "beats": [
+    {
+      "id": "drift_hook",
+      "action": "drift_hook",
+      "video": "epilogue",
+      "text": "Max finally built a house that floats. Now it's floating away."
+    },
+    {
+      "id": "rewind",
+      "action": "rewind",
+      "video": "rewind",
+      "text": "Let's rewind to his very first riverside cabin."
+    },
+    {
+      "id": "fail_slab",
+      "action": "fail_slab",
+      "text": "Max builds his cabin on a plain slab. The river never gets this high, he says. One metre inside, the sofa floats by."
+    },
+    {
+      "id": "fix_pontoon",
+      "action": "fix_pontoon",
+      "text": "So he builds a hollow pontoon in a wet dock. A cubic metre of water weighs a tonne: displace your weight, and you float."
+    },
+    {
+      "id": "fail_drift",
+      "action": "fail_drift",
+      "text": "But nothing holds it. Max drifts out of his dock and away across the river, still waving."
+    },
+    {
+      "id": "fix_guides",
+      "action": "fix_guides",
+      "text": "Four guide posts with collars on the corners: now it only moves straight up and down."
+    },
+    {
+      "id": "fail_snap",
+      "action": "fail_snap",
+      "text": "Next flood, it rises nicely, but the rigid pipe and cable are fixed to the ground. Gusher, sparks, lights out."
+    },
+    {
+      "id": "fix_coils",
+      "action": "fix_coils",
+      "text": "Coiled flexible lines with three metres of slack simply stretch as the house rises."
+    },
+    {
+      "id": "fail_lean",
+      "action": "fail_lean",
+      "text": "Then Max loads a bathtub, piano and bookcase against one wall. Top-heavy, it leans and scrapes the posts."
+    },
+    {
+      "id": "fix_ballast",
+      "action": "fix_ballast",
+      "text": "Heavy ballast goes low and centred in the pontoon. Now it floats perfectly level."
+    },
+    {
+      "id": "finale",
+      "action": "finale",
+      "text": "The big flood rises 2.7 metres. The house rises level and lit, the kids eating cake inside. Maasbommel has 32 of these. Would you live in one?",
+      "overlay": {
+        "type": "stat",
+        "value": "5.5 m",
+        "text": "32 floating homes in Maasbommel can rise"
+      }
+    }
+  ],
+  "cta": "Would you live in one?"
+}

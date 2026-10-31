@@ -51,7 +51,3 @@ def words_to_srt(words: list, srt_path: str):
     with open(srt_path, "w", encoding="utf-8") as stream:
         stream.write("\n".join(lines))
 
-
-def srt_time_to_seconds(value: str) -> float:
-    hours, minutes, seconds = value.strip().replace(",", ".").split(":")
-    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)

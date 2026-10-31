@@ -3,9 +3,11 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 from agents import autopilot as ap
+from agents import llm
 from agents import scene_validator as sv
 import engine.make_film as mf
 
@@ -94,6 +96,18 @@ class RenderRepairTests(_Env):
         self.assertEqual((out, flagged), (self.video, True))
         self.assertEqual(len(calls), 2)
 
+    def test_an_attempt_that_fixes_nothing_ships_the_flagged_film(self):
+        # the floating-cabin film: 11 rejected windows before and after a repair round that re-rendered most of it
+        win = {"window": 1, "t0": 0, "t1": 3, "action": "plank", "fatal_problems": ["x"]}
+        rej = sv.SceneRejected([win, dict(win, window=2)], "r.json")
+        produce, calls = self._produce([rej, rej, self.video])
+        with patch.object(mf, "produce", produce), \
+                patch.dict(os.environ, {"AUTOPILOT_MAX_ATTEMPTS": "6", "AUTOPILOT_ON_GIVE_UP": ""}), \
+                patch.object(ap, "_restore_first_backup", lambda s, r: None):
+            out, flagged = ap.stage_render(self.run, self.film)
+        self.assertEqual((out, flagged), (self.video, True))
+        self.assertEqual(len(calls), 3)                  # attempt, the same again, then the flagged finish
+
     def test_give_up_fail_mode_raises(self):
         rej = sv.SceneRejected([], "r.json")
         produce, _ = self._produce([rej, rej])
@@ -115,7 +129,7 @@ class RenderRepairTests(_Env):
             with self.assertRaisesRegex(ap.GiveUp, "70s"):
                 ap.stage_render(self.run, self.film)
         self.assertEqual(len(calls), 1)
-        self.assertIn("65-second cap", self.run["events"][-1]["what"])
+        self.assertIn("FILM_MAX_SECONDS", self.run["events"][-1]["what"])
 
     def test_network_error_is_retried(self):
         produce, calls = self._produce([Exception("ElevenLabs failed (key1): 503 busy"), self.video])
@@ -125,13 +139,6 @@ class RenderRepairTests(_Env):
 
 
 class ScriptAndCheckTests(_Env):
-    def test_final_probe_enforces_the_65_second_cap(self):
-        info = {"streams": [{"codec_type": "video", "width": 1080, "height": 1920},
-                            {"codec_type": "audio"}], "format": {"duration": "65.001"}}
-        result = type("Result", (), {"stdout": json.dumps(info)})()
-        with patch.object(ap.subprocess, "run", return_value=result):
-            self.assertEqual(ap.probe(self.video), ["duration 65.00s is outside 15-65 s"])
-
     def test_unknown_ai_reset_stops_instead_of_sleeping_for_an_hour(self):
         from agents.showrunner import UsageLimit
         with self.assertRaisesRegex(ap.GiveUp, "sleeping blindly"):
@@ -192,6 +199,17 @@ class ScriptAndCheckTests(_Env):
 
 
 class FilmLengthTests(_Env):
+    def setUp(self):
+        super().setUp()
+        cap = patch.dict(os.environ, {"FILM_MAX_SECONDS": "65"})       # the cap is opt-in
+        cap.start()
+        self.addCleanup(cap.stop)
+
+    def test_without_a_cap_a_long_voice_is_kept(self):
+        with patch.dict(os.environ, {"FILM_MAX_SECONDS": ""}), patch.object(mf, "get_duration", return_value=88.0),                 patch.object(mf, "generate_voiceover") as voice:
+            self.assertEqual(mf._fit_cap("voice.mp3", "spoken text", {"tail": 1.0}), 88.0)
+        voice.assert_not_called()
+
     def test_kit_films_disable_every_2d_sticker(self):
         self.assertIsNone(mf._overlay({"overlay": {"type": "none"}}))
         kit_spec = type("Spec", (), {"KIT": "embankment"})()
@@ -273,8 +291,61 @@ class FilmLengthTests(_Env):
             path = ap.stage_script(self.run, "cutaway", None, None)
         self.assertEqual(path, self.film)
         self.assertEqual(calls, [None, "heat_pump_story"])
-        build.assert_called_once_with("A cutaway home and ground loop.", "heat_pump_story", rounds=4)
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args, ("A cutaway home and ground loop.", "heat_pump_story"))
+        self.assertEqual((build.call_args.kwargs["rounds"], build.call_args.kwargs["assets"]), (4, False))
         self.assertEqual(self.run["generated_set"], "heat_pump_story")
+
+    def test_a_new_set_that_missed_full_acceptance_still_makes_the_film_from_its_draft(self):
+        from agents.showrunner import NoUnusedStorySets
+        calls = []
+        plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story", "build_brief": "brief"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            calls.append(set_id)
+            if set_id is None:
+                raise NoUnusedStorySets("all consumed")
+            return self.film
+
+        draft = {"accepted": False, "draft": True, "accepted_beats": 11, "beats": 13, "set": "heat_pump_story",
+                 "warnings": ["beat 4 [fail_dig]: Max too small"], "work": self.tmp}
+        with patch("agents.showrunner.run", write), patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "agent"}), \
+                patch("agents.showrunner.plan_new_story_set", return_value=plan), \
+                patch("agents.set_builder.build_story_set", return_value=draft):
+            path = ap.stage_script(self.run, "cutaway", None, None)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story"])
+        self.assertEqual(self.run["generated_set"], "heat_pump_story")
+
+    def _alongside(self, beats_valid):
+        from agents.showrunner import NoUnusedStorySets
+        calls = []
+        plan = {"subject": "Max builds a heat pump", "set_id": "heat_pump_story", "build_brief": "brief"}
+
+        def write(angle=None, render=True, set_id=None, topic_hint=None, on_topic=None):
+            calls.append(set_id)
+            if set_id is None:
+                raise NoUnusedStorySets("all consumed")
+            return self.film
+
+        def build(brief, set_id, rounds=4, assets=False, on_designed=None):
+            on_designed(set_id)                       # the spec exists: the script starts alongside
+            return {"accepted": True, "set": set_id, "work": self.tmp}
+        spec = mock.MagicMock()
+        spec.validate.return_value = [] if beats_valid else ["story actions must appear in order"]
+        with patch("agents.showrunner.run", write), patch.dict(os.environ, {"SHOWRUNNER_SET_MODE": "agent"}),                 patch("agents.showrunner.plan_new_story_set", return_value=plan),                 patch("agents.set_builder.build_story_set", side_effect=build),                 patch("engine.sets.spec", return_value=spec), patch("importlib.reload", side_effect=lambda m: m):
+            path = ap.stage_script(self.run, "cutaway", None, None)
+        return path, calls
+
+    def test_the_script_is_written_while_the_set_is_built(self):
+        path, calls = self._alongside(beats_valid=True)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story"])        # once, during the build
+
+    def test_a_script_the_repairs_made_stale_is_written_again(self):
+        path, calls = self._alongside(beats_valid=False)
+        self.assertEqual(path, self.film)
+        self.assertEqual(calls, [None, "heat_pump_story", "heat_pump_story"])
 
     def test_an_exhausted_library_is_filmed_by_the_kit_without_any_agent(self):
         from agents.showrunner import NoUnusedStorySets
@@ -413,17 +484,17 @@ if __name__ == "__main__":
 class BudgetAcrossResumeTests(_Env):
     def test_a_resumed_run_keeps_counting_its_earlier_spend(self):
         from agents import showrunner
-        with patch.dict(showrunner.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 2_500_000,
+        with patch.dict(llm.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 2_500_000,
                                                   "cache_creation_input_tokens": 0, "output_tokens": 0}):
             self.run.event("set", "a costly turn")
             self.assertEqual(json.load(open(self.run.path, encoding="utf-8"))["claude_tokens"], 2_500_000)
         try:
-            with patch.dict(showrunner.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 0,
+            with patch.dict(llm.CLAUDE_USAGE, {"input_tokens": 0, "cache_read_input_tokens": 0,
                                                       "cache_creation_input_tokens": 0, "output_tokens": 0}), \
-                    patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "2000000"}),                     patch.object(showrunner, "BACKEND", "subscription"),                     patch.object(showrunner, "_ACTIVE_BACKEND", [None]):
+                    patch.dict(os.environ, {"CLAUDE_TOKEN_BUDGET": "2000000"}),                     patch.object(llm, "BACKEND", "subscription"),                     patch.object(llm, "_ACTIVE_BACKEND", [None]):
                 ap.Run(self.run.path)                    # a new process resumes the run
-                self.assertEqual(showrunner.tokens_used(), 2_500_000)
-                with self.assertRaises(showrunner.BudgetExceeded):
-                    showrunner.check_budget("next call")
+                self.assertEqual(llm.tokens_used(), 2_500_000)
+                with self.assertRaises(llm.BudgetExceeded):
+                    llm.check_budget("next call")
         finally:
-            showrunner.carry_tokens(0)
+            llm.carry_tokens(0)

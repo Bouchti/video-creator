@@ -219,6 +219,10 @@ class SepticWorld:
     def _ground(self):
         self.soil = lib.box("soil", -60, 80, 0.0, 70, -60, -0.03, self._strata())
         self.lawn = lib.box("lawn", -60, 80, 0.0, 70, -0.03, 0.0, lib.material("Grass006", 0.6, tint=(0.9, 1.05, 0.8)))
+        self.front = lib.empty("front_ground")
+        lib.box("front_lawn", -60, 80, -60, -0.002, -0.03, 0.0, lib.material("Grass006", 0.6, tint=(0.9, 1.05, 0.8)),
+                self.front)
+        lib.box("front_soil", -60, 80, -60, -0.002, -4.0, -0.03, lib.material("Ground048", 0.7), self.front)
         lib.box("far", -400, 400, 70, 600, -0.4, -0.03, lib.material("Grass004", 0.08))
         self.anchors.add("groundwater", (-0.2, 0.0, -1.9))
         self.anchors.add("soil", (8.2, 0.0, -2.0))
@@ -322,22 +326,31 @@ class SepticWorld:
             self._origin_z(ob, z)
         self.layer_base = {"sludge": FLOOR, "water": FLOOR + SLUDGE_T, "scum": LIQ_TOP - SCUM_T}
         pvc = lib.material("Plastic010", 2.0, tint=(0.97, 0.97, 0.95), rough=0.3)
+        bright = lib.flat("bouncer_pvc", (0.92, 0.94, 0.96), rough=0.25, emission=0.08)
         for x, top, bottom in ((INLET_X, -0.74, -1.45), (OUTLET_X, -0.86, -1.58)):
-            tee = lib.tube(f"tee{x}", [(x, 0.0, top), (x, 0.0, bottom)], PIPE_R, pvc, self.tank)
+            tee = lib.tube(f"tee{x}", [(x, 0.0, top), (x, 0.0, bottom)], PIPE_R, bright if x == OUTLET_X else pvc,
+                           self.tank)
             lib.section(tee)
-        # the bouncer's sunglasses
-        shades = lib.flat("shades", (0.01, 0.01, 0.015), 0.05, coat=1.0)
-        self.shades = lib.empty("shades", (OUTLET_X, -0.02, -1.08), self.tank)
-        for sx in (-0.07, 0.07):
-            lib.box(f"lens{sx}", sx * 1.6 - 0.1, sx * 1.6 + 0.1, -0.03, 0.0, -0.06, 0.06, shades, self.shades,
-                    bevel=0.02)
-        lib.box("bridge", -0.03, 0.03, -0.03, 0.0, 0.01, 0.04, shades, self.shades)
-        lib.box("frown", -0.09, 0.09, -0.03, 0.0, -0.2, -0.17, shades, self.shades, bevel=0.01)
-        for sx in (-0.11, 0.11):
-            brow = lib.box(f"brow{sx}", sx - 0.08, sx + 0.08, -0.03, 0.0, 0.08, 0.11, shades, self.shades)
-            brow.rotation_euler = (0, math.radians(12 if sx < 0 else -12), 0)
-        lib.box("glint", -0.17, -0.12, -0.035, -0.03, 0.01, 0.04, lib.flat("glint", (1, 1, 1), 0.1, emission=3.0),
-                self.shades)
+        # the bouncer: the outlet tee gets a face (big eyes, a frown) and a solid visor it slides down at the
+        # start of its beat. Built big and high-contrast: thin grey bars read as nothing at phone size.
+        self.bouncer = lib.empty("bouncer", (OUTLET_X, -0.035, -1.34), self.tank)      # on the teal: max contrast
+        self.bouncer.scale = (1.4, 1.4, 1.4)
+        white = lib.flat("eye_white", (0.97, 0.97, 0.97), 0.15)
+        black = lib.flat("pupil", (0.01, 0.01, 0.01), 0.1, coat=1.0)
+        for sx in (-0.085, 0.085):
+            eye = lib.blob(f"tee_eye{sx}", 0.075, white, (sx, 0, 0.1), lumpy=0.0, subdiv=2, parent=self.bouncer)
+            lib.blob(f"tee_pupil{sx}", 0.035, black, (0.0, -0.05, -0.01), lumpy=0.0, subdiv=2, parent=eye)
+        lib.box("tee_frown", -0.1, 0.1, -0.04, 0.0, -0.11, -0.075, black, self.bouncer, bevel=0.012)
+        self.visor = lib.empty("visor", (0, 0, 0.45), self.bouncer)          # parked above, slides down
+        visor = lib.flat("visor", (0.005, 0.005, 0.01), 0.04, coat=1.0)
+        lib.box("visor_glass", -0.2, 0.2, -0.09, -0.04, 0.045, 0.155, visor, self.visor, bevel=0.03)
+        lib.box("visor_shine", -0.16, -0.06, -0.095, -0.09, 0.115, 0.135,
+                lib.flat("shine", (1, 1, 1), 0.1, emission=4.0), self.visor)
+        # the half-cut tank is only for straight-on cutaway shots. Above ground (the burst) it would show
+        # as a hollow half-box, so a CLOSED tank takes its place from the burst on.
+        self.half_parts = [o for o in self.tank.children_recursive if o.type == "MESH" and o.name != "riser"]
+        self.tank_full = lib.empty("tank_full", (0, 0, 0), self.tank)
+        lib.box("tank_closed", t["x0"], t["x1"], 0.0, d, t["z0"], t["z1"], concrete, self.tank_full, bevel=0.03)
         # static cavity: the hole stays where the tank was, whatever the tank does
         cavity = lib.box("cavity", t["x0"] - 0.03, t["x1"] + 0.03, -1.0, d + 0.03, t["z0"] - 0.03, t["z1"] + 0.03)
         lib.boolean(self.soil, cavity)
@@ -350,6 +363,17 @@ class SepticWorld:
         self.anchors.add("sludge", (-1.1, 0.0, FLOOR + SLUDGE_T * 0.5), self.tank)
         self.anchors.add("scum", (0.5, 0.0, LIQ_TOP - SCUM_T * 0.5), self.tank)
         self.anchors.add("tee", (OUTLET_X, 0.0, -1.32), self.tank)
+
+    def solid(self, f, on):
+        """Swap the half-cut tank for the closed one (on) or back (off) at frame f."""
+        for ob in self.half_parts:
+            lib.visible(ob, f, not on, children=False)
+        lib.visible(self.tank_full, f, on)
+
+    def surface(self, f, on):
+        """The ground in FRONT of the section plane: on for above-ground shots, so they show a lawn instead
+        of the cut face (the cutaway convention only works straight-on and below ground)."""
+        lib.visible(self.front, f, on)
 
     def breach(self, f, on):
         for mod in self.breach_mods:
@@ -381,7 +405,8 @@ class SepticWorld:
         for p, pts in ((self.inlet, INLET), (self.outlet, OUTLET)):
             lib.section(p)
             lib.boolean(self.soil, lib.tube(f"{p.name}_cut", pts, PIPE_R + 0.03))
-        lib.tube("stack", [(INLET[0][0], 0.0, INLET[0][2]), (INLET[0][0], 0.0, 0.6)], PIPE_R, pvc)
+        stack = lib.tube("stack", [(INLET[0][0], 0.0, INLET[0][2]), (INLET[0][0], 0.0, 0.6)], PIPE_R, pvc)
+        lib.section(stack)              # cut open like every pipe, or Flushy's eyes poke through its wall
         dbox = lib.box("dbox", 4.75, 5.4, 0.0, 0.7, -1.4, -0.7, lib.material("Concrete031", 1.0), bevel=0.02)
         lib.section(dbox)
         self.anchors.add("pipe", (-5.2, 0.0, -0.6))
@@ -424,6 +449,65 @@ class SepticWorld:
                  parent=root)
         return root, Face(root, radius, mouth, name)
 
+    def _pacman(self, name, r, color):
+        """A Pac-Man microbe facing +X: two hemisphere jaws hinged at the centre with a dark mouth inside, so
+        a chomp is a wedge opening and shutting that reads at any size. Eyes on top, toward the camera."""
+        root = lib.empty(name, PARK)
+        body = lib.flat(f"{name}_mat", lib.hexrgb(color), 0.3, coat=0.6, emission=0.5)
+        mouth = lib.flat("mouth_inside", lib.hexrgb("#5A0F1E"), 0.5)
+        jaws = []
+        for upper in (True, False):
+            hinge = lib.empty(f"{name}_{'up' if upper else 'down'}", (0, 0, 0), root)
+            bm = bmesh.new()
+            bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=16, radius=r)
+            geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+            cut = bmesh.ops.bisect_plane(bm, geom=geom, plane_co=(0, 0, 0), plane_no=(0, 0, 1),
+                                         clear_inner=upper, clear_outer=not upper)
+            edges = [e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
+            fill = bmesh.ops.holes_fill(bm, edges=edges)
+            for f in fill["faces"]:
+                f.material_index = 1
+            ob = lib.mesh_from_bm(f"{name}_jaw{int(upper)}", bm, body, hinge, smooth=True)
+            ob.data.materials.append(mouth)
+            jaws.append(hinge)
+        top = jaws[0]
+        white = lib.flat("eye_white", (0.97, 0.97, 0.97), 0.15)
+        black = lib.flat("pupil", (0.01, 0.01, 0.01), 0.1, coat=1.0)
+        for sx in (-0.03, 0.05):
+            eye = lib.blob(f"{name}_eye{sx}", r * 0.3, white, (sx, -0.7 * r, 0.62 * r), lumpy=0.0, subdiv=2, parent=top)
+            lib.blob(f"{name}_pupil{sx}", r * 0.15, black, (0.02, -0.22 * r, 0.0), lumpy=0.0, subdiv=2, parent=eye)
+        return root, jaws
+
+    def chomp(self, jaws, f, opens=5, period=6, angle=38):
+        """Mouth opens and shuts `opens` times from frame f (a wedge toward +X)."""
+        up, down = jaws
+        for k in range(opens):
+            a = f + k * period
+            lib.key(up, "rotation_euler", a, (0, 0, 0))
+            lib.key(down, "rotation_euler", a, (0, 0, 0))
+            lib.key(up, "rotation_euler", a + period // 2, (0, math.radians(-angle), 0))
+            lib.key(down, "rotation_euler", a + period // 2, (0, math.radians(angle), 0))
+        lib.key(up, "rotation_euler", f + opens * period, (0, 0, 0))
+        lib.key(down, "rotation_euler", f + opens * period, (0, 0, 0))
+
+    def _arms(self, root, r, color):
+        """Stubby cartoon arms on Flushy: shoulder pivots at his sides; rotate them for wheee / ta-da."""
+        skin = lib.flat(f"arm_{color}", lib.hexrgb(color), 0.3, coat=0.8)
+        arms = []
+        for side in (-1, 1):
+            shoulder = lib.empty(f"shoulder{side}", (side * 0.88 * r, -0.05, -0.05), root)
+            lib.tube(f"arm{side}", [(0, 0, 0), (side * 0.05, 0, -0.12)], 0.038, skin, shoulder)
+            lib.blob(f"hand{side}", 0.05, skin, (side * 0.055, 0, -0.14), lumpy=0.0, subdiv=2, parent=shoulder)
+            arms.append((side, shoulder))
+        return arms
+
+    def arms_pose(self, f, pose, ease="pop"):
+        """down: hanging; up: a V over the head (wheee / ta-da); wave: one up."""
+        angles = {"down": (0, 0), "up": (150, 150), "wave": (0, 150)}[pose]
+        for (side, shoulder), a in zip(self.arms, angles):
+            lib.tween(shoulder, "rotation_euler", f, f + 6, shoulder.rotation_euler.copy(),
+                      (0, math.radians(-side * a), 0), ease)
+
     def _cast(self):
         self.flushy, self.flushy_face = self._actor("flushy", 0.21, PALETTE["flushy"], mouth=True, seed=5, coat=0.8,
                                                     lumpy=0.05)
@@ -436,9 +520,12 @@ class SepticWorld:
             for e in face.eyes:          # angry: eyes squashed flat on top
                 e.scale = (1.1, 1, 0.6)
             self.germs.append(root)
-        cast = [self._actor(f"microbe{i}", 0.13, PALETTE["microbe"], mouth=True, seed=70 + i, emission=0.6)
-                for i in range(5)]
-        self.microbes, self.microbe_faces = [c[0] for c in cast], [c[1] for c in cast]
+        self.microbes, self.jaws = [], []
+        for i in range(5):
+            root, jaws = self._pacman(f"microbe{i}", 0.15, PALETTE["microbe"])
+            self.microbes.append(root)
+            self.jaws.append(jaws)
+        self.arms = self._arms(self.flushy, 0.21, PALETTE["flushy"])
 
     def _props(self):
         self.truck = lib.import_model(lib.kenney("car-kit", "truck"), "truck")
@@ -464,8 +551,8 @@ class SepticWorld:
             self.arrows.append(a)
         turf = lib.material("Grass006", 0.8, tint=(0.9, 1.05, 0.8))
         stone = lib.material("Rock030", 1.2, tint=(0.95, 0.92, 0.88))
-        self.chunks = [lib.blob(f"chunk{i}", self.rnd.uniform(0.1, 0.22), turf if i % 3 else stone, PARK, seed=i,
-                                lumpy=0.3, subdiv=2) for i in range(24)]
+        self.chunks = [lib.blob(f"chunk{i}", self.rnd.uniform(0.16, 0.28), turf if i % 3 else stone, PARK, seed=i,
+                                lumpy=0.3, subdiv=2) for i in range(12)]
         stink = lib.flat("stink", lib.hexrgb(PALETTE["stink"]), rough=0.5, emission=1.5)
         self.stink = [lib.tube(f"stink{i}", [(9.6 + i * 0.4 + 0.12 * math.sin(k * 1.3), 1.0, 0.1 + k * 0.2)
                                              for k in range(9)], 0.035, stink) for i in range(5)]
@@ -507,6 +594,8 @@ class SepticWorld:
         self.snap(self.lid, "location", f, (-0.1, 0.55, 0.07))
         self.snap(self.lid, "rotation_euler", f, (0, 0, 0))
         self.breach(f, False)
+        self.solid(f, False)
+        self.surface(f, False)
         for name in ("sludge", "water", "scum"):
             ob = getattr(self, name)
             self.snap(ob, "scale", f, (1, 1, 1))
@@ -527,6 +616,10 @@ class SepticWorld:
         for fl in self.flowers:
             self.snap(fl, "rotation_euler", f, (0, 0, fl.rotation_euler.z))
         self.park(self.flushy, f)
+        for _side, shoulder in self.arms:
+            self.snap(shoulder, "rotation_euler", f, (0, 0, 0))
+        self.snap(self.visor, "location", f, (0, 0, 0.45))
+        self.snap(self.bouncer, "rotation_euler", f, (0, 0, 0))
         self.snap(self.flushy, "rotation_euler", f, (0, 0, 0))
         self.snap(self.flushy, "scale", f, (1, 1, 1))
         self.flushy_face.calm(f)
@@ -544,6 +637,11 @@ class SepticWorld:
         lib.tween(ob, "scale", f + 2, f + 14, (1 + k, 1 + k, 1 - k), (1, 1, 1), "elastic")
 
     @staticmethod
+    def _x_at(ob, f):
+        bpy.context.scene.frame_set(f)
+        return ob.matrix_world.translation.x
+
+    @staticmethod
     def in_tank(x, z):
         return Vector((x, ACT_Y, z))
 
@@ -559,13 +657,16 @@ class SepticWorld:
             lib.tween(a, "scale", f0, f0 + 8, (0.001, 0.001, 0.001), (1, 1, 1), "pop")
             lib.tween(a, "location", f0 + 8, pop, a.location.copy(), a.location + Vector((0, 0, 0.35)), "in")
         lib.key(self.tank, "location", f0, (0, 0, 0))
-        for i, k in enumerate(range(f0 + 6, pop, 2)):
-            lib.key(self.tank, "location", k, (0.02 * (-1) ** i, 0, 0.012 * i))
+        span = max(1, pop - f0 - 6)
+        for k in range(f0 + 6, pop):        # a building shiver on a 6-frame sine (a +-2 cm jump every 2 frames strobed)
+            u = (k - f0 - 6) / span
+            lib.key(self.tank, "location", k, (0.018 * u * math.sin(2 * math.pi * k / 6), 0, 0.1 * u * u), "LINEAR")
         # a breach, not a flight: it shoves up until the buoyancy balances and sticks out of the lawn, tilted
         lib.tween(self.tank, "location", pop, pop + 9, (0, 0, 0.12), (0, 0, BREACH), "pop", back=1.4)
         lib.tween(self.tank, "rotation_euler", pop, pop + 14, (0, 0, 0), (math.radians(-5), math.radians(13), 0), "out")
         lib.key(self.tank, "location", f1, (0, 0, BREACH + 0.04))
         self.breach(pop, True)
+        self.solid(pop + 1, True)       # on the CUT frame: a frame early showed the closed box in the close-up
         for a in self.arrows:
             lib.tween(a, "scale", pop + 4, pop + 10, (1, 1, 1), (0.001, 0.001, 0.001), "in")
         # the lid: off like a bottle cap, lands on the lawn, stays
@@ -591,7 +692,7 @@ class SepticWorld:
                     lib.key(c, "location", pop + k, p, "LINEAR")
                     break
                 lib.key(c, "location", pop + k, p, "LINEAR")
-        self.cam.shake(pop, pop + 18, amp=0.08, seed=seed)
+        self.cam.shake(pop, pop + 20, amp=0.06, seed=seed)
         self.act("tank bursts", self.tank, pop - 6, pop + 12, 0.12)
         apex = Vector((-0.9, -0.6, 5.6))
         if launch:
@@ -599,6 +700,7 @@ class SepticWorld:
             self.snap(self.flushy, "location", f0, start)
             lib.key(self.flushy, "location", pop + 2, start + Vector((0, 0, BREACH + 0.6)))
             self.flushy_face.surprised(pop)
+            self.arms_pose(pop + 1, "up")
             for k in range(3, 25, 3):
                 tt = k / 24
                 p = (start + Vector((0, 0, BREACH + 0.7))).lerp(apex, tt) +                     Vector((0, 0, 1.2 * math.sin(math.pi * tt / 2)))
@@ -641,10 +743,12 @@ class SepticWorld:
         self.flushy_face.surprised(go + 6)
         arrive = f1 - 16
         lib.tween(self.flushy, "location", go + 12, arrive, ride(p0), ride(p2) + Vector((0, 0, -0.02)), "in")
-        for k, f in enumerate(range(go + 12, arrive, 6)):    # wobbling down the slide, loving it
+        for k, f in enumerate(range(go + 12, arrive, 10)):   # swaying down the slide (faster flips read as jitter)
             lib.key(self.flushy, "rotation_euler", f, (0, math.radians(18 * (-1) ** k), math.radians(10 * (-1) ** k)))
         lib.key(self.flushy, "rotation_euler", arrive, (0, 0, 0))
         self.flushy_face.happy(go + 20)
+        self.arms_pose(go + 16, "up")
+        self.arms_pose(arrive - 2, "down")
         self.squash(self.flushy, arrive, 0.3)
         self.act("Flushy drops in", self.flushy, go - 4, go + 14, 0.08)
         self.act("Flushy slides", self.flushy, arrive - 22, arrive, 0.06)
@@ -653,8 +757,11 @@ class SepticWorld:
         self.cam.shot(f0, go + 13, dict(center=ride(p0) + Vector((0.3, 0, 0.3)), width=2.0, yaw=10, pitch=8),
                       dict(center=ride(p0) + Vector((0.3, 0, 0.2)), width=1.9, yaw=8, pitch=8))
         stretch = p1 + Vector((-1.0, 0, 0.1))
-        self.cam.shot(go + 14, arrive - 1, dict(center=stretch, width=2.9, yaw=4, pitch=8),
-                      dict(center=stretch + Vector((0.2, 0, 0)), width=2.7, yaw=2, pitch=8))
+        enter = next((k for k in range(go + 14, arrive) if self._x_at(self.flushy, k) > stretch.x - 1.5), arrive - 12)
+        self.cam.shot(go + 14, enter - 1, dict(center=ride(p0) + Vector((0.6, 0, 0.15)), width=2.2, yaw=6, pitch=8),
+                      dict(center=ride(p0) + Vector((0.7, 0, 0.12)), width=2.1, yaw=4, pitch=8))
+        self.cam.shot(enter, arrive - 1, dict(center=stretch, width=2.9, yaw=4, pitch=8),
+                      dict(center=stretch + Vector((0.2, 0, 0)), width=2.75, yaw=2, pitch=8))
         self.cam.shot(arrive, f1, dict(center=ride(p2) + Vector((-0.4, 0, 0.1)), width=2.2, yaw=6, pitch=7),
                       dict(center=ride(p2) + Vector((-0.3, 0, 0.05)), width=2.0, yaw=4, pitch=7))
 
@@ -703,8 +810,10 @@ class SepticWorld:
             lib.tween(ob, "scale", t0 - 6, t0, (0.01, 0.01, 0.01), (1, 1, 1), "pop")
             lib.tween(ob, "location", t0, t0 + 24, start, end, "elastic")
             self.act(f"greasy guy {i} floats", ob, t0, t0 + 24, 0.035)
-        self.cam.shot(f0, greasy_cue - 8, dict(center=(-0.75, 0, -1.55), width=2.8, yaw=-6, pitch=6),
-                      dict(center=(-0.75, 0, -1.65), width=2.5, yaw=2, pitch=5))
+        self.cam.shot(f0, heavy_cue - 4, dict(center=(-0.2, 0, -1.35), width=4.4, yaw=0, pitch=7),
+                      dict(center=(-0.2, 0, -1.4), width=4.2, yaw=0, pitch=7))          # the whole tank first
+        self.cam.shot(heavy_cue - 3, greasy_cue - 8, dict(center=(-0.75, 0, -1.6), width=2.7, yaw=-4, pitch=6),
+                      dict(center=(-0.75, 0, -1.65), width=2.55, yaw=0, pitch=5))
         self.cam.shot(greasy_cue - 7, f1, dict(center=(-0.2, 0, -1.4), width=2.9, yaw=2, pitch=6),
                       dict(center=(-0.1, 0, -1.25), width=2.6, yaw=6, pitch=5), cut=False)
 
@@ -717,36 +826,45 @@ class SepticWorld:
             self.snap(ob, "location", f, self.in_tank(-0.5 + 0.55 * i, LIQ_TOP - SCUM_T * 0.45))
 
     def baffle(self, b):
+        """The bouncer: the visor slides down ("cool"), drops pass under the scum and up the tee, a greasy guy
+        marches up, is squashed against the bouncer's face and bounced back; the bouncer shakes its head."""
         f0, f1 = b["f0"], b["f1"]
         self.normal_state(f0)
         self._inside_state(f0)
         hit = self.cue("baffle", "tonight", 0.8) - 6
+        lib.tween(self.visor, "location", f0 + 6, f0 + 14, (0, 0, 0.45), (0, 0, 0), "bounce")
+        self.act("the bouncer puts on its shades", self.visor.children[0], f0 + 4, f0 + 24, 0.03)
         path = [self.in_tank(0.7, -1.45), self.in_tank(OUTLET_X, -1.62), self.in_tank(OUTLET_X, -1.0),
                 Vector((TANK["x1"] + 0.7, ACT_Y, -1.0))]
-        for i, d in enumerate(self.drops[:8]):
-            t0 = f0 + 4 + i * max(4, (hit - f0 - 10) // 8)
+        for i, d in enumerate(self.drops[:6]):
+            t0 = f0 + 18 + i * max(4, (hit - f0 - 40) // 6)
             lib.key(d, "location", t0 - 1, PARK, "CONSTANT")
             for k, p in enumerate(path):
                 lib.key(d, "location", t0 + k * 10, p, "LINEAR")
             lib.key(d, "location", t0 + len(path) * 10, PARK, "CONSTANT")
-        self.act("water passes the tee", self.drops[0], f0 + 4, f0 + 30, 0.02)
-        g = self.greasy[2]          # the last greasy guy tries to sneak out and gets bounced
-        start, door = self.in_tank(0.55, LIQ_TOP - 0.08), self.in_tank(OUTLET_X - 0.24, LIQ_TOP - 0.08)
+        self.act("water passes the bouncer", self.drops[0], f0 + 18, f0 + 48, 0.03)
+        g = self.greasy[2]
+        start, door = self.in_tank(0.5, LIQ_TOP - 0.1), self.in_tank(OUTLET_X - 0.27, LIQ_TOP - 0.1)
         lib.key(g, "location", f0, start)
-        lib.tween(g, "location", hit - 22, hit, start, door, "in")
-        self.squash(g, hit, 0.45)
-        lib.tween(g, "location", hit + 1, hit + 26, door, self.in_tank(0.45, LIQ_TOP - 0.08), "bounce")
-        lib.tween(self.shades, "rotation_euler", hit - 2, hit + 6, (0, 0, 0), (0, math.radians(-12), 0), "pop")
-        lib.key(self.shades, "rotation_euler", hit + 22, (0, 0, 0))
-        self.act("greasy guy bounced", g, hit - 20, hit + 24, 0.05)
-        self.cam.shot(f0, f1, dict(center=(1.0, 0, -1.22), width=1.7, yaw=8, pitch=6),
-                      dict(center=(1.05, 0, -1.18), width=1.45, yaw=-2, pitch=5))
+        lib.tween(g, "location", hit - 24, hit, start, door, "in")
+        self.squash(g, hit, 0.55)
+        lib.tween(g, "location", hit + 2, hit + 28, door, self.in_tank(0.35, LIQ_TOP - 0.1), "bounce")
+        for k in range(4):            # "nope": the bouncer shakes its head
+            lib.key(self.bouncer, "rotation_euler", hit + 2 + k * 4, (0, 0, math.radians(14 * (-1) ** k)))
+        lib.key(self.bouncer, "rotation_euler", hit + 18, (0, 0, 0))
+        self.act("greasy guy bounced", g, hit - 20, hit + 26, 0.06)
+        # wider for the water passing, then TIGHT on the bouncer for the bounce
+        self.cam.shot(f0, hit - 26, dict(center=(1.0, 0, -1.25), width=1.9, yaw=8, pitch=6),
+                      dict(center=(1.05, 0, -1.22), width=1.7, yaw=4, pitch=6))
+        self.cam.shot(hit - 25, f1, dict(center=(1.05, 0, -1.2), width=1.3, yaw=2, pitch=5),
+                      dict(center=(1.1, 0, -1.2), width=1.2, yaw=-4, pitch=5))
 
     def field(self, b):
+        """Drops seep from the holes; angry germs sink into the soil; Pac-Man microbes chomp them."""
         f0, f1 = b["f0"], b["f1"]
         self.normal_state(f0)
-        seep, eat = self.cue("field", "seeps", 0.2), self.cue("field", "microbes", 0.55)
-        holes = [x for x in self.holes if 6.8 < x < 9.6][:4]
+        seep, eat = self.cue("field", "seeps", 0.2), self.cue("field", "microbes", 0.5)
+        holes = [x for x in self.holes if 6.8 < x < 9.6][:3]
         for i, x in enumerate(holes):
             d = self.drops[i]
             top = Vector((x, ACT_Y, FIELD["pipe_z"] - PIPE_R))
@@ -760,25 +878,24 @@ class SepticWorld:
             g1 = g0 + Vector((0, 0, -0.35))
             lib.key(germ, "location", t0 + 20, g0)
             lib.tween(germ, "scale", t0 + 20, t0 + 26, (0.01, 0.01, 0.01), (1, 1, 1), "pop")
-            lib.tween(germ, "location", t0 + 26, eat + 6 * i, g0, g1, "smooth")
-            m0 = g1 + Vector((0.0, 0, -0.5))       # microbes come up from below to meet their germ
-            lib.key(mic, "location", eat - 10 + 6 * i, m0)
-            lib.tween(mic, "scale", eat - 10 + 6 * i, eat - 4 + 6 * i, (0.01, 0.01, 0.01), (1, 1, 1), "pop")
-            lib.tween(mic, "location", eat - 4 + 6 * i, eat + 8 + 6 * i, m0, g1 + Vector((0, 0, -0.16)), "in")
-            mouth = self.microbe_faces[i].mouth
-            for k in range(5):     # chomp chomp chomp: the whole body and the mouth
-                f = eat + 8 + 6 * i + k * 5
-                lib.key(mic, "scale", f, (1.35, 1.35, 0.7))
-                lib.key(mic, "scale", f + 2, (1, 1, 1))
-                lib.key(mouth, "scale", f, (1.0, 0.6, 2.4))
-                lib.key(mouth, "scale", f + 2, (1.8, 0.5, 0.25))
-            lib.tween(germ, "scale", eat + 8 + 6 * i, eat + 22 + 6 * i, (1, 1, 1), (0.001, 0.001, 0.001), "in")
-            self.act(f"microbe eats germ {i}", mic, eat + 4 + 6 * i, eat + 22 + 6 * i, 0.025)
-            self.act(f"germ {i}", germ, t0 + 26, eat + 6 * i, 0.025)
-        self.cam.shot(f0, seep, dict(center=(3.0, 0, -1.0), width=3.0, yaw=8, pitch=8),
-                      dict(center=(7.9, 0, -1.4), width=2.4, yaw=4, pitch=7))
-        self.cam.shot(seep + 1, f1, dict(center=(7.9, 0, -1.4), width=2.4, yaw=4, pitch=7),
-                      dict(center=(8.2, 0, -1.75), width=2.2, yaw=-4, pitch=6), cut=False)
+            lib.tween(germ, "location", t0 + 26, eat + 8 * i, g0, g1, "smooth")
+            # Pac-Man comes in from the left, mouth working, and swallows the germ
+            m0 = g1 + Vector((-0.6, 0, 0))
+            bite = g1 + Vector((-0.17, 0, 0))
+            t1 = eat - 6 + 8 * i
+            lib.key(mic, "location", t1, m0)
+            lib.tween(mic, "scale", t1, t1 + 6, (0.01, 0.01, 0.01), (1, 1, 1), "pop")
+            lib.tween(mic, "location", t1 + 6, t1 + 20, m0, bite, "smooth")
+            self.chomp(self.jaws[i], t1 + 6, opens=6, period=6)
+            lib.tween(germ, "location", t1 + 20, t1 + 30, g1, bite + Vector((0.05, 0, 0)), "in")
+            lib.tween(germ, "scale", t1 + 20, t1 + 30, (1, 1, 1), (0.001, 0.001, 0.001), "in")
+            lib.tween(mic, "scale", t1 + 30, t1 + 38, (1, 1, 1), (1.25, 1.25, 1.25), "pop")   # gulp: a bit fatter
+            self.act(f"Pac-Man microbe eats germ {i}", mic, t1 + 6, t1 + 38, 0.04)
+            self.act(f"germ {i}", germ, t0 + 26, t1 + 20, 0.03)
+        self.cam.shot(f0, eat - 8, dict(center=(7.9, 0, -1.4), width=2.5, yaw=2, pitch=7),
+                      dict(center=(8.0, 0, -1.55), width=2.35, yaw=0, pitch=6))
+        self.cam.shot(eat - 7, f1, dict(center=(8.1, 0, -1.95), width=2.1, yaw=0, pitch=5),
+                      dict(center=(8.2, 0, -1.95), width=1.95, yaw=-4, pitch=5))
 
     def die(self, b):
         f0, f1 = b["f0"], b["f1"]
@@ -827,8 +944,8 @@ class SepticWorld:
             lib.key(fl, "rotation_euler", t0, (0, 0, fl.rotation_euler.z))
             lib.tween(fl, "rotation_euler", t0, t0 + 16, (0, 0, fl.rotation_euler.z),
                       (math.radians(70 + 10 * (i % 3)), 0, fl.rotation_euler.z), "bounce")
-        self.cam.shot(f0, gravel, dict(center=(-0.2, 0, -1.4), width=3.6, yaw=-6, pitch=7),
-                      dict(center=(0.1, 0, -1.3), width=3.4, yaw=2, pitch=7))
+        self.cam.shot(f0, gravel, dict(center=(-0.2, 0, -1.4), width=4.4, yaw=0, pitch=7),
+                      dict(center=(-0.1, 0, -1.35), width=4.2, yaw=0, pitch=7))
         self.cam.shot(gravel + 1, swamp - 14, dict(center=(8.1, 0, -1.05), width=2.8, yaw=4, pitch=8),
                       dict(center=(8.2, 0, -1.0), width=2.5, yaw=0, pitch=8))
         self.cam.shot(swamp - 13, f1, dict(center=(10.3, 0, 0.25), width=4.0, yaw=-10, pitch=22),
@@ -867,34 +984,35 @@ class SepticWorld:
                       dict(center=(-0.6, -0.3, 3.4), width=4.6, yaw=-18, pitch=-2), cut=False, ease="out")
 
     def land(self, b):
-        """Continuation of the launch: no reset. Flushy falls onto the lawn beside the crater."""
+        """Continuation of the launch: no reset. Flushy falls onto the lawn beside the crater, squashes flat,
+        pops back, and lands the gymnast's TA-DA: arms up, big smile, held."""
         f0, f1 = b["f0"], b["f1"]
-        spot = Vector((-3.2, 0.45, 0.16))      # ON the lawn, behind the cut edge
+        spot = Vector((-3.2, 0.45, 0.2))      # ON the lawn, behind the cut edge
+        self.surface(f0, True)                 # above ground: a lawn, never the cut face
         land = self.cue("land", "lands", 0.15) + 4
         lib.key(self.flushy, "location", f0, Vector((-2.4, 0.2, 4.5)))
         lib.tween(self.flushy, "location", f0 + 1, land, Vector((-2.4, 0.2, 4.5)), spot, "in")
         lib.key(self.flushy, "rotation_euler", land - 1, (math.radians(-540), 0, math.radians(90)))
         lib.key(self.flushy, "rotation_euler", land, (0, 0, 0))
-        self.squash(self.flushy, land, 0.5)
-        self.flushy_face.calm(land + 2)
-        self.flushy_face.blink(land + 14)
-        self.flushy_face.look(land + 22, 0, 0)
+        self.arms_pose(land - 8, "up")
+        self.squash(self.flushy, land, 0.6)
+        self.arms_pose(land + 1, "down")
+        self.flushy_face.surprised(land + 1)
+        self.flushy_face.calm(land + 14)
+        self.flushy_face.blink(land + 18)
         tada = self.cue("land", "ta-da", 0.45)
+        lib.tween(self.flushy, "location", tada - 2, tada + 6, spot, spot + Vector((0, 0, 0.4)), "out")
+        lib.tween(self.flushy, "location", tada + 6, tada + 14, spot + Vector((0, 0, 0.4)), spot, "bounce")
+        self.arms_pose(tada, "up")
         self.flushy_face.happy(tada)
-        lib.tween(self.flushy, "location", tada, tada + 8, spot, spot + Vector((0, 0, 0.35)), "out")
-        lib.tween(self.flushy, "location", tada + 8, tada + 16, spot + Vector((0, 0, 0.35)), spot, "bounce")
-        for k, f in enumerate(range(tada + 20, f1 - 6, 14)):   # a happy little bounce until the end card
-            lib.key(self.flushy, "location", f, spot)
-            lib.key(self.flushy, "location", f + 6, spot + Vector((0, 0, 0.12)))
-            lib.key(self.flushy, "location", f + 12, spot)
-        self.flushy_face.blink(min(f1 - 8, tada + 40))
-        self.act("Flushy lands", self.flushy, land - 6, f1 - 10, 0.08)
-        self.cam.shot(f0, land, dict(center=spot + Vector((0.6, 0, 0.8)), width=3.4, yaw=-22, pitch=6),
-                      dict(center=spot + Vector((0.4, 0, 0.35)), width=2.4, yaw=-20, pitch=5))
-        self.cam.shot(land + 1, f1, dict(center=spot + Vector((0.4, 0, 0.32)), width=2.2, yaw=-20, pitch=5),
-                      dict(center=spot + Vector((0.6, 0, 0.45)), width=2.6, yaw=-26, pitch=7), cut=False)
+        self.act("Flushy lands", self.flushy, land - 6, land + 16, 0.1)
+        self.act("Flushy: ta-da", self.flushy, tada - 2, tada + 30, 0.1)
+        # close at lawn level: he lands, then the TA-DA fills the frame
+        self.cam.shot(f0, land + 10, dict(center=spot + Vector((0.5, 0, 0.7)), width=3.0, yaw=-22, pitch=6),
+                      dict(center=spot + Vector((0.3, 0, 0.3)), width=2.2, yaw=-20, pitch=5))
+        self.cam.shot(land + 11, f1, dict(center=spot + Vector((0.1, 0, 0.3)), width=1.7, yaw=-16, pitch=5),
+                      dict(center=spot + Vector((0.1, 0, 0.34)), width=1.6, yaw=-20, pitch=6))
 
-    # -------------------------------------------------------------- film
     def film(self):
         for b in self.t["beats"]:
             getattr(self, b["id"])(b)

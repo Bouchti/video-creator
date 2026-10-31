@@ -75,6 +75,9 @@ def facing_to(src, dst) -> float:
     return math.degrees(math.atan2(d.x, -d.y))
 
 
+HARD_CUTS = set()     # timeline frames where the camera always cuts to the shot starting there (cutaway_film: hook)
+
+
 class CameraRig:
     """ONE camera for the whole film that GLIDES between shots instead of cutting.
 
@@ -134,12 +137,18 @@ class CameraRig:
     def build(self, handheld: float = 0.012):
         shots = sorted(self.shots, key=lambda s: s["start"])
         for i, s in enumerate(shots):
-            first = i == 0 or s["cut"]
+            # a frame in HARD_CUTS (the epilogue hook's first frame) always opens on its own shot: the oil hook
+            # glided in from the finale's close-up for its first 7 frames
+            cut_at = next((c for c in sorted(HARD_CUTS) if i > 0 and shots[i - 1]["start"] < c <= s["start"]), None)
+            first = i == 0 or s["cut"] or cut_at is not None
+            start = s["start"] if cut_at is None else cut_at
             if first and i > 0:                       # hard cut: hold the previous framing up to here
                 p = shots[i - 1]
-                self._key(s["start"] - 1, p["cam_to"], p["aim_to"], p["lens"], p["fstop"], constant=True)
-            settle = s["start"] if first else min(s["end"] - 1, s["start"] + s["blend"])
+                self._key(start - 1, p["cam_to"], p["aim_to"], p["lens"], p["fstop"], constant=True)
+            settle = start if first else min(s["end"] - 1, s["start"] + s["blend"])
             if s.get("path"):
+                if first and s["path"][0][0] > start:
+                    self._key(start, s["path"][0][1], s["path"][0][2], s["lens"], s["fstop"])
                 for f, c, a in s["path"]:
                     if f >= settle:
                         self._key(f, c, a, s["lens"], s["fstop"])

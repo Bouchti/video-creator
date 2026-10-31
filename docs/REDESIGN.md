@@ -204,7 +204,7 @@ python -m agents.director engine/director/plans/septic.json --compose-only   # r
 |---|---|---|
 | Plan (the scenario, data) | `engine/director/plans/septic.json` | beats: narration, hook text, chapters, labels -> anchors, callouts, checklist, end card |
 | World spec (data) | `engine/director/worlds.py` | what each beat shows, cue words, anchors, beat order |
-| Plan writer | `agents/plan_writer.py` | retention rules as the prompt + a validator (word budget, hook <= 12 words, cue words present, labels <= 3 words, 3-4 chapters, 3 rules); one repair turn, then the reference plan |
+| Plan writer | `agents/stage_writer.py` (writer), `agents/plan_rules.py` (validator) | retention rules as the prompt + a validator (word budget, hook <= 12 words, cue words present, labels <= 3 words, 3-4 chapters, 3 rules); one repair turn, then the reference plan |
 | Blender toolkit | `engine/director/lib.py` | ambientCG PBR (box-projected), HDRI, easing (BACK/BOUNCE/ELASTIC), camera shots by "metres of world across the frame", shake, anchors export |
 | Golden world | `engine/director/septic.py` | strata soil with a keyed water table, half-cut tank with sludge/water/scum, PVC tees and pipes, gravel drainfield, mascot, truck, burst FX |
 | Driver | `agents/director.py` | voice fit (pause tightening -> <=5 % tempo -> tail), Whisper cues, Blender under the shared GPU lock, synced SFX + music bed, Remotion compose, duration check, mute test |
@@ -233,3 +233,12 @@ Each was a pipeline gap, so each became a pipeline rule or gate, not a one-off f
 | Found too late | Stills -> 2 h final | **Animatic stage**: every frame at half resolution (~20 min) -> gates + a sound-off, text-off viewer review (what happens / clear / funny 1-5 / incoherent / biggest fix) -> `qa_report.json`, before the final render |
 
 These apply to every future world and to the Max route (Max is the hero; same gates, same format).
+
+## 9. Why the colours were faded (2026-10-29)
+
+Measured on identical frames: under AgX (even "Punchy") the brightest 2 % of every frame stopped at 0.71 and
+colourfulness was ~50, so nothing ever approached white and the picture read grey. AgX is built for
+photoreal light levels: it compresses highlights and desaturates strong colours. Khronos PBR Neutral at
++0.4 exposure keeps material colours true: colourfulness ~84, highlights 0.86-0.92, no clipping (Standard
+clipped the water to neon). It is now the default look (`lib.LOOKS["vivid"]`). The colourfulness gate was
+too lenient (40 let the faded frames through): it is 65 now, plus a highlights gate (brightest 2 % >= 0.8).

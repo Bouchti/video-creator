@@ -5,11 +5,9 @@ import wave
 
 import numpy as np
 
-from agents.animate import CAMERA_MOVES, _camera
 from agents.audio_fx import SR, build_fx_track
 from agents.beats import repair_beats, validate_beats
 from agents.captions import chunk_words, words_to_ass
-from agents.script import build_script_tool, system_prompt
 
 
 def _scene(text, **visual):
@@ -36,31 +34,6 @@ class SceneSchemaTests(unittest.TestCase):
         self.assertEqual(["scene", "scene"], [b["visual"]["kind"] for b in beats])
         self.assertEqual("stat", beats[0]["visual"]["overlay"]["type"])
         self.assertNotIn("overlay", beats[1]["visual"])
-
-    def test_animated_tool_requires_characters_and_scene_visuals(self):
-        tool = build_script_tool(25, 153, 206, mode="animated")
-        schema = tool["input_schema"]
-        self.assertIn("characters", schema["required"])
-        visual = schema["properties"]["beats"]["items"]["properties"]["visual"]
-        self.assertEqual(["scene"], visual["properties"]["kind"]["enum"])
-        self.assertIn("Pixar", system_prompt("animated"))
-        self.assertNotIn("Pixar", system_prompt("footage"))
-
-
-class CameraTests(unittest.TestCase):
-    def test_near_pixels_move_more_than_far_ones(self):
-        depth = np.array([[0.0, 1.0]], dtype=np.float32)
-        zoom, _, _ = _camera("push_in", 1.0, depth)
-        self.assertGreater(zoom[0, 1], zoom[0, 0])
-        _, shift, _ = _camera("pan_left", 1.0, depth)
-        self.assertGreater(abs(shift[0, 1]), abs(shift[0, 0]))
-
-    def test_every_move_is_defined(self):
-        depth = np.full((2, 2), 0.5, dtype=np.float32)
-        for move in CAMERA_MOVES:
-            for p in (0.0, 0.5, 1.0):
-                zoom, sx, sy = _camera(move, p, depth)
-                self.assertTrue(np.all(np.asarray(zoom) >= 0.99), move)
 
 
 class CaptionTests(unittest.TestCase):

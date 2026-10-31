@@ -53,52 +53,52 @@ STORY_ORDER = ["plant", "fail_roots", "bury_vine", "fail_split", "drip_line", "f
 
 ACTIONS = {
     # ---- hooks (staged after the finale, shown FIRST, before the rewind) ----
-    "split_hook": {"kind": "hook", "shows": "Max stands deadpan beside his giant pumpkin holding a garden hose; the "
+    "split_hook": {"extras": "A water puddle spreads over the bed and the cut face shows dark wet soil, and the kids and wagon are hidden.", "kind": "hook", "shows": "Max stands deadpan beside his giant pumpkin holding a garden hose; the "
                    "pumpkin swells and splits down one rib with a loud crack and a spray of water. He blinks."},
-    "photo_hook": {"kind": "hook", "shows": "Payoff first: the giant pumpkin sits on the weigh-off scale, the digits "
+    "photo_hook": {"extras": "The empty red wagon is parked in the front of the shot beside the scale.", "kind": "hook", "shows": "Payoff first: the giant pumpkin sits on the weigh-off scale, the digits "
                    "show a big number, Max's two kids sit on top of it cheering and Max salutes."},
     "rewind": {"kind": "rewind", "shows": "Freeze-frame, record scratch, the whole story plays BACKWARDS (VHS look) "
                "to bare spring soil. Narration: a one-line bridge into the story."},
     # ---- the ladder ----
-    "plant": {"kind": "story", "shows": "Spring. Max kneels and plants a single seed in the cutaway soil (the seed "
+    "plant": {"extras": "A tiny root grows down from the seed in the cut face, then Max points at the sprout with a big grin.", "kind": "story", "shows": "Spring. Max kneels and plants a single seed in the cutaway soil (the seed "
               "is visible in the cut face) and a tiny sprout pops up. His two kids pull their little red wagon up "
               "to the fence and park it, ready.", "seconds": (4, 7)},
-    "fail_roots": {"kind": "fail", "shows": "Hot afternoon. The plant has a long vine but the pumpkin is tiny and the "
+    "fail_roots": {"extras": "The light turns a hot orange, and Max first faces the pumpkin, then turns to the camera with raised brows.", "kind": "fail", "shows": "Hot afternoon. The plant has a long vine but the pumpkin is tiny and the "
                    "big leaves droop. The cutaway shows ONE short root ball under the main stem while the rest of the "
                    "vine lies on top of the soil with no roots. Max scratches his head; the kids look at their wagon, "
                    "then at the tiny pumpkin.", "seconds": (4, 7)},
-    "bury_vine": {"kind": "fix", "shows": "Max kneels and covers the vine with little mounds of soil; in the cutaway "
+    "bury_vine": {"extras": "Brown dust puffs rise from each new mound, then Max points at the new roots with a big grin while the kids stand at the fence.", "kind": "fix", "shows": "Max kneels and covers the vine with little mounds of soil; in the cutaway "
                   "new pale roots grow down from every leaf joint, with small yellow arrows pointing down from each "
                   "joint. The leaves perk up and the pumpkin starts to grow.", "seconds": (4, 7)},
-    "fail_split": {"kind": "fail", "shows": "Max waters with the hose in big floods: a puddle spreads and the soil "
+    "fail_split": {"extras": "During the dry spell the sun turns hot orange and the leaves wilt, then they recover at the second soak; Max slowly turns to the camera with flat brows and two slow blinks, and the kids look at the wagon, then at the pumpkin.", "kind": "fail", "shows": "Max waters with the hose in big floods: a puddle spreads and the soil "
                    "darkens, then it dries out, then another huge soak. The pumpkin swells in jerks until it splits "
                    "down one rib with a crack and water spurts out. Max stands deadpan with the hose; the kids look "
                    "at the wagon, then at the pumpkin.", "seconds": (4.5, 7)},
-    "drip_line": {"kind": "fix", "shows": "A thin black drip line is drawn through the cutaway soil next to the "
+    "drip_line": {"extras": "The timer has a glowing green light, and Max then turns to watch the growing pumpkin while the kids stand at the fence.", "kind": "fix", "shows": "A thin black drip line is drawn through the cutaway soil next to the "
                   "roots, a small timer box pops onto the tap, and even blue droplets fall from the line. A new "
                   "pumpkin grows smoothly and steadily, bigger and bigger. Max points at the timer, grinning.",
                   "seconds": (4, 7)},
-    "fail_stem": {"kind": "fail", "shows": "The pumpkin grows huge and its swelling side shoves the vine up and back: "
+    "fail_stem": {"extras": "A red 'STEM TEARS!' label pops up as pale torn fibres show in the break, Max throws his arms out with raised brows, and the kids look at the wagon, then at the pumpkin.", "kind": "fail", "shows": "The pumpkin grows huge and its swelling side shoves the vine up and back: "
                   "an arrow shows the vine being pulled, the vine kinks and the stem bends until a dark crack opens "
                   "around it. Max's jaw drops.", "seconds": (4, 7)},
-    "fix_angle": {"kind": "fix", "shows": "Max gently curves the vine so it leaves the stem at a right angle and "
+    "fix_angle": {"extras": "Max crouches and pats the vine into place, then gives a thumbs up with a big smile.", "kind": "fix", "shows": "Max gently curves the vine so it leaves the stem at a right angle and "
                   "keeps nudging it as the pumpkin grows; an orange right-angle marker labelled 90° appears at the "
                   "joint. The pumpkin keeps growing and the stem stays whole.", "seconds": (3.5, 6)},
-    "fail_rot": {"kind": "fail", "shows": "Above ground the giant pumpkin looks perfect, but the low cutaway view "
+    "fail_rot": {"extras": "Max raises his brows and glances down at the worm in the middle of his thumbs up, and the kids look at the wagon, then at the pumpkin.", "kind": "fail", "shows": "Above ground the giant pumpkin looks perfect, but the low cutaway view "
                  "shows its underside pressed into dark wet soil, a brown rot patch spreading on the skin and a "
                  "worm waving out of the mud. Max gives a brave thumbs up.", "seconds": (4, 7)},
-    "sand_bed": {"kind": "fix", "shows": "Max rakes clean sand from a pile under the pumpkin: a beige sand layer "
+    "sand_bed": {"extras": "The sand pile shrinks as Max rakes (the worm is gone), then he turns to the camera and points with a big grin.", "kind": "fix", "shows": "Max rakes clean sand from a pile under the pumpkin: a beige sand layer "
                  "builds up beneath it in the cutaway and the pumpkin rides up onto it, the wet soil dries and blue "
                  "arrows show the water draining down through the sand.", "seconds": (3.5, 6)},
-    "fail_lift": {"kind": "fail", "shows": "Harvest day. Max and the kids push the tiny red wagon up to the giant "
+    "fail_lift": {"extras": "Max crouches, strains and pants while hugging the pumpkin, the block and planks pop into place, and when the plank goes flat he raises his brows and his mouth shrinks to a small 'o'.", "kind": "fail", "shows": "Harvest day. Max and the kids push the tiny red wagon up to the giant "
                   "pumpkin. Max tries to lift it with his arms (nothing), then with a plank over a block: he pushes "
                   "down and the plank bends flat while the pumpkin doesn't budge. The kids look at the wagon, then at "
                   "the pumpkin.", "seconds": (5, 8)},
-    "lift_ring": {"kind": "fix", "shows": "An orange lifting ring sits on top with wide straps running down around "
+    "lift_ring": {"extras": "Max points as the forklift drives in, then he and the kids at the fence cheer when the pumpkin lands on the pallet.", "kind": "fix", "shows": "An orange lifting ring sits on top with wide straps running down around "
                   "the sides and under the pumpkin; a yellow forklift drives in, hooks the ring with chains and lifts "
                   "the pumpkin while yellow arrows on every strap show the load shared out; a pallet slides under "
                   "and the pumpkin is set down on it.", "seconds": (5, 8)},
-    "finale": {"kind": "story", "shows": "The forklift carries the pumpkin on its pallet to the weigh-off scale with "
+    "finale": {"extras": "The kids cheer with their arms up as they ride, the forklift backs away from the scale, and the empty wagon is parked in the front of the shot for the photo.", "kind": "story", "shows": "The forklift carries the pumpkin on its pallet to the weigh-off scale with "
                "Max pulling the red wagon right behind it and both kids riding proudly in it. The pumpkin is "
                "lowered onto the scale and the digits roll up to a big number; the kids sit on top of the pumpkin, "
                "in one piece, cheering, and Max salutes.", "seconds": (6, 9)},
