@@ -98,9 +98,9 @@ def _word_text(word: str) -> str:
     return w[:1].upper() + w[1:] if w else ""
 
 
-def words_to_ass_single(words: list, path: str) -> str:
+def words_to_ass_single(words: list, path: str, upper: bool = False, y: int = WORD_Y) -> str:
     """One word at a time: shown from its start until the next word starts (gaps < 0.6 s are
-    bridged so the screen never flickers empty mid-sentence)."""
+    bridged so the screen never flickers empty mid-sentence). `upper` sets every word in capitals."""
     lines = [HEADER]
     words = [w for w in words if _word_text(w["text"])]
     for i, w in enumerate(words):
@@ -109,17 +109,20 @@ def words_to_ass_single(words: list, path: str) -> str:
         end = nxt if nxt - w["end"] < 0.6 else w["end"] + 0.25
         end = max(end, start + 0.08)
         pop = "\\fscx82\\fscy82\\t(0,70,\\fscx104\\fscy104)\\t(70,130,\\fscx100\\fscy100)"
+        text = _word_text(w["text"])
         lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Word,,0,0,0,,"
-                     f"{{\\an5\\pos({PLAY_W // 2},{WORD_Y}){pop}}}{_word_text(w['text'])}")
+                     f"{{\\an5\\pos({PLAY_W // 2},{y}){pop}}}{text.upper() if upper else text}")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return path
 
 
-def words_to_ass(words: list, path: str, mode: str = "phrase", hook: str = "", hook_seconds: float = 3.0) -> str:
-    """words: [{"text", "start", "end"}] → ASS file at path; `hook` adds the opening headline."""
+def words_to_ass(words: list, path: str, mode: str = "phrase", hook: str = "", hook_seconds: float = 3.0,
+                 upper: bool = False, y: int | None = None) -> str:
+    """words: [{"text", "start", "end"}] → ASS file at path; `hook` adds the opening headline. `upper` and `y`
+    (vertical centre, 1920-high pixels) apply to "word" mode."""
     if mode == "word":
-        path = words_to_ass_single(words, path)
+        path = words_to_ass_single(words, path, upper, y or WORD_Y)
         if hook and hook_event(hook, hook_seconds):
             with open(path, "a", encoding="utf-8") as f:
                 f.write(hook_event(hook, hook_seconds) + "\n")

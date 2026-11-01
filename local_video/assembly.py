@@ -361,10 +361,15 @@ def create_captions(
     script: str = "",
     words: list[dict[str, Any]] | None = None,
     hook: str = "",
+    style: dict[str, Any] | None = None,
 ) -> tuple[Path | None, Path | None, list[dict[str, Any]]]:
+    """`style` is the project's caption settings: mode "word" shows one word at a time, with
+    optional "uppercase" and "y" (vertical centre in 1920-high pixels)."""
     if words is None:
         words = spoken_words(transcribe_with_whisper(str(narration)), beats, total_duration, script)
-    ass = Path(words_to_ass(words, str(output_dir / "captions.ass"), hook=hook)) if word_highlight else None
+    style = style or {}
+    ass = Path(words_to_ass(words, str(output_dir / "captions.ass"), str(style.get("mode") or "phrase"), hook=hook,
+                            upper=bool(style.get("uppercase")), y=style.get("y"))) if word_highlight else None
     srt = None
     if export_srt or not word_highlight:
         srt = output_dir / "captions.srt"
@@ -444,6 +449,7 @@ def assemble_project(
             bool(manifest.captions.get("word_highlight", True)),
             words=words,
             hook=opening_hook(manifest),
+            style=manifest.captions,
         )
     burn = (captions_ass or captions_srt) if manifest.captions.get("burn_in", True) else None
     _run(build_final_command(silent_video, soundtrack, final, manifest.duration_seconds, config, burn), 1800, "Final render")

@@ -1022,12 +1022,14 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
         events.append({"frame": r["start"] + 1, "kind": "scratch", "duration": 0, "gain": 1.0})
         events.append({"frame": r["start"] + hold + 1, "kind": "rewind",
                        "duration": r["end"] - r["start"] - hold, "gain": 1.0})
+    # a film can drop the outdoor bird/wind bed ("ambience": false) and set its own effects level ("sfx_gain")
     synced = _read_wav(sfx.render_events(events, FPS, total, os.path.join(work, "sfx.wav"),
+                                         ambience=film.get("ambience", True),
                                          scenes=_ambience_scenes(film, beats, spans)))
     n = max(len(whoosh), len(synced))
     fx = np.zeros(n)
     fx[:len(whoosh)] += whoosh * WHOOSH_GAIN
-    fx[:len(synced)] += synced * SFX_GAIN
+    fx[:len(synced)] += synced * film.get("sfx_gain", SFX_GAIN)
     fx_path = write_wav(os.path.join(work, "fx_all.wav"), fx, SR)
     music = None
     if film.get("music") == "synth":                       # generated bed (no licensed tracks needed)
@@ -1038,7 +1040,8 @@ def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     merged = merge_audio_video(video, mixed)
 
     ass = os.path.join(work, "captions.ass")
-    words_to_ass(script_word_timings(beats, words, total), ass, mode=film.get("captions", "phrase"))
+    words_to_ass(script_word_timings(beats, words, total), ass, mode=film.get("captions", "phrase"),
+                 upper=film.get("captions_upper", False), y=film.get("captions_y"))
     final = burn_subtitles(merged, ass)
     out = os.path.join(get_output_dir(), f"{name}.mp4")
     shutil.move(final, out)

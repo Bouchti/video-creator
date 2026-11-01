@@ -1,0 +1,145 @@
+{
+ "title": "Where your toilet water goes",
+ "voice": "energetic",
+ "captions": "word",
+ "captions_upper": true,
+ "captions_y": 1190,
+ "music": "synth",
+ "tail": 2.2,
+ "beat_pause": 0,
+ "description": "Follow one flush from your toilet, under your house, through the sewer main, a lift station and a treatment plant, back to the river.",
+ "beats": [
+  {
+   "id": "toilet",
+   "station": "house",
+   "text": "Ever wondered where your toilet water goes after you flush?"
+  },
+  {
+   "id": "drop",
+   "station": "house",
+   "text": "It drops straight down into a pipe under your house,"
+  },
+  {
+   "id": "turn",
+   "station": "house",
+   "text": "then turns and heads away from the building."
+  },
+  {
+   "id": "swamp",
+   "station": "house",
+   "text": "If it just stopped here, your garden would be a swamp."
+  },
+  {
+   "id": "keep_going",
+   "station": "trench",
+   "text": "So the pipe keeps going, always angled slightly downhill,"
+  },
+  {
+   "id": "clog",
+   "station": "clog",
+   "text": "because flat pipes clog. Gravity does the pushing."
+  },
+  {
+   "id": "street_edge",
+   "station": "trench",
+   "text": "Under the front yard it reaches the street,"
+  },
+  {
+   "id": "main_join",
+   "station": "street",
+   "text": "and joins a much bigger pipe: the sewer main."
+  },
+  {
+   "id": "every_house",
+   "station": "street",
+   "text": "Every house on your street connects to the same one."
+  },
+  {
+   "id": "junction",
+   "station": "street",
+   "text": "Toilets, showers, sinks, all of it ends up here,"
+  },
+  {
+   "id": "main_flow",
+   "station": "lift",
+   "text": "and the main collects it from the whole neighbourhood."
+  },
+  {
+   "id": "downhill",
+   "station": "lift",
+   "text": "It keeps following the slope of the land,"
+  },
+  {
+   "id": "too_deep",
+   "station": "lift",
+   "text": "until it's too deep to go any further. That's where a lift station comes in."
+  },
+  {
+   "id": "pump",
+   "station": "lift",
+   "text": "A pump sits at the bottom and pushes the sewage up a pipe,"
+  },
+  {
+   "id": "gravity_again",
+   "station": "lift",
+   "text": "high enough for gravity to take over again."
+  },
+  {
+   "id": "plant_arrive",
+   "station": "plant",
+   "text": "Eventually everything arrives at the treatment plant."
+  },
+  {
+   "id": "bar_screen",
+   "station": "plant",
+   "text": "First, metal bars catch the big stuff: wipes, rags, plastic."
+  },
+  {
+   "id": "grit",
+   "station": "plant",
+   "text": "Then the flow slows down so sand and grit sink."
+  },
+  {
+   "id": "clarifier",
+   "station": "plant",
+   "text": "In big round tanks, the heavier sludge sinks to the bottom,"
+  },
+  {
+   "id": "scraper",
+   "station": "plant",
+   "text": "and a slow arm scrapes it away."
+  },
+  {
+   "id": "aeration",
+   "station": "plant",
+   "text": "Next, air is pumped in to feed billions of bacteria,"
+  },
+  {
+   "id": "bacteria",
+   "station": "macro",
+   "text": "that eat the dissolved waste you can't even see."
+  },
+  {
+   "id": "weir",
+   "station": "plant",
+   "text": "The bacteria settle out, and the water on top is almost clean."
+  },
+  {
+   "id": "uv",
+   "station": "plant",
+   "text": "A last pass under UV light kills what's left,"
+  },
+  {
+   "id": "outfall",
+   "station": "river",
+   "text": "before it flows back into the river."
+  },
+  {
+   "id": "river",
+   "station": "river",
+   "text": "All of that, every time you flush."
+  }
+ ],
+ "ambience": false,
+ "sfx_gain": 0.22
+}
