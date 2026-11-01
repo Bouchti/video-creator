@@ -103,6 +103,29 @@ Apply these rules:
 
 Verdict is PASS when there are no blocking issues. Return every real issue in one structured response."""
 
+# Evolution films keep every documentary fact rule; only the story shape (rule 1) is the ladder instead.
+LOCAL_AI_EVOLUTION_EVALUATOR_PROMPT = LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT + """
+
+THIS IS AN EVOLUTION FILM. It replaces rule 1's story shape (rules 2-8 still apply in full):
+E1. Beat 1 is a HOOK that makes a scrolling viewer stop: a sourced paradox, the staggering distance
+    from the first version to the last, or the stakes, over a moving visual. FAIL a calm description,
+    a summary or a title read aloud. Beat 2 starts the ladder with the simplest version ("You start
+    with...").
+E2. The film is a problem -> solution ladder: each problem names a REAL new load or need and the real
+    physical reason the current design fails; the next fix ("So you...") answers exactly that failure
+    and says why it works. FAIL a broken causal link, an invented cause, or a design stage the
+    evidence does not support. A problem may be a real NEED the old design could not meet (a longer
+    span, a flat deck for trains) rather than a collapse; that is a valid link when sourced. FAIL a
+    ladder out of true historical order (an earlier design presented as the answer to a later failure).
+E3. Every stage stands in its real historical place and era (one shared place only when the history
+    stayed there). FAIL a stage shown in another region's landscape (a European mill in a desert),
+    and invented landmark props repeated across stages.
+E4. Solution visuals show the new design finished and carrying the load; never construction in
+    progress. Problem visuals show strain on the structure or the load arriving, never a person hurt.
+E5. The last beat shows the most advanced design whole and lands the strongest real fact, ending
+    with a short question to the viewer.
+`characters` must be []: the builder is "you" and is never shown."""
+
 
 from unreal_video.planner import capability_brief  # noqa: E402
 
@@ -175,15 +198,16 @@ def evaluate_script(
 
 (Length already verified: {wc} words, target {min_words}–{max_words}. Do not judge length.)
 Check facts strictly. Check for forbidden pain/harm/weapon language in EVERY beat.
-CONTENT MODE: {content_mode}. If documentary, FAIL any invented event, discovery, person, quotation,
+CONTENT MODE: {content_mode}. If documentary or evolution, FAIL any invented event, discovery, person, quotation,
 place, artifact, or scientific claim. If fiction, require the title, narration and description to label it.
 SOURCE EVIDENCE: {json.dumps(research or script.get('research_sources', []), indent=2)}
-For documentary content, every specific claim must be supported by this evidence. Unsupported claims FAIL.
+For documentary and evolution content, every specific claim must be supported by this evidence. Unsupported claims FAIL.
 Confirm each beat's visual shows exactly what that beat's words say.
 Be lenient on cinematic style. Submit your verdict as the structured output."""
 
     system = (UNREAL_EVALUATOR_PROMPT if source == "unreal" else
-              LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT if source == "local-ai" and content_mode == "documentary"
+              LOCAL_AI_EVOLUTION_EVALUATOR_PROMPT if content_mode == "evolution"
+              else LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT if source == "local-ai" and content_mode == "documentary"
               else EVALUATOR_PROMPT)
     result = llm.ask(system, prompt, VERDICT_TOOL["input_schema"], effort="medium")
     if not isinstance(result, dict) or result.get("verdict") not in {"PASS", "FAIL"}:
@@ -358,6 +382,51 @@ def hook_feedback(script: dict) -> str | None:
             "move the rest into beat 2. Keep spoken_script in sync.")
 
 
+_SENTENCE = re.compile(r"[^.!?]+[.!?]*")
+_WORD = re.compile(r"[\w'-]+")
+_EARLY_DATE = re.compile(r"\b(?:1[0-9]{3}|20[0-9]{2}|[1-9][0-9]{0,2}\s*(?:BC|BCE|AD|CE))\b|"
+                         r"\b(?:January|February|March|April|June|July|August|September|October|November|"
+                         r"December)\b|\b(?:century|centuries)\b", re.I)
+_DEBUNK = re.compile(r"\b(?:probably (?:didn't|did not|never|wasn't|was not)|(?:mostly |just )?a myth|"
+                     r"legend says|the legend|isn't true|wasn't true|not really|never really|actually didn't|"
+                     r"didn't really|did not really|popular story)\b", re.I)
+
+
+def pacing_feedback(script: dict) -> str | None:
+    """The narration must sound like one person telling a story fast, not a list of dramatic fragments.
+
+    The Oct 2026 history Shorts read at ~2.2 words/s against ~3.75 for the 24M-view Short on the same
+    story, and stalled at 20-490 views: runs of fragments ("Painters. Sculptors. Designers.", "Soup.")
+    each became a pause; dates opened the story ("October 18th, 1925 near Petrich."); the Bucket War
+    debunked its own hook five seconds in ("The bucket probably didn't start the war.").
+    """
+    beats = [b for b in script.get("beats") or [] if isinstance(b, dict)]
+    text = str(script.get("spoken_script") or " ".join(str(b.get("text") or "") for b in beats))
+    sentences = [s.strip() for s in _SENTENCE.findall(text) if _WORD.search(s)]
+    problems = []
+    short = [len(_WORD.findall(s)) <= 3 for s in sentences]
+    runs = [f'"{sentences[i]} {sentences[i + 1]}"' for i in range(len(short) - 1) if short[i] and short[i + 1]]
+    if runs:
+        problems.append(f"fragment runs read as stop-start pauses ({'; '.join(runs[:3])}): join them into "
+                        "full spoken sentences")
+    elif sum(short) > 2:
+        problems.append(f"{sum(short)} sentences of three words or fewer; keep at most two in the whole script")
+    opening = " ".join(str(b.get("text") or "") for b in beats[:2])
+    date = _EARLY_DATE.search(opening)
+    if date:
+        problems.append(f"beats 1-2 give a date or era ({date.group(0)!r}); open on the action and fold any year "
+                        "into a later action sentence")
+    body = " ".join(str(b.get("text") or "") for b in beats[:-2]) if len(beats) > 2 else ""
+    debunk = _DEBUNK.search(body)
+    if debunk:
+        problems.append(f"the hook is weakened before the payoff ({debunk.group(0)!r}); build the hook on what "
+                        "really happened instead, so its claim stays true and open until the end")
+    if not problems:
+        return None
+    return ("PACING (viewers swipe away from slow, stop-start narration): " + "; ".join(problems)
+            + ". Keep the word count and spoken_script in sync.")
+
+
 _TIME_SPAN = re.compile(r"\b(?:\d+|two|three|four|five|six|several|many)\s+(?:years?|months?|weeks?)\b|"
                         r"\b(?:captiv\w*|prison\w*|imprison\w*|released|homecoming|returned home|came home|"
                         r"back home|years later)\b", re.I)
@@ -381,6 +450,29 @@ def wardrobe_feedback(script: dict) -> str | None:
             f"({_TIME_SPAN.search(text).group(0)!r}), but {', '.join(unchanged)} never changes clothes. Add "
             "`look_changes` entries at the beats where their clothing really changes (worn prison clothing "
             "during captivity, a fresh uniform or civilian clothes on return), each a full look description.")
+
+
+_SOLUTION_LINE = re.compile(r"^\W*so\b", re.I)
+
+
+def evolution_feedback(script: dict) -> str | None:
+    """Free check of an evolution draft's shape: a ladder of fixes each stage in its place, with no builder on screen."""
+    if script.get("content_mode") != "evolution":
+        return None
+    beats = [beat for beat in script.get("beats") or [] if isinstance(beat, dict)]
+    problems = []
+    if script.get("characters"):
+        problems.append("`characters` must be []: the builder is \"you\" and is never shown")
+    fixes = sum(bool(_SOLUTION_LINE.match(str(beat.get("text") or ""))) for beat in beats)
+    if fixes < 3:
+        problems.append(f"only {fixes} beat(s) start a fix with \"So you...\"; the ladder needs at least three "
+                        "problem -> fix steps")
+    scenes = {str((beat.get("visual") or {}).get("scene") or "").strip().lower() for beat in beats} - {""}
+    if len(scenes) < 4:
+        problems.append(f"only {len(scenes)} scene label(s); give every design stage its own label")
+    if not problems:
+        return None
+    return "EVOLUTION FORMAT: " + "; ".join(problems) + "."
 
 
 def question_feedback(script: dict) -> str | None:
@@ -450,7 +542,7 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
         if not min_words <= wc <= max_words:
             log.warning(f"Accepting {wc} words (within the {grace:.0%} length grace).")
 
-        hook = hook_feedback(script)
+        hook = hook_feedback(script) or pacing_feedback(script)
         if hook and not final:
             log.warning(f"Failed. Feedback: {hook}")
             previous, last_feedback = script, hook
@@ -459,7 +551,8 @@ def evaluate_with_retry(topic: str, tone: str = "mysterious", max_retries: int =
             log.warning(f"Accepting the draft on the last attempt despite: {hook}")
 
         # Checked before the paid evaluation, which a monotonous draft would only waste.
-        variety = ((variety_feedback(script) or wardrobe_feedback(script) or question_feedback(script))
+        variety = ((variety_feedback(script) or wardrobe_feedback(script) or question_feedback(script)
+                    or evolution_feedback(script))
                    if mode == "local-ai" else None)
         if variety and not final:
             log.warning(f"Failed. Feedback: {variety}")

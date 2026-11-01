@@ -27,6 +27,7 @@ def process_video(
     ambience: str = "natural location ambience",
     captions: bool = True,
     narration_enabled: bool = True,
+    ai_upscale: str | None = None,
 ) -> str:
     config = PipelineConfig()
     concept = script.get("video_title") or script.get("description") or "Untitled local AI video"
@@ -43,6 +44,7 @@ def process_video(
         voice=voice,
         config=config,
         script=script,
+        ai_upscale=ai_upscale,
     )
     # The queue resumes a project from disk, reusing every accepted shot, so a run that stopped on
     # a transient fault (FreeVideo crash, CUDA error, a locked file) is picked up again instead of

@@ -19,8 +19,8 @@ class DeliveryPlanTests(unittest.TestCase):
         self.assertGreater(hook["exaggeration"], 0.6)
         self.assertGreater(dramatic["exaggeration"], 0.6)
         self.assertLess(dramatic["cfg_weight"], 0.5)                    # slower and heavier
-        self.assertGreaterEqual(question["pause_after"], 0.5)
-        self.assertGreaterEqual(plan["Eleven hundred men, posing as whole divisions."]["pause_after"], 0.55)
+        self.assertGreaterEqual(question["pause_after"], 0.3)        # short on purpose (RETENTION_FIXES_2026-11-01)
+        self.assertGreaterEqual(plan["Eleven hundred men, posing as whole divisions."]["pause_after"], 0.35)
         self.assertGreater(plain["exaggeration"], 0.6)                  # the fragments punch the line they join
 
     def test_short_fragments_are_never_spoken_alone(self):

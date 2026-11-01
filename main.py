@@ -5,6 +5,8 @@ Every video is built from script BEATS: each sentence of narration carries the
 visual shown while it is spoken.
   pexels   - Stock/archival footage, real photos, and diagrams (~$0/video, fast)
   local-ai - Durable MiniMax/Wan production with strict scene and final review (default)
+  evolution - Problem -> solution ladder ("you built a bridge... so you..."), filmed by the local AI:
+             MiniMax H3 via FreeVideo only, then a Real-ESRGAN x2plus final upscale
   unreal   - Local UE5 Sequencer/Movie Render Queue cinematics (no per-render API fee)
 
 Usage:
@@ -55,6 +57,13 @@ DEFAULT_TONE = "mysterious"
 DEFAULT_VOICE = "mysterious"
 DEFAULT_SOURCE = "local-ai"
 
+def default_duration() -> int:
+    """Target length when --duration is not given: VIDEO_DURATION from .env, else 62 s."""
+    try:
+        return int(os.getenv("VIDEO_DURATION") or 62)
+    except ValueError:
+        return 62
+
 OUTPUT_DIR = get_output_dir()
 
 
@@ -63,7 +72,7 @@ def run_pipeline(
     source: str = DEFAULT_SOURCE,
     tone: str = None,
     voice: str = DEFAULT_VOICE,
-    duration: int = 65,
+    duration: int = None,
     backend: str = "auto",
     visual_style: str = None,
     reference_image: str = None,
@@ -74,10 +83,19 @@ def run_pipeline(
     publish_platforms: tuple[str, ...] = (),
     publish_live: bool = False,
 ) -> dict:
+    if duration is None:
+        duration = default_duration()
     started = datetime.now()
     # Local-ai fast mode fits the whole run, topic to final video, into LOCAL_VIDEO_BUDGET_MINUTES.
     os.environ["PIPELINE_STARTED_AT"] = str(started.timestamp())
-    if source == "local-ai":
+    # Evolution films are written in their own ladder format and filmed by the local-ai pipeline.
+    local_ai = source in ("local-ai", "evolution")
+    if source == "evolution":
+        # Evolution is MiniMax H3 only: a Wan fallback would change the look mid-ladder.
+        if backend not in ("auto", "minimax"):
+            log.warning(f"--backend {backend} ignored: evolution films always use MiniMax H3 via FreeVideo.")
+        backend = "minimax"
+    if local_ai:
         # Fail before the paid script step, not after it.
         from local_video.planner import validate_duration
         try:
@@ -85,6 +103,11 @@ def run_pipeline(
         except ValueError as e:
             log.error(str(e))
             return {"success": False, "stage_failed": "duration", "error": str(e)}
+    if source == "evolution":
+        problem = minimax_preflight()
+        if problem:
+            log.error(problem)
+            return {"success": False, "stage_failed": "minimax_preflight", "error": problem}
     log.info("=" * 70)
     log.info(f"PIPELINE START | {started.strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 70)
@@ -109,7 +132,8 @@ def run_pipeline(
         log.info(f"Topic (manual): {topic}")
     requested_tone = tone
     from agents.evaluator import evaluate_with_retry
-    mode = "unreal" if source == "unreal" else "local-ai" if source == "local-ai" else "footage"
+    mode = "unreal" if source == "unreal" else "local-ai" if local_ai else "footage"
+    content_mode = "evolution" if source == "evolution" else "documentary"
     # Documentary drafts converge instead of passing outright: the evaluator finds the unsourced
     # claims a few at a time, so each revision clears some and the next one surfaces fewer. Three
     # attempts stranded a draft one blocking issue from PASS, throwing away the whole topic and its
@@ -150,6 +174,15 @@ def run_pipeline(
                 failure = {"success": False, "stage_failed": "research", "topic": topic, "error": str(e)}
                 given_up.append(topic)
                 continue
+        if source == "evolution":
+            # Every rung of the ladder needs its own source for WHY it replaced the last one; the topic search
+            # alone left the links unsourced and the evaluator rejected every draft.
+            log.info("\n[STAGE 0C] Researching every stage of the evolution ladder")
+            try:
+                from agents.leader import research_ladder
+                research = research_ladder(topic, research)
+            except Exception as e:
+                log.warning(f"Ladder research failed ({e}); writing from the topic evidence only.")
 
         log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
 
@@ -180,7 +213,7 @@ def run_pipeline(
         try:
             script = evaluate_with_retry(topic, tone=tone, max_retries=attempts, target_seconds=duration,
                                          mode=mode, source=source, angle=angle, research=research,
-                                         excluded_claims=excluded)
+                                         excluded_claims=excluded, content_mode=content_mode)
         except Exception as e:
             log.error(f"Script stage crashed: {e}", exc_info=True)
             script = None
@@ -202,18 +235,18 @@ def run_pipeline(
         process_video = None
     elif source == "pexels":
         from agents.editor_beats import process_video
-    elif source == "local-ai":
+    elif local_ai:
         from agents.editor_local_ai import process_video
     elif source == "unreal":
         from agents.editor_unreal import process_video
     else:
-        log.error(f"Unknown source: {source}. Use 'pexels', 'local-ai', or 'unreal'.")
+        log.error(f"Unknown source: {source}. Use 'pexels', 'local-ai', 'evolution', or 'unreal'.")
         return {"success": False, "stage_failed": "source_invalid", "topic": topic}
 
     try:
         if source == "director":
             final_path = script["director_final"]
-        elif source == "local-ai":
+        elif local_ai:
             final_path = process_video(
                 script,
                 voice=voice,
@@ -225,6 +258,9 @@ def run_pipeline(
                 ambience=ambience,
                 captions=captions,
                 narration_enabled=narration,
+                # Every local-ai film ends on a Real-ESRGAN pass over its accepted clips (544x960 ->
+                # 1088x1920): LOCAL_VIDEO_AI_UPSCALE (default x2plus); EVOLUTION_UPSCALE overrides it there.
+                ai_upscale=(os.getenv("EVOLUTION_UPSCALE") or None) if source == "evolution" else None,
             )
         elif source == "unreal":
             final_path = process_video(
@@ -246,7 +282,7 @@ def run_pipeline(
     safe_title = "".join(c if c.isalnum() else "_" for c in script["video_title"])[:60]
     output_path = os.path.join(OUTPUT_DIR, f"{ts}_{source}_{safe_title}.mp4")
     try:
-        if source in ("local-ai", "unreal", "director"):
+        if local_ai or source in ("unreal", "director"):
             # The durable project keeps its canonical final render; preserve the
             # legacy top-level output convention with a copy.
             shutil.copy2(final_path, output_path)
@@ -266,7 +302,7 @@ def run_pipeline(
     if selection:
         try:
             from agents.leader import save_used_topic
-            save_used_topic(topic)
+            save_used_topic(topic, subject=selection.get("subject") if source == "evolution" else None)
         except Exception as e:
             log.error(f"Saving the used topic failed: {e}")
 
@@ -283,7 +319,7 @@ def run_pipeline(
             "title": script["video_title"],
             "description": script.get("description", ""),
             "hashtags": script.get("hashtags", []),
-            "ai_generated": source in ("local-ai", "unreal"),
+            "ai_generated": local_ai or source == "unreal",
         }
         # One platform failing must not cost the others, or the finished video.
         for platform in publish_platforms:
@@ -320,6 +356,20 @@ def run_pipeline(
     }
 
 
+def minimax_preflight() -> str | None:
+    """Why MiniMax H3 cannot run here, or None. Cheap: checks files and a running server, starts nothing."""
+    from local_video.config import PipelineConfig
+    from local_video.freevideo import freevideo_root, missing_parts
+    if PipelineConfig().minimax_url:
+        return None                         # a FreeVideo server is already up
+    root = freevideo_root()
+    missing = missing_parts(root)
+    if missing:
+        return (f"Evolution films need MiniMax H3 via FreeVideo, which cannot start from {root}: missing "
+                f"{', '.join(missing)}. Set FREEVIDEO_DIR in .env to the FreeVideo engine folder.")
+    return None
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the video pipeline.")
     parser.add_argument("topic", nargs="?", default=None,
@@ -332,19 +382,24 @@ if __name__ == "__main__":
                              "Max stories, with whole objects taken from BlenderKit and only the mechanism built), "
                              "explainer (no-hero 3D cutaway explainer in the @youbuiltit format: the build in "
                              "physical order, problem -> fix; builds a new set when none fits), "
-                             "evolution (one 3D world, escalating problem -> solution: plank -> arch -> "
-                             "truss -> suspension bridge), "
+                             "evolution (escalating problem -> solution ladder in one photoreal place, e.g. "
+                             "plank -> arch -> truss -> suspension bridge, filmed by MiniMax H3 via FreeVideo "
+                             "and upscaled with Real-ESRGAN x2plus; EVOLUTION_UPSCALE=off|x4plus|general-x4v3), "
                              "unreal (local UE5 Sequencer + Movie Render Queue), or pexels "
                              "(free stock + photos + diagrams)")
-    parser.add_argument("--set", default=None, help="Specific set for cutaway/evolution; consumed Max story sets "
+    parser.add_argument("--set", default=None, help="Specific set for cutaway; consumed Max story sets "
                                                     "are rejected unless repeats are explicitly enabled")
     parser.add_argument("--tone", default=None, help="Script tone")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help="Voice style")
-    # 65 s: over TikTok's 1-minute Creator Rewards threshold, still short enough for Shorts completion
-    parser.add_argument("--duration", type=int, default=65,
+    # 62 s by default (VIDEO_DURATION in .env): TikTok's Creator Rewards pays only on videos over one
+    # minute, and local_video/queue.py never fits a >60 s project below TIKTOK_MIN_SECONDS (61). The
+    # extra length goes into story, not pauses: the read is ~3 words/s now (was ~2.2), see
+    # Docs/RETENTION_FIXES_2026-11-01.md.
+    parser.add_argument("--duration", type=int, default=None,
                         help="Target video length in seconds (30-90). Scales narration + scene count.")
     parser.add_argument("--backend", choices=["auto", "minimax", "wan"], default="auto",
-                        help="Backend for --source local-ai (Auto prefers MiniMax H3 and records Wan fallback)")
+                        help="Backend for --source local-ai (Auto prefers MiniMax H3 and records Wan fallback); "
+                             "--source evolution always uses MiniMax H3")
     parser.add_argument("--visual-style", default=None, help="Shared visual style for local-ai/unreal")
     parser.add_argument("--reference-image", default=None, help="Optional continuity reference image")
     parser.add_argument("--music", default="subtle cinematic", help="Music preference or configured track")
@@ -360,18 +415,18 @@ if __name__ == "__main__":
     if args.publish_live and not args.publish:
         parser.error("--publish-live requires at least one --publish PLATFORM")
 
-    if args.source in ("evolution", "cutaway", "cutaway-bk", "explainer"):
+    if args.source in ("cutaway", "cutaway-bk", "explainer"):
         # Every downloadable library (CC0 assets, the compositor's npm packages) is fetched before a 3D run
         # starts, so a fresh clone is ready to produce; later runs skip this in milliseconds. The local-ai,
         # unreal and pexels routes use none of them, so they never wait on the ~45 GB first fetch.
         from agents.libraries import ensure as ensure_libraries
         ensure_libraries()
 
-    if args.source in ("evolution", "cutaway", "cutaway-bk", "explainer"):
+    if args.source in ("cutaway", "cutaway-bk", "explainer"):
         # The 3D pipelines run under the autopilot: script → voice → exact-timing low-res rehearsal
         # (every ~3 s window must pass) → Blender production render with free technical rechecks →
-        # sound + captions → final check. This gate is shared by Max cutaways, no-hero explainers and
-        # evolution films. A positional topic is the angle to develop.
+        # sound + captions → final check. This gate is shared by Max cutaways and no-hero explainers.
+        # A positional topic is the angle to develop.
         from agents.autopilot import GiveUp, run as autopilot
         try:
             film_path = autopilot(args.source, angle=args.topic, set_id=args.set)

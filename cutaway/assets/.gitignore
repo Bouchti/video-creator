@@ -1,0 +1,7 @@
+# Downloaded assets are fetched by cutaway/assets/fetch.py; credits.json is the committed record
+hdri/
+textures/
+models/
+music/
+sfx/
+fonts/

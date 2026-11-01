@@ -68,14 +68,18 @@ def _read_used_topics() -> list:
     return data
 
 
-def save_used_topic(topic: str):
+def save_used_topic(topic: str, subject: str | None = None):
     """Append today's topic to the history file (every entry is kept; USED_TOPICS_DAYS only filters reads).
 
+    `subject` is the thing an evolution film evolved ("bridge"): no later evolution film may reuse it.
     Raises instead of writing when the existing file cannot be read, so one bad read never replaces the
     whole history with a single entry.
     """
     used = _read_used_topics()
-    used.append({"topic": topic, "date": datetime.now().isoformat()})
+    entry = {"topic": topic, "date": datetime.now().isoformat()}
+    if subject:
+        entry["subject"] = subject
+    used.append(entry)
     os.makedirs(os.path.dirname(USED_TOPICS_FILE), exist_ok=True)
     with open(USED_TOPICS_FILE, "w", encoding="utf-8") as f:
         json.dump(used, f, indent=2, ensure_ascii=False)
@@ -138,16 +142,67 @@ def _director_queries() -> list[str]:
     return random.sample(DIRECTOR_QUERIES, 6)
 
 
+# Evolution films need a design LADDER (engineers taking a simple thing, step by step, to a finished
+# modern one, each version forced by a new load or need), not a news story. Broad searches find subjects
+# nobody listed here; the named ones keep the candidates concrete.
+EVOLUTION_QUERIES = [
+    "how engineers turned a simple structure into a modern marvel step by step",
+    "engineering history from primitive design to modern design each problem solved",
+    "how a simple invention was improved by engineers over centuries",
+    "why did engineers change the design history of infrastructure",
+    "evolution of ship hull design engineering history", "history of lighthouse construction design changes",
+    "how dam design evolved engineering history", "how harbour breakwaters evolved engineering",
+    "evolution of castle walls defensive design history", "how windmills evolved into wind turbines engineering",
+    "history of canal locks engineering evolution", "how roads were built through history engineering",
+    "evolution of tall building structure engineering", "how water wheels evolved into turbines",
+    "history of tunnel engineering methods evolution", "how aqueducts and water supply evolved engineering",
+    "evolution of cranes and lifting machines history", "how railway track design evolved engineering",
+    "evolution of sea walls and flood defences engineering", "how irrigation systems evolved engineering",
+]
+# Subjects the old Blender evolution sets already filmed (engine/sets: bridge_evolution).
+FILMED_EVOLUTION_SUBJECTS = ["bridge"]
+
+
+def _evolution_queries() -> list[str]:
+    """Two broad searches and four named design histories, varied run to run (no time window)."""
+    import random
+    return random.sample(EVOLUTION_QUERIES[:4], 2) + random.sample(EVOLUTION_QUERIES[4:], 4)
+
+
+def _subject_words(subject: str) -> set[str]:
+    words = re.findall(r"[a-z]+", str(subject).lower())
+    return {w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in words} - {
+        "the", "a", "an", "of", "and"}
+
+
+def used_evolution_subjects(recently_used: list) -> list[str]:
+    return FILMED_EVOLUTION_SUBJECTS + [str(t["subject"]) for t in recently_used if t.get("subject")]
+
+
+def evolution_subject_problem(subject: str, used: list[str]) -> str | None:
+    """Why this evolution subject repeats an earlier film ("suspension bridge" repeats "bridge"), or None."""
+    own = _subject_words(subject)
+    if not own:
+        return "no subject named: say which one kind of built thing the ladder evolves"
+    for past in used:
+        other = _subject_words(past)
+        if other and (own <= other or other <= own):
+            return f"'{subject}' was already filmed as an evolution video ('{past}'); pick a different kind of thing"
+    return None
+
+
 def search_trending_subjects(source: str | None = None) -> list:
     """Search Tavily for subjects that fit the channel (Unreal: mechanisms its sets can show)."""
     log.info("  Searching for trending subjects...")
 
     # The history channel's own queries feed every route except those with their own subject rules (the
     # director's Max stage needs everyday how-it-works subjects; its candidates were all wars and biographies).
-    if source not in ("unreal", "director") and channel_profile():
+    if source not in ("unreal", "director", "evolution") and channel_profile():
         return _search(_channel_queries(), time_range=None)
     if source == "director":
         return _search(_director_queries(), time_range=None)
+    if source == "evolution":
+        return _search(_evolution_queries(), time_range=None)
 
     # Multiple search angles to find variety
     queries = (
@@ -232,6 +287,49 @@ def research_topic(topic: str) -> list[dict]:
     return sources
 
 
+LADDER_TOOL = {"type": "object", "properties": {"stages": {
+    "type": "array", "minItems": 4, "maxItems": 7,
+    "description": "The real design stages, oldest first, in true historical order.",
+    "items": {"type": "object", "properties": {
+        "design": {"type": "string", "description": "The design, e.g. 'stone arch bridge'."},
+        "era": {"type": "string", "description": "When it became common, e.g. 'Roman era', '1840s'."},
+        "search": {"type": "string", "description": "A web search that finds a source for WHY this design "
+                   "replaced the previous one (the load, need or failure that drove it), e.g. 'why railway "
+                   "engineers replaced stone arch bridges with iron girder bridges'. For the first stage, "
+                   "a search for how that simplest design worked and what limited it."}},
+        "required": ["design", "era", "search"]}}}, "required": ["stages"]}
+
+
+def research_ladder(topic: str, sources: list[dict] | None = None) -> list[dict]:
+    """Evidence for every rung of an evolution film, not only for the topic line.
+
+    One topic search never sources the causal links: a 2026-10-31 bridge dry run failed all five drafts
+    because no source said why railways moved builders from stone arches to iron, and the writer put
+    the 1826 Menai suspension bridge after the 1847 Dee girder failure. The stage plan only steers the
+    searches; only what the searches return becomes evidence.
+    """
+    sources = list(sources or [])
+    plan = llm.ask("You are a historian of engineering. You outline how a kind of structure really evolved, "
+                   "in true chronological order, and you write web searches that find the reasons.",
+                   f"Outline the design ladder for this evolution video and write one search per stage:\n{topic}",
+                   LADDER_TOOL, effort="low")
+    stages = [s for s in (plan or {}).get("stages") or [] if isinstance(s, dict) and s.get("search")]
+    log.info("  Ladder: %s", " -> ".join(f"{s.get('design')} ({s.get('era')})" for s in stages))
+    found = []
+    for stage in stages:
+        try:
+            response = tavily.search(query=str(stage["search"])[:350], search_depth="advanced", max_results=3)
+        except Exception as e:                # one failed rung must not cost the others
+            log.warning("  Ladder search failed for %s: %s", stage.get("design"), e)
+            continue
+        found.extend({"title": item.get("title", ""), "url": item["url"], "evidence": item["content"][:1200],
+                      "stage": f"{stage.get('design')} ({stage.get('era')})"}
+                     for item in response.get("results", []) if item.get("url") and item.get("content"))
+    merged = _merge_sources(sources, found)
+    log.info("  Evidence pack: %d source(s) after the ladder searches (was %d)", len(merged), len(sources))
+    return merged
+
+
 # ------------------- TOPIC SELECTION -------------------
 
 LEADER_SYSTEM_PROMPT = """You are the story editor of a YouTube Shorts channel. You pick the channel's next story.
@@ -258,6 +356,12 @@ REJECT topics that are:
 ✗ Famous headline history everyone knows (the Titanic sinking, the moon landing) unless the
   candidate is an obscure footnote inside it
 ✗ Already covered in recently_used list, or the same story told from another angle
+✗ The staples of "dumbest wars / weirdest history" lists, which already have breakout Shorts with
+  hundreds of thousands to millions of views: Wojtek the soldier bear, the War of the Stray Dog, the
+  Kettle War, the War of the Bucket, the Pig War, the Emu War, the Anglo-Zanzibar war, the Great
+  Molasses Flood, the Ghost Army, the dancing plague. In Oct 2026 our versions of five of these got
+  20-490 views each against competitors' 9K-24M. Prefer a story with no well-known Short yet: a lesser
+  known person, incident or object, the "Untold" in the channel's name
 
 ═══ ANGLE SELECTION ═══
 
@@ -292,6 +396,24 @@ from web search, pick ONE specific, surprising, factual topic with a clear cause
 that the renderer described in the request can show end to end. Reject political, religious,
 controversial, abstract or already-used topics. The topic must be a specific factual claim, not a
 generic subject. You MUST submit your selection as the structured output."""
+
+
+EVOLUTION_TOPIC_RULES = """
+EVOLUTION LADDER (mandatory for the evolution route):
+- The video is an escalating problem -> solution ladder about ONE kind of built thing (a bridge, a ship
+  hull, a lighthouse, a dam, a harbour wall, a castle wall, a windmill): each new version exists
+  because a REAL new load or need broke the one before (wagons, then railways, then wind; bigger
+  waves; heavier cannon). Pick a subject with at least four such real, well-documented stages, each
+  an outdoor structure a camera can film in clear daylight in its real landscape.
+- Engineers take a SIMPLE first version and evolve it, step by step, into a COMPLETED, impressive
+  modern one (a log over a stream -> a 2 km suspension bridge). The ladder must end on that finished
+  achievement, not stop halfway.
+- The topic names the thing and the ladder in one sentence, ending on its most striking real fact
+  ("Bridges went from planks to stone arches to steel trusses to cables because each new load broke
+  the last design; the longest span now tops 2 km.").
+- Reject a subject whose stages only differ inside (electronics, chemistry, software), or that needs
+  underwater, aerial-only or microscopic shots to show the change.
+"""
 
 
 TOPIC_TOOL = {
@@ -454,7 +576,7 @@ AI-VIDEO REALISM (mandatory for the local-ai generator):
   amputation, suicide or self-harm, and sexual content. "Wildlife" is not automatically safe either:
   feeding, migration, nesting, play, cooperation, camouflage and construction are all suitable, but
   predation, prey capture, venom and animals eating their young are removed as animal cruelty.
-""" if source == "local-ai" else """
+""" if source in ("local-ai", "evolution") else """
 MAX-AND-KIDS STAGE (mandatory for the director route):
 - The film is acted out by Max (a handyman dad) and his two kids on one outdoor or indoor stage, with 3-9
   real everyday-scale objects (a ladder, a bike, a pot, a car, a tree, a ball) that can appear, move, spin,
@@ -474,7 +596,17 @@ MAX-AND-KIDS STAGE (mandatory for the director route):
 - The topic is a specific, surprising, true claim, not a generic subject.
 """ if source == "director" else ""
 
-    profile = channel_profile() if source not in ("unreal", "director") else ""
+    schema = TOPIC_TOOL["input_schema"]
+    if source == "evolution":
+        used = used_evolution_subjects(recently_used)
+        unreal_rules += EVOLUTION_TOPIC_RULES + (
+            "\nALREADY FILMED AS EVOLUTION VIDEOS: every video evolves a DIFFERENT kind of thing. Never pick "
+            "any of these, or a variant of one (a suspension bridge is a bridge): " + ", ".join(used) + "\n")
+        schema = {**schema, "properties": {**schema["properties"], "subject": {
+            "type": "string", "description": "The one kind of built thing the ladder evolves, as a short "
+                                             "singular noun phrase: 'lighthouse', 'ship hull', 'dam'."}},
+                  "required": [*schema["required"], "subject"]}
+    profile = channel_profile() if source not in ("unreal", "director", "evolution") else ""
     channel = f"""
 THE CHANNEL (every pick must fit this description; reject candidates that do not):
 {profile}
@@ -496,14 +628,17 @@ Submit your selection as the structured output. The topic should be a specific f
         retry = ("\n\nREJECTED BY THE VIDEO RENDERER (do not choose these or close variants):\n- "
                  + "\n- ".join(rejected)) if rejected else ""
         system = LEADER_SYSTEM_PROMPT if profile else MECHANISM_LEADER_PROMPT
-        selection = llm.ask(system, base_prompt + retry, TOPIC_TOOL["input_schema"])
+        selection = llm.ask(system, base_prompt + retry, schema)
         if not isinstance(selection, dict):
             raise ValueError("Leader Agent returned no topic selection")
         if source == "director":
             problem, known = novelty_problem(str(selection.get("topic") or ""))
             tried.append((known, selection))
         else:
-            problem = local_ai_topic_problem(str(selection.get("topic") or "")) if source == "local-ai" else None
+            problem = (local_ai_topic_problem(str(selection.get("topic") or ""))
+                       if source in ("local-ai", "evolution") else None)
+            if source == "evolution" and not problem:
+                problem = evolution_subject_problem(str(selection.get("subject") or ""), used)
         if not problem:
             if source == "director":
                 selection = dict(selection, angle=director_brief(selection.get("angle"), LAST_NOVELTY))

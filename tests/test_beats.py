@@ -72,7 +72,7 @@ class LengthTests(unittest.TestCase):
         lo, hi = beat_word_range(num, lo_total, hi_total)
         self.assertLessEqual(num * lo, hi_total)
         self.assertGreaterEqual(num * hi, lo_total)
-        self.assertLessEqual(hi, 10)  # ~3s of speech per beat, not 14 words
+        self.assertLessEqual(hi, 12)  # ~3-4s of speech per beat at ~3 words/s, not 14 words
 
     def test_length_feedback_is_exact_and_graceful(self):
         msg = evaluator.length_feedback(272, 153, 206, 25)

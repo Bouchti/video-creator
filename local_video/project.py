@@ -95,7 +95,10 @@ def create_project(
     voice: str = "mysterious",
     config: PipelineConfig | None = None,
     script: dict[str, Any] | None = None,
+    ai_upscale: str | None = None,
 ) -> ProjectManifest:
+    """ai_upscale: a Real-ESRGAN model name for this project's final upscale ("x2plus", "off"...);
+    None leaves it to LOCAL_VIDEO_AI_UPSCALE."""
     config = config or PipelineConfig()
     duration = validate_duration(duration)
     backend = preferred_backend.lower().replace("h3", "minimax").replace("wan 2.2", "wan")
@@ -125,6 +128,8 @@ def create_project(
             "visual_qc": {"local_artifact_detection": True, "semantic_review": True, "minimum_score": 7},
             },
     )
+    if ai_upscale is not None:
+        manifest.settings["ai_upscale"] = ai_upscale
     music_source = Path(music).expanduser()
     if music_source.exists():
         manifest.settings["music_path"] = str(

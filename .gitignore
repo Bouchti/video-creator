@@ -67,3 +67,10 @@ run_cutaway_hybrid.bat
 # Chatterbox TTS environment (agents/libraries.py part chatterbox)
 tools/chatterbox/.venv/
 tools/chatterbox/.wheels/
+backup_before_*/
+
+# Build-It / cutaway run outputs, and the style pack with third-party reference frames (kept local)
+runs/
+refs/
+buildit-style-pack/
+buildit-style-pack.zip

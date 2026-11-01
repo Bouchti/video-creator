@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .config import PipelineConfig, VIDEO_EXTENSIONS
+from .config import PipelineConfig, VIDEO_EXTENSIONS, env_float
 
 
 def ffprobe(path: str | Path, config: PipelineConfig) -> dict[str, Any]:
@@ -203,6 +203,43 @@ def visual_quality_metrics(path: str | Path, samples: int = 12) -> dict[str, flo
             "artifact_score": colors / max(edges, 1.0), "quality_samples": len(values)}
 
 
+def detail_kept(path: str | Path, samples: int = 9) -> dict[str, float]:
+    """How much of its first frame's fine detail a clip keeps (median of the later frames / the first).
+
+    An image-to-video clip starts on its sharp keyframe; a clip that goes soft (dust or haze turned into a
+    veil, a smeared generation) loses most of it. Measured at the clip's 544x960 native size, because the
+    loss is fine detail: the windmill run's dust shots kept 0.22-0.29, every clean shot 0.40 or more, and at
+    a quarter of the size the two could not be told apart.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return {"detail_first": 0.0, "detail_kept": 1.0}
+    capture = cv2.VideoCapture(str(path))
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    values = []
+    for position in np.linspace(0, max(count - 1, 0), min(samples, max(count, 1)), dtype=int):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(position))
+        ok, frame = capture.read()
+        if ok and frame is not None:
+            frame = cv2.resize(frame, (544, 960), interpolation=cv2.INTER_AREA)
+            values.append(float(cv2.Laplacian(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()))
+    capture.release()
+    if len(values) < 3 or values[0] <= 0:
+        return {"detail_first": values[0] if values else 0.0, "detail_kept": 1.0}
+    return {"detail_first": values[0], "detail_kept": float(np.median(values[1:])) / values[0]}
+
+
+def soft_clip_problem(detail: dict[str, float]) -> str:
+    minimum = env_float("LOCAL_VIDEO_MIN_DETAIL_KEPT", 0.35, 0.0)
+    # A first frame with little detail of its own (a dark interior, an open sky) says nothing about softness.
+    if detail["detail_first"] >= 150.0 and detail["detail_kept"] < minimum:
+        return (f"the picture goes soft: it keeps only {detail['detail_kept']:.0%} of its first frame's detail "
+                f"(minimum {minimum:.0%}); haze, dust or a smeared generation")
+    return ""
+
+
 def validate_clip(
     path: str | Path,
     config: PipelineConfig,
@@ -237,7 +274,10 @@ def validate_clip(
     bars = bar_metrics(path)
     if bar_problem(bars):
         problems.append(bar_problem(bars))
-    report = {**metadata, **metrics, **quality, **bars, "valid": not problems, "problems": problems}
+    detail = detail_kept(path)
+    if soft_clip_problem(detail):
+        problems.append(soft_clip_problem(detail))
+    report = {**metadata, **metrics, **quality, **bars, **detail, "valid": not problems, "problems": problems}
     if problems:
         raise ValueError("; ".join(problems))
     return report

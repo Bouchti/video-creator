@@ -255,7 +255,24 @@ class EveryShotMovesTests(FastModeTests):
             self.assertIn("Restaged", shot.prompt)
             self.assertTrue(all(attempt.get("superseded") for attempt in shot.attempts[:-1]))
             self.assertTrue(any(e["event"] == "shot_restaged_after_failure" for e in result.events))
-            self.assertEqual(5, sum(1 for shot_id, _ in backend.calls if shot_id == "shot-002"))
+            # Two fatal takes of the old staging, then the restaged take (lighthouse shot-003: a third take of a
+            # staging rejected twice for the same flaw wasted ~4 GPU minutes and failed again).
+            self.assertEqual(3, sum(1 for shot_id, _ in backend.calls if shot_id == "shot-002"))
+
+    def test_two_marked_down_takes_of_one_staging_are_restaged_not_retaken(self):
+        """Windmill shot-009: four takes of a miller shouldering a tailpole, each marked down for the same miss."""
+        staging = {"frame": "Medium shot: Restaged post mill on green farmland in clear daylight.",
+                   "motion": "The four sails turn steadily in the wind; the camera holds still."}
+        low = {"valid": False, "average_score": 6.5, "problems": ["no tailpole is pushed"], "fatal_problems": [],
+               "revision_prompt": "Show the tailpole."}
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(fast, "restage", return_value=staging) as restage:
+            result, backend, _ = self._run(
+                folder, reviewer=lambda shot: True if shot.id != "shot-002" or "Restaged" in shot.subject_action
+                else dict(low))
+            self.assertEqual(1, restage.call_count)
+            self.assertEqual(3, sum(1 for shot_id, _ in backend.calls if shot_id == "shot-002"))
+            self.assertFalse(result.shots[1].degraded)
 
     def test_the_budget_allows_every_shot_a_clip(self):
         with patch.dict(os.environ, {"LOCAL_VIDEO_BUDGET_MINUTES": ""}):
@@ -324,6 +341,19 @@ class DesignedSubjectTests(unittest.TestCase):
             view = fast.frame_view(project, shot)
             self.assertEqual(["The sultan's palace"], list(keyframes.recurring_subjects(project, view)))
             self.assertNotIn("subjects_shown", shot.continuity)       # the plan itself is untouched
+
+    def test_the_designer_sees_each_shots_own_place_from_the_world(self):
+        """An evolution film's shared river and far-bank oak must reach every frame FLUX draws."""
+        with tempfile.TemporaryDirectory() as folder:
+            config = make_test_config(folder)
+            script = sample_script()
+            script["location"] = "A green valley where a narrow river runs past a lone oak on the far bank."
+            project = create_project("bridges", 60, "35mm", "auto", narration_enabled=False,
+                                     config=config, script=script)
+            prompt = fast._design_prompt(project, len(project.shots))
+        shot_lines = [line for line in prompt.splitlines() if line.startswith("Shot ")]
+        self.assertTrue(shot_lines)
+        self.assertTrue(all("lone oak on the far bank" in line for line in shot_lines))
 
 
 class FastReviewTests(unittest.TestCase):

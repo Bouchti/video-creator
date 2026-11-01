@@ -14,6 +14,23 @@ def _sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
 
 
+def _trim(wav, sr: int, keep: float = 0.06, threshold: float = 0.01):
+    """Cut the silence Chatterbox leaves before and after a sentence, keeping `keep` seconds of air.
+
+    Each generated sentence carried its own lead-in and tail, which stacked on top of the planned pause:
+    the Oct 2026 narrations were ~19% silence. Only the edges are cut; pauses inside a sentence stay.
+    """
+    import torch
+
+    level = wav.abs().max(dim=0).values if wav.dim() > 1 else wav.abs()
+    loud = torch.nonzero(level > threshold)
+    if loud.numel() == 0:
+        return wav
+    pad = int(keep * sr)
+    start, end = max(0, int(loud[0]) - pad), min(wav.shape[-1], int(loud[-1]) + pad + 1)
+    return wav[..., start:end]
+
+
 def main() -> int:
     job = json.load(open(sys.argv[1], encoding="utf-8"))
     import torch
@@ -41,7 +58,8 @@ def main() -> int:
         pause = torch.zeros(1, int(float(delivery.get("pause_after", job.get("sentence_pause", 0.4))) * model.sr))
         if kind == "wav":                 # already spoken and checked: reused as is
             wav, rate = torchaudio.load(str(value))
-            pieces += [torchaudio.functional.resample(wav, rate, model.sr) if rate != model.sr else wav, pause]
+            wav = torchaudio.functional.resample(wav, rate, model.sr) if rate != model.sr else wav
+            pieces += [_trim(wav, model.sr), pause]
             continue
         # A planned part is spoken as one chunk: it already groups short fragments with their sentence.
         for chunk in ([str(value)] if delivery else _sentences(str(value))):
@@ -53,7 +71,7 @@ def main() -> int:
                 torchaudio.save(path, wav.cpu(), model.sr)
                 spoken[number] = path
             # a narrator's breath between sentences; Chatterbox itself reads fast (~3 words/s at any setting)
-            pieces += [wav.cpu(), pause]
+            pieces += [_trim(wav.cpu(), model.sr), pause]
     if not pieces:
         raise SystemExit("no text to speak")
     torchaudio.save(job["output"], torch.cat(pieces, dim=1), model.sr)

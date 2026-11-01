@@ -22,6 +22,8 @@ from typing import Any
 from agents import llm
 from config.paths import CLAUDE_MODEL
 
+from .fast import MOTION_RULES, design_problems
+
 log = logging.getLogger("pipeline")
 
 CAMERAS = {
@@ -44,9 +46,13 @@ SCHEMA = {
             "type": "boolean",
             "description": "false when the supplied first frame cannot become this shot within the clip: another "
                            "framing scale (a face close-up for a group medium shot), people or places the shot "
-                           "needs that are absent, or a different setting. true when no frame is supplied.",
+                           "needs that are absent, a different setting, or the main subject drawn wrong (another "
+                           "count of its parts, such as six sails where the beat has four, or an extra object "
+                           "on it). true when no frame is supplied.",
         },
-        "camera": {"type": "string", "enum": list(CAMERAS)},
+        # Rises, orbits, tracks and pull-backs are not offered: a quarter of all rejected takes (340 reviewer
+        # problems, 2026-10-31) were camera moves that did not happen as planned. A pan only follows a mover.
+        "camera": {"type": "string", "enum": ["locked_off", "push_in", "pan_left", "pan_right"]},
         "description": {"type": "string"},
     },
 }
@@ -67,9 +73,11 @@ KNOWN_FAILURES = """Known ways a first take of this video model fails review (fr
    Count people and objects, never a person's paired parts: a stride shows both legs, and "exactly one
    boot" got a natural step rejected for its second leg.
 3. Too much for the clip's length: several steps, a slow process, a reveal that needs the camera to
-   travel. Keep ONE visible change that completes inside the clip, and have any process (ripples,
-   smoke, a walk) already underway in the first frame and visibly continuing.
-4. The end state must be reachable from the first frame within the clip with the chosen camera.
+   travel. Keep ONE steady motion that is already underway in the first frame and continues through
+   the whole clip (sails turning, swell rolling, a walk).
+4. Never write an end position or a final composition ("the tower drifts to frame left by the final
+   frame", "ends close on the spout"): the model does not reach planned end states, and the reviewer
+   then rejects the take for missing it (lighthouse shot-006).
 5. The model draws every noun it reads and has no negative channel: write only what should be seen,
    never "no X" or "without X" (that draws X).
 6. An abstract expression ("vacant", "foolish", "terrified", "triumphant") renders as a neutral or stern
@@ -96,6 +104,10 @@ KNOWN_FAILURES = """Known ways a first take of this video model fails review (fr
    A column asked to cross the tall frame side-on failed 13 first frames in four different wordings,
    while marching away passed first time. Its flag stays on a post: a flag "carried by the first
    soldier" was drawn on a loose pole beside the column.
+13. Describe every subject's colours, materials and shape exactly as the first frame shows them, even where the
+   beat or plan says otherwise: the model morphs toward the text mid-clip. Windmill shot-011 had a pale cream
+   tower with a dark conical cap in its first frame and "grey stone tower, wooden cap" in the text; two takes
+   turned it grey stone with a flat cap halfway through. When the frame and the plan disagree, the frame wins.
 12. A beat whose people only listen, sit or wait has nothing to animate: the take holds frozen, or the
    model invents a bigger change (a seated man stood up, the camera drifted back). A slight nod or
    glance does not render either. Give such a beat one clear, continuous action that fits it and
@@ -127,7 +139,8 @@ def examine(shot: Any, end_state: str, keyframe: Path | None,
     prompt = (
         f"You plan a {seconds:.1f}-second shot for an image-to-video model before it is generated.\n"
         f"The beat it must show (keep its meaning, facts and named characters): {shot.subject_action}\n"
-        f"Its end state: {end_state or 'as the beat describes'}\n"
+        f"Where the beat leaves things (context only, never a target the clip must reach): "
+        f"{end_state or 'as the beat describes'}\n"
         f"Planned camera move: {shot.camera_action}\n"
         f"Named characters on screen: {', '.join(shot.cast) if shot.cast else 'none'}\n"
         f"Identity and world lock: {str(shot.continuity.get('characters') or '')[:400]}\n"
@@ -141,7 +154,7 @@ def examine(shot: Any, end_state: str, keyframe: Path | None,
            if hook else "")
         + ("The attached image IS the first frame: read where everything sits in it and plan the move "
            "from there.\n" if keyframe else "No first frame is supplied; the description sets the layout.\n")
-        + KNOWN_FAILURES
+        + KNOWN_FAILURES + "\n\n" + MOTION_RULES
         + (f"\nA PREVIOUS TAKE OF THIS SHOT WAS REJECTED FOR:\n{failed}\nPlan this retake so it cannot fail "
            "the same way: fix the cause (camera move, layout, counts, wardrobe, expression), not only the "
            "symptom.\n" if failed else "")
@@ -163,17 +176,14 @@ def examine(shot: Any, end_state: str, keyframe: Path | None,
                     still = Path(tmp) / "first-frame.jpg"
                     still.write_bytes(data)
                     images.append(("First frame of the shot", still))
-            for attempt in range(2):
-                try:
-                    values = llm.ask("You are a cinematographer planning shots for a video generator.",
-                                           prompt, SCHEMA, model=os.getenv("VISION_MODEL") or CLAUDE_MODEL,
-                                           images=images)
-                    break
-                except Exception:
-                    # Parallel calls race the backend switch: one call's usage-limit error flips every
-                    # later call to the fallback, but the call already in flight still raises. Once more.
-                    if attempt:
-                        raise
+            values = _ask(prompt, images)
+            description = str((values or {}).get("description") or "") if isinstance(values, dict) else ""
+            problems = design_problems("", description)
+            if problems:
+                # The same free check the designer's shots pass: one rewrite before any GPU time.
+                values = _ask(prompt + "\n\nYOUR LAST DESCRIPTION BROKE THESE FIRST-TAKE RULES; return it with "
+                              "every problem gone:\n- " + "\n- ".join(problems) + f"\nIt was: {description}",
+                              images) or values
         if not isinstance(values, dict) or values.get("camera") not in CAMERAS:
             return None
         description = str(values.get("description") or "").strip()
@@ -185,6 +195,18 @@ def examine(shot: Any, end_state: str, keyframe: Path | None,
     except Exception as exc:                  # the shot simply keeps its planned prompt
         log.warning("Shot doctor unavailable for %s (%s)", shot.id, exc.__class__.__name__)
         return None
+
+
+def _ask(prompt: str, images: list) -> Any:
+    for attempt in range(2):
+        try:
+            return llm.ask("You are a cinematographer planning shots for a video generator.",
+                           prompt, SCHEMA, model=os.getenv("VISION_MODEL") or CLAUDE_MODEL, images=images)
+        except Exception:
+            # Parallel calls race the backend switch: one call's usage-limit error flips every later call
+            # to the fallback, but the call already in flight still raises. Once more.
+            if attempt:
+                raise
 
 
 def examine_all(jobs: list[tuple], workers: int = 4) -> list[dict[str, Any] | None]:

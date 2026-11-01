@@ -4,8 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents import evaluator
+from agents.script import plan_for_duration
 from agents.transcription import words_to_srt
 from agents.publisher import publish_video
+
+_IN_RANGE = sum(plan_for_duration(75)[1:]) // 2   # a word count inside the 75 s range at the current pace
 
 
 class EditorHelperTests(unittest.TestCase):
@@ -48,7 +51,7 @@ class EvaluatorTests(unittest.TestCase):
 
     def test_minor_issues_only_never_cost_a_rewrite(self):
         script = {key: "value" for key in evaluator.REQUIRED_KEYS}
-        script["spoken_script"] = " ".join(["word"] * 180)
+        script["spoken_script"] = " ".join(["word"] * _IN_RANGE)
         script["beats"] = [
             {"text": "scene one", "visual": {"kind": "footage", "description": "one", "queries": ["a"]}},
             {"text": "scene two", "visual": {"kind": "footage", "description": "two", "queries": ["b"]}},
@@ -77,7 +80,7 @@ class EvaluatorTests(unittest.TestCase):
 
     def test_evaluator_failure_consumes_retry(self):
         script = {key: "value" for key in evaluator.REQUIRED_KEYS}
-        script["spoken_script"] = " ".join(["word"] * 180)  # inside the 75s word range
+        script["spoken_script"] = " ".join(["word"] * _IN_RANGE)  # inside the 75s word range
         script["beats"] = [  # must be a valid beat list
             {"text": "scene one", "visual": {"kind": "footage", "description": "one", "queries": ["a"]}},
             {"text": "scene two", "visual": {"kind": "footage", "description": "two", "queries": ["b"]}},

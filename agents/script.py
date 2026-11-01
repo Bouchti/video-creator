@@ -16,7 +16,8 @@ load_dotenv(get_env_path())
 log = logging.getLogger("pipeline")
 
 # Pacing constants used to scale narration + beat count to a target duration.
-WORDS_PER_SECOND = 2.1          # measured: ElevenLabs reads ~2.05 words/s (182 words -> 89s)
+WORDS_PER_SECOND = 3.0          # target read with short pauses and tempo 1.0 (was 2.1: the Oct 2026
+                                # Shorts read at ~2.2 words/s; the 24M-view Wojtek Short reads 3.75)
 SECONDS_PER_BEAT = 3.0          # one visual per ~3s of narration
 MIN_BEATS, MAX_BEATS = 8, 36
 
@@ -204,20 +205,25 @@ UNREAL_VISUAL_SCHEMA = {
 }
 
 
+FACTUAL_MODES = ("documentary", "evolution")
+
+
 def build_script_tool(num_beats: int, min_words: int, max_words: int, mode: str = "footage",
                       content_mode: str = "documentary") -> dict:
     lo, hi = beat_word_range(num_beats, min_words, max_words)
     scene_mode = mode == "local-ai"
+    # Evolution films are factual and object-led too: the same production bible as a documentary.
+    factual = content_mode in FACTUAL_MODES
     extra = {}
     if scene_mode:
         extra["characters"] = {
             "type": "array",
-            "minItems": 0 if mode == "local-ai" and content_mode == "documentary" else 1,
+            "minItems": 0 if mode == "local-ai" and factual else 1,
             "maxItems": 3,
             "description": (
                 "For documentary local-AI videos, use [] unless the evidence names a real person whose "
                 "presence is essential. Never invent a presenter, scientist, witness, or demonstrator."
-                if mode == "local-ai" and content_mode == "documentary" else
+                if mode == "local-ai" and factual else
                 "Recurring people or animals the viewer follows. Do not list lights, places, or objects "
                 "as characters. `look` is ONE fixed visual description reused in every image."
             ),
@@ -249,19 +255,19 @@ def build_script_tool(num_beats: int, min_words: int, max_words: int, mode: str 
             "story_premise": {
                 "type": "string",
                 "description": ("Two precise sentences establishing the real subject, factual question, and visual direction."
-                                if content_mode == "documentary" else
+                                if factual else
                                 "Two precise sentences establishing the protagonist, inciting event, goal, and direction."),
             },
             "protagonist_goal": {
                 "type": "string",
                 "description": ("For an object-led documentary, the concrete physical process or evidence trail the film follows; no human protagonist is required."
-                                if content_mode == "documentary" else
+                                if factual else
                                 "The concrete physical goal pursued throughout the sequence."),
             },
             "stakes": {
                 "type": "string",
                 "description": ("Why understanding this real mechanism or finding matters; do not invent danger or a personal conflict."
-                                if content_mode == "documentary" else
+                                if factual else
                                 "What visibly changes or is lost if the protagonist fails."),
             },
             "ending_payoff": {
@@ -379,10 +385,23 @@ SYSTEM_PROMPT_HEAD = """You are an elite viral content director. Your videos hit
   "The sun vanished mid-battle. Both armies quit."), never a summary or a title read aloud ("Doug
   Hegdahl carried 256 identities home" is a summary). A longer beat 1 is rejected in code before review.
   Never open with scene-setting or background ("two armies, one river..."): ~37% of viewers swipe
-  away in the first seconds when the hook only sets the scene. Beat 2 then starts the story
-  ("Here's how it happened.").
+  away in the first seconds when the hook only sets the scene. Beat 2 then starts the story with an
+  action, not a filler line ("Here's how it happened." wastes a second).
 - ONE continuous story with a through-line — a beginning, build, and payoff. NOT a list of disconnected facts.
-- Sensory language. Make people SEE it. Short punchy sentences mixed with longer builds. RHYTHM.
+- SPOKEN AND FAST: write the way someone tells a crazy story to a friend, in full sentences linked with
+  "so", "but", "and then", "which is why". The read is fast (~3 words/s) and every sentence break is a
+  pause, so NEVER a run of fragments ("Painters. Sculptors. Designers." / "Soup." / "No one died. Not a
+  single sailor."): at most two sentences of three words or fewer in the whole script, never two in a
+  row. The Oct 2026 Shorts read in fragments at ~2.2 words/s and lost viewers; the 24M-view Short on
+  the same story told it in one fast, connected breath. Sensory, concrete words so people SEE it.
+- CONTEXT BUDGET: no year, date, century or background in beats 1-2; open on the action. Give setting in
+  at most ONE sentence, only where the story needs it, with the year folded into an action ("In 1784 the
+  emperor sent three ships down the river."), never a standalone date line ("The date, October 8th, 1784.").
+- KEEP THE GAP OPEN: the hook's claim stays TRUE and unanswered until the payoff. Never weaken or debunk
+  it before the last two beats ("The bucket probably didn't start the war." five seconds in killed that
+  Short); if the evidence calls the popular version a myth, build the hook on what really happened. Do
+  not state the punchline as the hook and then spend the middle on background: beat 2 starts the action
+  that leads to it, and the payoff adds a twist or consequence the hook did not give away.
 - Power words: insane, hidden, secret, lost, forbidden, impossible.
 - Final line: cliffhanger or callback. Never generic 'follow for more'.
 
@@ -676,6 +695,80 @@ labels, logos, or written numbers.
 
 """
 
+# The evolution format (once rendered as one Blender world, now filmed by the local AI generator): the
+# documentary rules above still bind every fact and every shot; this block replaces their story shape.
+BEATS_LOCAL_AI_EVOLUTION = """═══ EVOLUTION FORMAT — REPLACES THE STORY SHAPE OF RULES 1, 7 AND 14 ABOVE ═══
+
+The film is an escalating problem -> solution ladder about ONE kind of thing (a bridge, a ship, a
+lighthouse, a harbour wall, a dam): the world keeps raising the bar, so the design keeps getting
+smarter. The viewer is the builder, addressed as "you". The builder is never shown: `characters` is [].
+
+1. THE HOOK (beat 1, at most 8 spoken words, landing in under 3 seconds): the reason a scrolling
+   viewer STOPS. It opens a curiosity gap about the ladder: a paradox in the first design, the
+   staggering distance from the first version to the last, or the stakes, stated as a sourced fact
+   ("This windmill couldn't turn. That's why it worked." / "Three planks became a two-kilometre
+   bridge."). Never a calm description, a summary or a title read aloud, and never "Did you know".
+   Its visual shows the design the line names, whole, large and sharp in clear light, already
+   working (sails turning, a train crossing), so a viewer understands it in one second: never a calm
+   establishing view, a silhouette, a doorway glimpse, or a picture veiled by dust, haze or sun glare
+   (the windmill film's hook was a hazy silhouette and lost the viewer).
+   Beat 2 then starts the ladder in the second person ("You start with three planks over a stream.").
+2. PROBLEM BEATS: a NEW LOAD OR NEED arrives in one short line ("Then a wagon of stone rolls on.",
+   "Then the railway comes.", "But summer comes."), then the real physical reason the current design
+   cannot cope, in plain words. Vary the refrain; never the same opener twice in a row. Never invent
+   a cause the evidence does not give (a river does not widen by itself). The visual SHOWS the
+   strain happening on the CURRENT design within three seconds (planks bowing as the wheels roll
+   on, mortar crumbling from a joint, a deck swaying in gusts), or the new load itself arriving (a
+   loaded wagon on the approach road, a steam locomotive). A failure is shown as strain or damage
+   on the structure only, never a person or animal hurt.
+3. SOLUTION BEATS start with "So you..." (or a close variation), name the new design, and say WHY it
+   works in ONE memorable, quotable sentence that names its link to the failure just shown ("Push a
+   square and it folds; a triangle can't."). The visual shows the NEW design already finished,
+   standing in its place and carrying the load that defeated the old one. Never show it being
+   built: construction is a slow process, not a three-second moment (rule 12).
+4. CAUSAL CHAIN: every fix answers exactly the problem just shown, and every design stage is a real
+   historical stage that the evidence supports. A viewer who misses one beat still sees why each new
+   design exists. Rhythm: problem, fix, problem, fix, each beat answering the last.
+   - The problem is often a NEED the old design cannot meet, not a collapse: a stone arch did not
+     fail, but a long, flat crossing for trains needed something else. Say the old design's real
+     limit; never claim it failed when it did not, and never title the film as if every step failed.
+   - Every link needs a source: the evidence must say why this design followed the last one. A stage
+     whose reason the evidence does not give is DROPPED; a shorter ladder that is fully sourced beats
+     a longer one with a guessed link. Each source's `stage` field says which rung it was found for.
+   - Stages follow true historical order. A design that came first can never be the answer to a
+     later failure (an 1826 suspension bridge does not answer an 1847 girder collapse).
+5. EACH STAGE IN ITS REAL PLACE. A stage stands where history built it: when the ladder stays in one
+   kind of place (bridges over a river), keep one river valley so only the design changes; when it
+   travels (Persian desert, then English fields, then the American prairie), each stage gets its own
+   real landscape. The windmill film put a European tower mill in the Persian desert and read as wrong.
+   - Give each design stage its own `scene` label naming it ("plank bridge", "stone arch bridge",
+     "steel truss bridge"). The stage's solution beats and the problem beats that strain it share its
+     label; the next solution beat starts the next label. At most three beats in a row under one
+     label: when a stage needs more, film the arriving load where it arrives under its own label
+     ("approach road", "riverbank below").
+   - `location`: one sentence per stage headed by its exact label, describing that stage's real
+     landscape and era ("Tower mill: rolling green English farmland under a wide sky, hedgerows and a
+     dirt lane.").
+   - `recurring_objects`: the look of each design that appears in more than one beat, so it is
+     identical in its problem beat. Never invent landmark props (a boulder, a lone tree) to carry
+     between stages: repeated in every shot they read as random props.
+   - The first beat of each new stage uses transition `crossfade` (years pass); others use `cut`.
+   - Keep the same daylight throughout unless a problem IS weather or season (a flood, ice, summer
+     heat): then that beat's `light` names it.
+6. THE PICTURE STILL CHANGES (instead of rule 14's subject quota): alternate wide shots of the whole
+   design in its valley with close-ups of what the line names: the failing joint, the new load's
+   wheels, the rivets, the cable clamps, the river in flood. At least one beat in four is a Close-up
+   or Extreme close-up; never more than three beats in a row of one shot size.
+7. PAYOFF (instead of rule 7's ending): the last beat shows the most advanced design whole and
+   working, and lands the most jaw-dropping real fact of the ladder from the evidence (the biggest
+   one ever built, the famous failure behind the last rule). Its narration ENDS with one short
+   question to the viewer (13 words at most), an opinion or a guess they will want to answer;
+   never ask them to comment, like, subscribe or follow.
+8. Spoken English: contractions, short full sentences, punchy but not telegraphic. Real numbers
+   people can picture, only from the evidence.
+
+"""
+
 SYSTEM_PROMPT_TAIL = """═══ CONTENT SAFETY (NON-NEGOTIABLE) ═══
 
 Video generators and platforms REJECT this content. Never use, in narration or visuals:
@@ -713,7 +806,8 @@ Hard rules:
 
 
 def system_prompt(mode: str = "footage", content_mode: str = "documentary") -> str:
-    beats = (BEATS_LOCAL_AI_DOCUMENTARY if mode == "local-ai" and content_mode == "documentary" else
+    beats = (BEATS_LOCAL_AI_DOCUMENTARY + BEATS_LOCAL_AI_EVOLUTION if mode == "local-ai" and content_mode == "evolution"
+             else BEATS_LOCAL_AI_DOCUMENTARY if mode == "local-ai" and content_mode == "documentary" else
              BEATS_LOCAL_AI if mode == "local-ai"
              else BEATS_UNREAL if mode == "unreal" else BEATS_FOOTAGE)
     return SYSTEM_PROMPT_HEAD + beats + SYSTEM_PROMPT_TAIL
@@ -733,8 +827,9 @@ def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 
     """
     if topic.lstrip().upper().startswith("[FICTION]"):
         content_mode = "fiction"
-    if content_mode not in {"documentary", "fiction"}:
-        raise ValueError("content_mode must be 'documentary' or 'fiction'")
+    if content_mode not in {*FACTUAL_MODES, "fiction"}:
+        raise ValueError("content_mode must be 'documentary', 'evolution' or 'fiction'")
+    factual = content_mode in FACTUAL_MODES
     num_beats, min_words, max_words = plan_for_duration(target_seconds)
     lo, hi = beat_word_range(num_beats, min_words, max_words)
     tool = build_script_tool(num_beats, min_words, max_words, mode, content_mode)
@@ -749,13 +844,13 @@ def generate_script(topic: str, tone: str = "mysterious", target_seconds: int = 
                     "collapse, a record, a measurement — must be DROPPED, not retold or softened, and must "
                     "not carry a beat, the title, the premise or the ending. A shorter arc that is fully "
                     "sourced beats a richer one built on an unsupported claim."
-                    if content_mode == "documentary" else "")
+                    if factual else "")
     # Claims a fact-checker already removed from this topic for want of a source. Without this list
     # the writer supplies them again from its own knowledge of the subject (an Anak Krakatau draft
     # re-asserted that the name means "child of Krakatau" one minute after it was struck out), and
     # the evaluator spends a whole revision round blocking the same claim again.
     excluded = ""
-    if content_mode == "documentary" and excluded_claims:
+    if factual and excluded_claims:
         excluded = ("\n\nALREADY REJECTED FOR THIS TOPIC — a fact-checker removed each of these because no "
                     "source supports it. They are not open questions and your own knowledge does not "
                     "settle them. Do not state, imply, hint at or build a beat, title, premise or ending "
@@ -785,6 +880,9 @@ PREVIOUS DRAFT:
 Submit the corrected FULL script as the structured output."""
     else:
         visual_hint = (
+            "Make every beat one stage of the problem -> solution ladder, each design in its real photoreal "
+            "place and era. Use no people, diagrams, cards, labels, or generated text."
+            if mode == "local-ai" and content_mode == "evolution" else
             "Make every beat one connected, photoreal object-led documentary scene. Use no invented "
             "people, staged discoveries, diagrams, cards, labels, or generated text." if mode == "local-ai" and content_mode == "documentary" else
             "Make every beat one connected, photoreal live-action scene with the same recurring "
@@ -797,7 +895,7 @@ Submit the corrected FULL script as the structured output."""
 
 TOPIC: {topic}{topic_caveat}
 FRAMING ANGLE: {angle or 'choose the strongest truthful framing'}
-CONTENT MODE: {content_mode}. In documentary mode, do not invent events or discoveries.
+CONTENT MODE: {content_mode}. In documentary and evolution mode, do not invent events or discoveries.
 TONE: {tone}
 SOURCE EVIDENCE (use only supported claims; never invent missing details):
 {evidence}{excluded}

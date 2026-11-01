@@ -2504,6 +2504,43 @@ class QualityFloorTests(unittest.TestCase):
                 runner._doctor_shots(project)
             self.assertEqual([len(project.shots)], calls)            # reviewed shots keep reviewer retakes
 
+    def test_a_wrong_own_keyframe_is_redrawn_once_before_the_first_take(self):
+        """Windmill shot-013: its keyframe had six sails and a statue on the cap; every take opened on it."""
+        from local_video import keyframes, queue as queue_module, shot_doctor
+        from local_video.backends import MiniMaxAdapter
+        with tempfile.TemporaryDirectory() as folder:
+            project = create_project("windmills", 60, "35mm", "auto", narration_enabled=False,
+                                     config=make_test_config(folder), script=sample_script())
+            first = project.shots[0]
+            path = keyframes.keyframe_path(project, first)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"six sails")
+            runner = QueueRunner(make_test_config(folder), backends={"minimax": MagicMock(spec=MiniMaxAdapter)})
+            runner.visual_reviewer = queue_module.review_clip
+            seen = []
+
+            def examine_all(jobs, workers=4):
+                results = []
+                for shot, _, start, _ in jobs:
+                    wrong = shot.id == first.id and start is not None and start.read_bytes() == b"six sails"
+                    seen.append((shot.id, wrong))
+                    results.append({"camera": "locked-off static camera", "risks": [], "start_frame_fits": not wrong,
+                                    "description": "Wide shot: the tower mill with four sails turning steadily."})
+                return results
+
+            def draw(manifest, config, selected=None, **_):
+                path.write_bytes(b"four sails")
+
+            with patch.object(shot_doctor, "examine_all", side_effect=examine_all), \
+                    patch.object(queue_module, "prepare_keyframes", side_effect=draw) as redraw:
+                runner._doctor_shots(project)
+            self.assertEqual(1, redraw.call_count)
+            self.assertEqual(b"four sails", path.read_bytes())
+            self.assertIn(first.id, project.settings["keyframe_redrawn_by_doctor"])
+            self.assertIn("four sails turning", first.prompt)
+            self.assertIn((first.id, True), seen)
+            self.assertIn((first.id, False), seen)                # re-planned on the new frame
+
     def test_a_shot_whose_inherited_frame_does_not_fit_opens_fresh(self):
         """Hegdahl shot-010 continued from a face close-up and failed six times as a group medium shot."""
         from local_video.keyframes import fresh_openings

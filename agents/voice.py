@@ -150,7 +150,7 @@ def _edge_voiceover(spoken_script: str, voice: str) -> str:
     # and an unattended video stopped at its narration. The OS store holds the public roots too.
     edge_tts.communicate._SSL_CTX = ssl.create_default_context()
     name = os.getenv("EDGE_TTS_VOICE") or EDGE_VOICES.get(voice, EDGE_VOICES["energetic"])
-    rate = f"{round((float(os.getenv('VOICE_SPEED', '0.92')) - 1) * 100):+d}%"
+    rate = f"{round((float(os.getenv('VOICE_SPEED', '1.0')) - 1) * 100):+d}%"
     pieces = _BREAK.split(spoken_script)                 # text, pause, text, pause, ..., text
     stamp = f"{datetime.now():%Y%m%d_%H%M%S_%f}"
     pcm = []
@@ -196,12 +196,23 @@ _DRAMATIC = re.compile(r"\b(?:secret|danger\w*|grave|death|died|dead|kill\w*|nev
                        r"explo\w*|burst|collaps\w*|vanish\w*|trap\w*|fake|lie|lied|spy|spies|enemy|war)\b", re.I)
 
 
+def _pause_scale() -> float:
+    try:
+        return min(3.0, max(0.0, float(os.getenv("PAUSE_SCALE") or 1.0)))
+    except ValueError:
+        return 1.0
+
+
 def delivery_plan(spoken_script: str, voice: str = "mysterious") -> list[tuple[str, dict]]:
     """Each sentence with the way it is said: the hook lively, a short fragment punched with a beat after it,
     a dramatic line slower and heavier, a question rising with room before it, plain narration level.
 
     One setting for the whole script made the Ghost Army narration sound like a robot reading a list
     (user, 2026-10-31: "it doesn't switch the tone between question, actions, something dramatic").
+
+    Pauses are short on purpose: the Oct 2026 Shorts carried 11-14 s of silence in a 60 s narration
+    (~19%) and read at ~2.2 words/s against ~3.75 for the 24M-view Short on the same story, and lost
+    viewers to the swipe. Tone changes carry the variety now, not silence. PAUSE_SCALE scales them all.
     """
     base_ex, base_cfg = CHATTERBOX_STYLES.get(voice, CHATTERBOX_STYLES["mysterious"])
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", spoken_script.strip()) if s.strip()]
@@ -209,19 +220,20 @@ def delivery_plan(spoken_script: str, voice: str = "mysterious") -> list[tuple[s
     for index, sentence in enumerate(sentences):
         words = len(re.findall(r"[\w'-]+", sentence))
         if sentence.endswith("?"):
-            delivery = {"exaggeration": 0.65, "cfg_weight": 0.4, "pause_after": 0.6}
+            delivery = {"exaggeration": 0.65, "cfg_weight": 0.4, "pause_after": 0.3}
             if index == len(sentences) - 1 and plan:
-                plan[-1][1]["pause_after"] = max(plan[-1][1]["pause_after"], 0.55)   # a beat before the closer
+                plan[-1][1]["pause_after"] = max(plan[-1][1]["pause_after"], 0.35)   # a beat before the closer
         elif index == 0:
-            delivery = {"exaggeration": 0.7, "cfg_weight": 0.35, "pause_after": 0.45}
+            delivery = {"exaggeration": 0.7, "cfg_weight": 0.35, "pause_after": 0.2}
         elif sentence.endswith("!"):
-            delivery = {"exaggeration": 0.8, "cfg_weight": 0.3, "pause_after": 0.4}
+            delivery = {"exaggeration": 0.8, "cfg_weight": 0.3, "pause_after": 0.15}
         elif words <= 3:
-            delivery = {"exaggeration": 0.75, "cfg_weight": 0.3, "pause_after": 0.45}
+            delivery = {"exaggeration": 0.75, "cfg_weight": 0.3, "pause_after": 0.2}
         elif _DRAMATIC.search(sentence):
-            delivery = {"exaggeration": 0.65, "cfg_weight": 0.3, "pause_after": 0.4}
+            delivery = {"exaggeration": 0.65, "cfg_weight": 0.3, "pause_after": 0.15}
         else:
-            delivery = {"exaggeration": base_ex + 0.1, "cfg_weight": base_cfg, "pause_after": 0.3}
+            delivery = {"exaggeration": base_ex + 0.1, "cfg_weight": base_cfg, "pause_after": 0.1}
+        delivery["pause_after"] = round(delivery["pause_after"] * _pause_scale(), 3)
         plan.append((sentence, delivery))
     # Chatterbox garbles a fragment spoken alone ("Painters." came back "Hainters", "Sculptors." as
     # "Helpeders"): a run of short fragments is spoken together, joined to the sentence before it.
@@ -394,11 +406,11 @@ def _chatterbox_voiceover(spoken_script: str, voice: str) -> str:
         "exaggeration": float(os.getenv("CHATTERBOX_EXAGGERATION") or exaggeration),
         "cfg_weight": float(os.getenv("CHATTERBOX_CFG") or cfg_weight),
         "voice_prompt": os.getenv("CHATTERBOX_VOICE") or "",
-        "sentence_pause": float(os.getenv("CHATTERBOX_SENTENCE_PAUSE") or 0.4),
+        "sentence_pause": float(os.getenv("CHATTERBOX_SENTENCE_PAUSE") or 0.12),
         **({"style": voice} if os.getenv("CHATTERBOX_EXPRESSIVE", "1") != "0" else {})}, spoken_script)
-    # Chatterbox speaks ~3 words/s even with the beat pauses (the published films: ~2.4); a 0.92 tempo
-    # (VOICE_SPEED, as the other voices) keeps the lively read at ~2.73 words/s.
-    tempo = min(1.5, max(0.7, float(os.getenv("VOICE_SPEED") or 0.92)))
+    # Chatterbox speaks ~3 words/s; with the short pauses and trimmed sentence edges the full narration
+    # lands near 3.2 words/s at tempo 1.0. The old 0.92 slow-down (and long pauses) gave ~2.2 words/s.
+    tempo = min(1.5, max(0.7, float(os.getenv("VOICE_SPEED") or 1.0)))
     if abs(tempo - 1) > 0.005:
         import subprocess
 
@@ -471,7 +483,7 @@ def _elevenlabs_voiceover(spoken_script: str, voice: str) -> str:
             "similarity_boost": 0.75,
             "style": 0.6,
             "use_speaker_boost": True,
-            "speed": float(os.getenv("VOICE_SPEED", "0.92")),
+            "speed": float(os.getenv("VOICE_SPEED", "1.0")),
         },
     }
     response = elevenlabs_post(

@@ -1,0 +1,23 @@
+{
+ "music/Wallpaper": {
+  "title": "Wallpaper",
+  "license": "CC BY 4.0",
+  "author": "Kevin MacLeod",
+  "credit": "\"Wallpaper\" Kevin MacLeod (incompetech.com). Licensed under Creative Commons: By Attribution 4.0 License. http://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://incompetech.com"
+ },
+ "font/Poppins-Black.ttf": {
+  "kind": "font",
+  "source": "Google Fonts",
+  "author": "Indian Type Foundry",
+  "license": "SIL Open Font License 1.1",
+  "url": "https://fonts.google.com/specimen/Poppins"
+ },
+ "font/Poppins-ExtraBold.ttf": {
+  "kind": "font",
+  "source": "Google Fonts",
+  "author": "Indian Type Foundry",
+  "license": "SIL Open Font License 1.1",
+  "url": "https://fonts.google.com/specimen/Poppins"
+ }
+}

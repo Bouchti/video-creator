@@ -146,7 +146,83 @@ FRAME_RULES = """How FLUX.1-schnell fails, measured on hundreds of rejected firs
   slack half-inflated rubber hull with wrinkles, glued seams and a fill valve, plywood props seen from behind.
   The Ghost Army run lost a shot to six real-looking planes and jeeps.
 - Daylight or interior light only; never night, dusk or glow-in-the-dark subjects.
+- Crisp, clear light with the sun behind or beside the camera, and the subject in sharp focus. Never dust in
+  the air, haze, mist, fog, smoke, steam, spray, sun glare, a backlit subject, a silhouette or a lens flare:
+  the video model turns any of them into a veil over the whole clip (the windmill run's three softest shots,
+  a dust storm and a dust-blown well, kept 22-29% of their first frame's detail against 40-100% for the rest).
 - Real people the story names keep the identity text the plan gives them; never invent a face detail."""
+
+# What the image-to-video model (MiniMax H3) renders on the first take, and what got takes rejected: 340
+# reviewer problems across every local-ai project (2026-10-31): 25% a camera move that did not happen as
+# planned, 19% planned motion too weak, 18% a detail unlike the plan, 16% objects appearing or vanishing,
+# 9% an end state never reached.
+MOTION_RULES = """How to write the motion so the first take passes:
+- ONE simple motion that runs steadily through the whole clip, already underway in the first frame: sails
+  or a wheel turning at an even speed, water flowing, grass and cloth swaying in a steady breeze, a cart or a
+  person moving straight toward or away from the camera. Never a sequence of events.
+- Say how things move, never where they end up: no "ends close on", "until", "settles", "comes to rest",
+  "by the end", and no final composition. The model does not reach planned end states.
+- The camera holds still, or makes one slow, steady push in with no target framing. Never rise, tilt,
+  crane, orbit, pan or pull back to reveal: a quarter of all rejections were camera moves that did not
+  happen as planned.
+- Nothing changes in amount: no filling tank, rising level, growing pile, spreading crack or gathering
+  crowd. Show the state the beat is about.
+- Nothing enters, leaves, appears or disappears, and every moving part is fully visible in the first frame.
+- A mechanism may turn or slide; it never changes shape (no folding, swinging arms, a pole sweeping round):
+  changing shapes morph.
+- Never dust, haze, smoke, mist, fog, steam or spray as the motion: they blur the whole clip.
+- At most 30 words, plain and concrete."""
+
+# Free check of a designed shot against MOTION_RULES and the haze rule, before any GPU time is spent.
+_HAZE = re.compile(r"\b(?:dust(?:y|s)?|haze|hazy|mist|misty|fog|foggy|smoke|smoky|steam|spray|glare|backlit|"
+                   r"silhouett\w*|lens flare|sunburst|into the sun)\b", re.I)
+_END_STATE = re.compile(r"\b(?:ends? (?:close|on|with|at|in|up|framed|tight)|until|settles?|settling|"
+                        r"comes? to rest|by the end|at the end|finally|in the last frame)\b", re.I)
+_CAMERA = re.compile(r"\b(?:rise[sd]?|rising|tilt\w*|crane[sd]?|craning|orbit\w*|pans?|panning|"
+                     r"pull(?:s|ing)? (?:back|out)|pull-back|pull-out|reveal\w*|zoom\w*)\b", re.I)
+_AMOUNT = re.compile(r"\b(?:fill(?:s|ing)?|rising level|level rises|grow(?:s|ing)|spread(?:s|ing)|"
+                     r"gather(?:s|ing)|appears?|appearing|disappear\w*|vanish\w*|emerg\w*)\b", re.I)
+# Lighthouse shot-003 asked for "exactly one tiny orange pinpoint" of a far-off fire: three takes drew two fires
+# or a large blaze. A tiny subject is redrawn large, and an exact count of small things is not kept.
+_TINY = re.compile(r"\b(?:tiny|pinpoint|speck|dot of|faint glow|exactly (?:one|two|three|a single))\b", re.I)
+# Lighthouse shot-015: "exactly twelve polished silver bowl mirrors in a ring, each with its own small flame" went
+# soft on every take (29-30% of the keyframe's detail). Many small repeated parts are fine detail the model smears.
+_MANY = re.compile(r"\b(?:exactly\s+(?:[5-9]|\d{2,}|five|six|seven|eight|nine|ten|eleven|twelve|twenty|dozen)\b|"
+                   r"dozens? of|rings? of|many small|each with its own)", re.I)
+# Lighthouse shot-009: "coal glowing only faintly red, faint embers pulse weakly" went soft twice (31-32% of the
+# keyframe's detail kept), then flared into a blaze. A dim subject has no detail for the model to keep.
+# Windmill shot-015 (both runs): "water pours from the pipe into the tank" failed four takes each time (the stream
+# arced short, came out as a white splash, or hid behind the tank rim); liquid streams passed 60% of first takes.
+_POUR = re.compile(r"\b(?:pour(?:s|ing)?|gush\w*|spurt\w*|stream(?:s|ing)? (?:of water|into|from)|"
+                   r"water (?:runs|running|flows|flowing|falls|falling) (?:into|from|out))\b", re.I)
+_DIM = re.compile(r"\b(?:faint(?:ly)?|dim(?:ly)?|embers?|smoulder\w*|glowing only|weak(?:ly)?)\b", re.I)
+
+
+def design_problems(frame: str, motion: str) -> list[str]:
+    """What in a designed shot breaks the measured first-take rules; empty when it is clean."""
+    problems = []
+    for word in sorted({m.group(0).lower() for m in _HAZE.finditer(f"{frame} {motion}")}):
+        problems.append(f"'{word}': haze, dust, smoke and glare blur the whole clip; use crisp clear light")
+    for word in sorted({m.group(0).lower() for m in _TINY.finditer(f"{frame} {motion}")}):
+        problems.append(f"'{word}': a tiny subject or an exact count of small things is redrawn large or "
+                        "doubled; make the subject large and clear in the frame")
+    for word in sorted({m.group(0).lower() for m in _POUR.finditer(motion)}):
+        problems.append(f"'{word}': a stream of liquid pouring into a container rarely renders; show the water "
+                        "already standing in it, rippling, while the machine that fills it moves")
+    for word in sorted({m.group(0).lower() for m in _MANY.finditer(f"{frame} {motion}")}):
+        problems.append(f"'{word}': many small repeated parts are fine detail the model smears; frame one or two "
+                        "of them large and close instead")
+    for word in sorted({m.group(0).lower() for m in _DIM.finditer(f"{frame} {motion}")}):
+        problems.append(f"'{word}': a dim or faintly glowing subject has no detail to keep and goes soft or "
+                        "flares; show it brightly lit by daylight, its state carried by its look (soot, ash)")
+    for regex, why in ((_END_STATE, "names an end state the model never reaches; say how it moves"),
+                       (_CAMERA, "a camera move the model does not follow; hold still or push in slowly"),
+                       (_AMOUNT, "an amount that changes or a thing that appears; show the state instead")):
+        for word in sorted({m.group(0).lower() for m in regex.finditer(motion)}):
+            problems.append(f"'{word}': {why}")
+    if len(motion.split()) > 40:
+        problems.append(f"the motion is {len(motion.split())} words; keep it to one steady motion in 30")
+    return problems
 
 DESIGN_SCHEMA = {
     "type": "object",
@@ -178,10 +254,11 @@ DESIGN_SCHEMA = {
                     },
                     "motion": {
                         "type": "string",
-                        "description": "For a motion shot, 15-45 words: what moves during the ~3 s clip, starting "
-                                       "from exactly that frame, in motion the video model renders well, and "
-                                       "the last sentence saying how the frame looks at the end. Only what "
-                                       "this beat shows: never a later event of the story. Empty for a still.",
+                        "description": "For a motion shot, 15-30 words: the ONE steady motion of the ~3 s clip, "
+                                       "already underway in that frame, and what the camera does (holds still "
+                                       "or pushes in slowly). How things move, never where they end up. Only "
+                                       "what this beat shows: never a later event of the story. Empty for a "
+                                       "still.",
                     },
                     "still_move": {"type": "string", "enum": list(STILL_MOVES)},
                     "sound_bed": {"type": "string", "enum": ["", *sound.BEDS],
@@ -227,10 +304,13 @@ def _design_prompt(manifest: ProjectManifest, motion_count: int) -> str:
     lines = []
     for shot in manifest.shots:
         cast = f" | named on screen: {', '.join(shot.cast)}" if shot.cast else ""
+        # The place's own sentence of the script's world: without it the shared landscape (the same river and
+        # far-bank oak under every bridge of an evolution film) never reached the frames FLUX draws.
+        world = str((shot.continuity or {}).get("location") or "").strip()
         lines.append(
             f"Shot {shot.index + 1} ({shot.duration_seconds:.1f} s) | narration: \"{shot.narration.strip()}\" | "
-            f"planned visual: {shot.subject_action.strip()} | place: {shot.scene or '-'} | light: "
-            f"{shot.light or '-'}{cast}")
+            f"planned visual: {shot.subject_action.strip()} | place: {shot.scene or '-'}"
+            f"{f' ({world})' if world else ''} | light: {shot.light or '-'}{cast}")
     first = manifest.shots[0].continuity if manifest.shots else {}
     period = str((first or {}).get("period") or "")
     objects = " ".join(f"[{n}] {item}" for n, item in enumerate(script.get("recurring_objects") or [], 1))
@@ -265,7 +345,8 @@ def _design_prompt(manifest: ProjectManifest, motion_count: int) -> str:
           "through a split seam), never dropped. A calm shot's motion stays calm: an intact object stays "
           "intact, and nothing from a later beat happens in it.\n"
         + FRAME_RULES
-        + "\n\nMotion shots use motion this video model renders well: water, drifting smoke, flags and cloth in "
+        + "\n\n" + MOTION_RULES
+        + "\n\nMotion shots use motion this video model renders well: water, flags and cloth in "
           "wind, people walking, talking or working, vessels moving, a slow camera move. It renders badly a "
           "hand doing a precise thing to a prop (tugging a net, tying, handing over, writing: the Ghost Army "
           "soldier walked past the net in four takes): let people walk, turn, look, talk, gesture or carry "
@@ -273,7 +354,7 @@ def _design_prompt(manifest: ProjectManifest, motion_count: int) -> str:
           "badly an explosion starting, something breaking or falling, a crowd running, or an object "
           "appearing: " + ("give those beats to stills, or " if mixed else "")
           + "start the motion just after the event (smoke already rising, debris settling, people turning to "
-          "look). Every frame must hold something that can move naturally for 3 s: water, smoke, cloth, "
+          "look). Every frame must hold something that can move naturally for 3 s: water, cloth, grass, "
           "people at work, light, a vessel, or at least depth for a slow camera move."
         + "\n\nSOUND: the clips are silent, so give each shot the sound a viewer expects to hear there, under "
           "the narration. sound_bed is the looping sound of the place (keep the same bed across shots in the "
@@ -334,6 +415,7 @@ def design_shots(manifest: ProjectManifest, motion_count: int) -> dict[str, dict
                     "source": "designer",
                 }
             log.info("Shot design ready in %.0fs", time.monotonic() - started)
+            _repair_design(manifest, design)
         except Exception as exc:     # the plan's own visuals still work; only the first takes suffer
             log.warning("Shot design unavailable (%s); using the plan's visuals", exc.__class__.__name__)
     _cap_motion(design, manifest, motion_count)
@@ -343,6 +425,61 @@ def design_shots(manifest: ProjectManifest, motion_count: int) -> dict[str, dict
                         budget=motion_count)
     manifest.save()
     return design
+
+
+_SHOT_SIZE = re.compile(r"^\s*(extreme close-up|close-up|medium shot|wide shot|medium close-up|medium wide)", re.I)
+
+
+def same_picture(before: dict[str, Any], after: dict[str, Any], shot_before: Shot, shot_after: Shot) -> bool:
+    """Two neighbouring shots in one place at one shot size read as one picture twice (lighthouse beats 7-8:
+    the same brazier tower on the same shingle; windmill shots 19-20: the same steel windmill)."""
+    scene = getattr(shot_before, "scene", "")
+    if not scene or scene != getattr(shot_after, "scene", ""):
+        return False
+    size_before = _SHOT_SIZE.match(str(before.get("frame") or ""))
+    size_after = _SHOT_SIZE.match(str(after.get("frame") or ""))
+    return bool(size_before and size_after and size_before.group(1).lower() == size_after.group(1).lower())
+
+
+def _repair_design(manifest: ProjectManifest, design: dict[str, dict[str, Any]]) -> None:
+    """Rewrite, once, every designed shot that breaks the first-take rules; cheaper than any rejected take."""
+    flagged = {shot.id: design_problems(design[shot.id].get("frame", ""), design[shot.id].get("motion", ""))
+               for shot in manifest.shots if design.get(shot.id, {}).get("source") == "designer"}
+    for before, shot in zip(manifest.shots, manifest.shots[1:]):
+        if shot.id in flagged and same_picture(design.get(before.id, {}), design[shot.id], before, shot):
+            flagged[shot.id].append(f"looks like shot {before.index + 1} just before it (same place, same shot "
+                                    "size): change the shot size or the angle, or show another part of the place")
+    flagged = {shot_id: problems for shot_id, problems in flagged.items() if problems}
+    if not flagged:
+        return
+    log.info("Shot design: rewriting %d shot(s) that break the first-take rules: %s", len(flagged),
+             ", ".join(flagged))
+    from agents import llm
+    for shot in manifest.shots:
+        problems = flagged.get(shot.id)
+        if not problems:
+            continue
+        row = design[shot.id]
+        prompt = (f"Video: {manifest.concept}\nVisual style: {manifest.visual_style}\n"
+                  f"Shot {shot.index + 1} narration: \"{shot.narration.strip()}\"\n"
+                  f"Frame: {row.get('frame')}\nMotion: {row.get('motion')}\n"
+                  "This staging breaks rules that get first takes rejected:\n- " + "\n- ".join(problems)
+                  + "\n\nRewrite the frame and the motion so they tell the same beat in the same place, era and "
+                    "light, with every problem gone. Keep whatever already works.\n" + FRAME_RULES
+                  + "\n\n" + MOTION_RULES + "\n\nSubmit the structured output.")
+        try:
+            values = llm.ask("You are the director of photography. You fix shot designs before they are filmed.",
+                             prompt, RESTAGE_SCHEMA, effort="low")
+        except Exception as exc:      # the original design still films; it is only likelier to need a retake
+            log.warning("Shot design repair failed for %s (%s)", shot.id, exc.__class__.__name__)
+            continue
+        frame = str((values or {}).get("frame") or "").strip()
+        motion = str((values or {}).get("motion") or "").strip()
+        if len(frame) >= 30 and (len(motion) >= 15 or not row.get("motion")):
+            left = design_problems(frame, motion)
+            row.update(frame=frame, motion=motion if row.get("motion") else "", repaired=problems)
+            if left:
+                log.info("Shot design %s still has: %s", shot.id, "; ".join(left))
 
 
 def _cap_motion(design: dict[str, dict[str, Any]], manifest: ProjectManifest, motion_count: int) -> None:
@@ -360,8 +497,8 @@ RESTAGE_SCHEMA = {
     "required": ["frame", "motion"],
     "properties": {
         "frame": {"type": "string", "description": "The new first frame FLUX draws, 40-90 words, shot size first."},
-        "motion": {"type": "string", "description": "What moves in the ~3 s clip from that frame, 15-45 words, "
-                                                    "ending with how the frame looks at the end."},
+        "motion": {"type": "string", "description": "The ONE steady motion of the ~3 s clip from that frame and "
+                                                    "what the camera does, 15-30 words; never where things end up."},
     },
 }
 
@@ -384,9 +521,9 @@ def restage(manifest: ProjectManifest, shot: Shot, failures: list[str]) -> dict[
         + "\n- ".join(failure[:400] for failure in failures[:6])
         + "\n\nWrite a NEW staging that tells the same beat with something a text-to-image model (FLUX.1-"
           "schnell) and an image-to-video model really film well: one clear subject, simple shapes, natural "
-          "motion (people walking, turning, looking; water, rain, smoke, cloth, a vehicle driving forward; a "
-          "slow camera move). Drop the element that kept failing rather than describing it harder. Keep the "
-          "story's era, place and light.\n" + FRAME_RULES
+          "motion (people walking, turning, looking; water, cloth, grass, a vehicle driving forward; a slow "
+          "push in). Drop the element that kept failing rather than describing it harder. Keep the story's "
+          "era, place and light.\n" + FRAME_RULES + "\n\n" + MOTION_RULES
         + "\n\nSubmit the structured output."
     )
     from agents import llm

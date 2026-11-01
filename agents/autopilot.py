@@ -1,10 +1,11 @@
 r"""
 Autopilot: runs the whole 3D video pipeline unattended and repairs what goes wrong on its own.
 
-    python main.py --source evolution                 # (uses the autopilot)
     python main.py --source cutaway                   # (uses the autopilot)
     python main.py --source explainer                 # (uses the autopilot; no-hero cutaway explainers)
     .\venv\Scripts\python.exe -m agents.autopilot --source evolution --angle "..." --set bridge_evolution
+                                                      # (the old Blender evolution film; main.py --source
+                                                      #  evolution now films it with the local AI)
     .\venv\Scripts\python.exe -m agents.autopilot --resume output/autopilot/<run>.json
 
 Stages and what happens when one fails:

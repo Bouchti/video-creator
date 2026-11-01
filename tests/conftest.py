@@ -44,6 +44,14 @@ def _classic_local_video(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_upscale(monkeypatch):
+    """The Real-ESRGAN upscale is on in production (x2plus); an assembly test must never run the real GPU worker.
+    Tests of the upscale set LOCAL_VIDEO_AI_UPSCALE themselves."""
+    monkeypatch.setenv("LOCAL_VIDEO_AI_UPSCALE", "0")
+    monkeypatch.delenv("EVOLUTION_UPSCALE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_shared_backend_limit(monkeypatch):
     """A usage limit remembered by a real run must not switch the suite's backends, nor a test's leak out."""
     monkeypatch.setenv("SHOWRUNNER_LIMIT_MEMORY", "0")

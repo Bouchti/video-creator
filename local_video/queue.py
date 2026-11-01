@@ -281,8 +281,21 @@ def _repair_prompt(shot, script: dict | None = None) -> str:
     """
     held = (f"{payoff_of(shot.subject_action)} The framing, distance and angle stay exactly the same "
             "in every frame; the only motion is natural motion inside the scene, such as water, "
-            "smoke, steam, cloud or light.")
+            "grass, cloth or drifting cloud, in crisp clear light.")
     return _rebuilt_prompt(shot, held, "locked-off static camera", script)
+
+
+EARLY_RESTAGE_AFTER = 2
+
+
+def _fatal_takes(shot) -> int:
+    """Takes of the current staging the reviewer rejected, for any reason, or that went soft. Lighthouse shot-009
+    (faint embers) went soft twice and windmill shot-009 (a miller shouldering a tailpole) was marked down four
+    times for the same miss: a third take of a staging rejected twice rarely passes. Earlier clean takes stay
+    available to the fallback after a restage, so nothing is lost by restaging."""
+    return sum(1 for attempt in shot.attempts if not attempt.get("superseded")
+               and (((attempt.get("validation") or {}).get("semantic_review") or {}).get("valid") is False
+                    or "goes soft" in str(attempt.get("error") or "")))
 
 
 def _is_infrastructure_failure(exc: Exception) -> bool:
@@ -651,6 +664,11 @@ class QueueRunner:
                         self._restart_minimax(manifest)
                 else:
                     creative_failures += 1
+                # Two fatal rejections of one staging: a third take of it rarely passes (lighthouse shot-003 drew
+                # two fires, then a blaze, then two fires again for "exactly one tiny pinpoint"). Restage now.
+                restage_now = ((isinstance(exc, VisualReviewRejected) or "goes soft" in str(exc)) and self._fast and not self._rushed
+                               and _fatal_takes(shot) >= EARLY_RESTAGE_AFTER
+                               and not fast.designed(manifest, shot).get("restaged_after_failure"))
                 retries_left = creative_failures < total_attempts and attempt_index + 1 < maximum_attempts
                 shot.status = "retrying" if retries_left else "failed"
                 shot.error = last_error
@@ -673,6 +691,12 @@ class QueueRunner:
                 self._emit(manifest, backend_name, last_error)
                 if requested_stop in {ProjectState.PAUSED.value, ProjectState.CANCELLED.value}:
                     return False
+                if restage_now:
+                    log.info("Local AI %s: %d rejected takes of this staging; restaging instead of retaking",
+                             shot.id, _fatal_takes(shot))
+                    if self._restage_failed_shot(manifest, index, early=True):
+                        return self._generate_shot(manifest, index)
+                    # No new staging came back: the remaining takes of the old one are still better than a still.
         if self._restage_failed_shot(manifest, index):
             return self._generate_shot(manifest, index)
         if self._accept_fallback(manifest, index, last_error):
@@ -1074,6 +1098,7 @@ class QueueRunner:
             else:
                 jobs.append((shot, end, keyframe, outfits, key))
         unfit: list[int] = []
+        redraw: list[int] = []
         if jobs:
             log.info("Shot doctor: checking %d shot(s) before their first take", len(jobs))
             results = shot_doctor.examine_all([job[:4] for job in jobs])
@@ -1090,6 +1115,18 @@ class QueueRunner:
                     log.info("Shot doctor %s: the inherited first frame cannot become this shot; it opens fresh",
                              shot.id)
                     continue
+                redrawn = manifest.settings.setdefault("keyframe_redrawn_by_doctor", [])
+                if (start is not None and not result.get("start_frame_fits", True)
+                        and start.parent.name == "keyframes" and shot.id not in redrawn
+                        and isinstance(self.backends.get("minimax"), MiniMaxAdapter)):
+                    # The shot's own keyframe shows the wrong subject (windmill shot-013: six sails and a statue
+                    # on the cap for a four-sailed tower mill; every take opened on it and failed). Redraw it once
+                    # before the first take instead of spending two takes to retire it.
+                    redrawn.append(shot.id)
+                    redraw.append(shot.index)
+                    log.info("Shot doctor %s: its keyframe does not show this shot; redrawing it before take 1",
+                             shot.id)
+                    continue
                 cache[shot.id] = dict(result, **{"for": key})
                 ready.append(shot)
                 log.info("Shot doctor %s: %s; %s", shot.id, result["camera"],
@@ -1101,6 +1138,23 @@ class QueueRunner:
             self._cancel_speculation(manifest, "a first frame is being drawn")
             prepare_keyframes(manifest, self.config, {i + 1 for i in unfit})
             self._doctor_shots(manifest, {i + 1 for i in unfit})
+        if redraw:
+            manifest.record("keyframes_redrawn_by_doctor", shots=[manifest.shots[i].id for i in redraw])
+            self._cancel_speculation(manifest, "a first frame is being redrawn")
+            retired = Path(manifest.project_dir) / "superseded" / "keyframes-retired"
+            retired.mkdir(parents=True, exist_ok=True)
+            for i in redraw:
+                for name in (f"{manifest.shots[i].id}.png", f"{manifest.shots[i].id}.hires.png"):
+                    path = Path(manifest.project_dir) / "keyframes" / name
+                    if path.is_file():
+                        path.replace(retired / f"{int(time.time())}-{name}")
+            try:
+                prepare_keyframes(manifest, self.config, {i + 1 for i in redraw},
+                                  view=(lambda s: fast.frame_view(manifest, s)) if self._fast else None,
+                                  all_shots=True)
+            except Exception as exc:          # the doctor still plans the take; the retake path redraws later
+                log.warning("Keyframe redraw before take 1 failed: %s", exc)
+            self._doctor_shots(manifest, {i + 1 for i in redraw})
         for shot in ready:
             result = cache[shot.id]
             shot.camera_action = result["camera"]
@@ -1293,8 +1347,11 @@ class QueueRunner:
             all_shots=True, keep_flawed=self._rushed)
         log.info("Fast plan: %d keyframe(s) drawn in %.0fs", made, time.monotonic() - started)
 
-    def _restage_failed_shot(self, manifest: ProjectManifest, index: int) -> bool:
+    def _restage_failed_shot(self, manifest: ProjectManifest, index: int, early: bool = False) -> bool:
         """Every take failed with no clean one to keep: restage the shot once and give it fresh takes.
+
+        `early`: two takes of this staging were rejected; restage now even if one was clean, which stays
+        available to the fallback if the new staging fails too.
 
         Only in fast mode without planned stills (the quality-first default); the fallbacks after this are a
         still picture or a flawed take, which the user never wants (Ghost Army shot-018, 2026-10-31).
@@ -1306,7 +1363,8 @@ class QueueRunner:
         if design.get("restaged_after_failure") or not fast.is_motion(manifest, shot):
             return False
         reviews = [(a.get("validation") or {}).get("semantic_review") or {} for a in shot.attempts]
-        if any(review and not review.get("fatal_problems") and not review.get("skipped") for review in reviews):
+        if not early and any(review and not review.get("fatal_problems") and not review.get("skipped")
+                             for review in reviews):
             return False                     # a clean take exists: keep the best of those instead
         failures = [str(item) for review in reviews
                     for item in (review.get("fatal_problems") or review.get("problems") or [])][-6:]

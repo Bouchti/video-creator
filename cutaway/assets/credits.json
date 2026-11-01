@@ -1,0 +1,46 @@
+{
+  "font/Anton-Regular.ttf": {
+    "kind": "font",
+    "name": "Anton-Regular.ttf",
+    "source": "Google Fonts",
+    "url": "https://fonts.google.com/specimen/Anton",
+    "license": "SIL Open Font License 1.1",
+    "author": "Anton by Vernon Adams",
+    "files": [
+      "fonts/Anton-Regular.ttf"
+    ]
+  },
+  "hdri/photo_studio_loft_hall": {
+    "kind": "hdri",
+    "name": "photo_studio_loft_hall",
+    "source": "Poly Haven",
+    "url": "https://polyhaven.com/a/photo_studio_loft_hall",
+    "license": "CC0",
+    "author": "Sergej Majboroda",
+    "files": [
+      "hdri/photo_studio_loft_hall_2k.hdr"
+    ]
+  },
+  "hdri/studio_small_03": {
+    "kind": "hdri",
+    "name": "studio_small_03",
+    "source": "Poly Haven",
+    "url": "https://polyhaven.com/a/studio_small_03",
+    "license": "CC0",
+    "author": "Greg Zaal",
+    "files": [
+      "hdri/studio_small_03_2k.hdr"
+    ]
+  },
+  "hdri/studio_small_09": {
+    "kind": "hdri",
+    "name": "studio_small_09",
+    "source": "Poly Haven",
+    "url": "https://polyhaven.com/a/studio_small_09",
+    "license": "CC0",
+    "author": "Sergej Majboroda",
+    "files": [
+      "hdri/studio_small_09_2k.hdr"
+    ]
+  }
+}
