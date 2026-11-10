@@ -1,0 +1,50 @@
+============================== TIKTOK ==============================
+CAPTION:
+The chip in your phone was printed with light made by blasting falling drops of tin with a laser, 50,000 times a second 🤯
+Its mirrors are so smooth that if one were the size of Germany, the biggest bump would be a tenth of a millimetre.
+How many switches did you flip today? 👇
+
+#chips #semiconductor #howitworks #engineering #science #technology #learnontiktok #explained
+
+
+====================== YOUTUBE SHORTS ======================
+TITLE (max 100 chars):
+Your Phone's Chip Was Printed With Exploding Tin #Shorts
+
+DESCRIPTION:
+In 1947 at Bell Labs, Bardeen and Brattain built the first transistor: a strip of gold foil pressed into a chunk of germanium by a bent spring. When Bell Labs showed it off in 1948, the New York Times put the story on page 46, inside "The News of Radio" column.
+
+Today a phone chip like Apple's A18 Pro holds about 20 billion transistors, more than twice the number of people on Earth. Chips start as sand, refined until only about one atom in a billion is something else. The silicon is grown into one giant crystal and sliced into mirror-smooth wafers. Then the switches are printed on, layer by layer, like light through a stencil. That is why chip factories glow yellow: the light-sensitive coating reacts to blue and UV light.
+
+The smallest patterns are printed with extreme ultraviolet light (13.5 nm). A drop of tin falls, a laser pulse flattens it, and a second, stronger pulse turns it into plasma hotter than the surface of the Sun. This happens 50,000 times a second. Air would absorb that light, so it travels through a vacuum, bouncing off mirrors so smooth that, grown to the size of Germany, the biggest bump would be about 0.1 mm. One machine weighs nearly 200 tons and is delivered in three Boeing 747 cargo planes. Only one company on Earth builds them.
+
+So every time you tap your screen, billions of tiny switches flip. How many did you flip today? 👇
+
+Sources:
+- ASML, "The hottest thing about ASML machines": https://www.asml.com/en/discover/hot-machines
+- Zeiss (Peter Kürz) interview, World of Photonics: https://world-of-photonics.com/en/newsroom/photonics-industry-portal/photonics-interview/dr-peter-kuerz/
+- Intel Newsroom, "EUV: The Most Precise, Complex Machine at Intel": https://www.intel.com/content/www/us/en/newsroom/news/euv-most-precise-complex-machine.html
+- Wikipedia, "Point-contact transistor": https://en.wikipedia.org/wiki/Point-contact_transistor
+- Linda Hall Library, "The Transistor": https://www.lindahall.org/about/news/scientist-of-the-day/the-transistor/
+- Wikipedia, "Apple A18": https://en.wikipedia.org/wiki/Apple_A18
+
+Original animation, story, characters and music.
+
+#Shorts #Chips #HowItWorks
+
+TAGS (comma-separated):
+how chips are made, computer chip, semiconductor, EUV lithography, ASML, transistor, first transistor, bell labs, how a cpu is made, phone chip, silicon wafer, cleanroom, engineering explained, science shorts, animated explainer, cartoon explainer, how it works, shorts
+
+
+==================== INSTAGRAM REELS ====================
+CAPTION:
+Your phone's chip was printed with exploding tin 🤯
+
+A laser blasts falling drops of tin into plasma hotter than the Sun, 50,000 times a second, and that light prints the switches: about 20 billion of them on one chip.
+
+How many did you flip today? 👇
+
+#chips #semiconductor #howitworks #engineering #science #technology #explained #animation #reels
+
+ALT TEXT:
+A cartoon 3D animation: a phone in a hand, the inside of a chip-printing machine where a laser blasts falling tin drops into violet light, the first transistor of 1947 at Bell Labs, a newspaper page 46, a city of glowing switches, a beach and a lattice of silicon atoms, a glowing crystal being pulled from molten silicon, light through a stencil onto a wafer, workers in white suits in a yellow cleanroom, a mirror shaped like Germany, three jumbo jets, and a dark chip city lighting up gold.

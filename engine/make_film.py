@@ -9,6 +9,7 @@ voiceover → word timings + lip-sync envelope → Blender render timed to the w
 (Opus audio, which also plays inside VS Code's built-in player).
 """
 import argparse
+import contextlib
 import glob
 import json
 import logging
@@ -592,6 +593,33 @@ def _replace_file(source, destination):
         os.remove(source)
 
 
+def _voice_text(beats, gap, chapter_gap=0):
+    """The narration with a <break> between beats (`gap` s) and a longer one where a new chapter starts."""
+    parts = []
+    for k, b in enumerate(beats):
+        if k:
+            new_chapter = chapter_gap and b.get("chapter") and b.get("chapter") != beats[k - 1].get("chapter")
+            pause = chapter_gap if new_chapter else gap
+            parts.append(f' <break time="{pause:.2f}s" /> ' if pause else " ")
+        parts.append(b["text"])
+    return "".join(parts)
+
+
+@contextlib.contextmanager
+def _voice_engine(engine):
+    """A film's own voice engine ("chatterbox", "elevenlabs", ...) for the length of one voicing."""
+    old = os.environ.get("VOICE_ENGINE")
+    if engine:
+        os.environ["VOICE_ENGINE"] = engine
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("VOICE_ENGINE", None)
+        else:
+            os.environ["VOICE_ENGINE"] = old
+
+
 def _fit_cap(voice_path, text, film):
     """Keep a film inside FILM_MAX_SECONDS when it is set (off by default: scripts are sized by the voice's
     measured pace): if the voiced narration plus the tail is longer, voice it again once, proportionally
@@ -609,7 +637,8 @@ def _fit_cap(voice_path, text, film):
     old = os.environ.get("VOICE_SPEED")
     os.environ["VOICE_SPEED"] = f"{speed:.3f}"
     try:
-        tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
+        with _voice_engine(film.get("voice_engine")):
+            tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
     finally:
         if old is None:
             os.environ.pop("VOICE_SPEED", None)
@@ -771,6 +800,9 @@ def produce_film(args):
     # evolution films, start on the first build step: no epilogue hook to render, no rewind.
     hookless = evolution or film.get("format") == "buildup"
     film_py = os.path.join(films, "evolution_film.py" if evolution else "cutaway_film.py")
+    own = os.path.join(films, f"{args.film}_film.py")  # a hand-built film (flush_journey, tap_water) has its own runner
+    if os.path.exists(own):
+        film_py = own
     beats = film["beats"]
     if film.get("set"):                               # one text per idea: the scene's own label wins over a sticker
         from engine import sets as _sets
@@ -792,10 +824,11 @@ def produce_film(args):
     # A short pause between beats lets each gag / explanation land (ElevenLabs <break> tags). Build the
     # exact text even when reusing audio: an old overlong voice must be re-voiced or rejected, never reused.
     gap = film.get("beat_pause", 0.55)
-    text = f' <break time="{gap:.2f}s" /> '.join(b["text"] for b in beats) if gap else " ".join(b["text"] for b in beats)
+    text = _voice_text(beats, gap, film.get("chapter_pause", 0))
     fresh_voice = not ((args.reuse_voice or args.remix) and os.path.exists(voice_path))
     if fresh_voice:
-        tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
+        with _voice_engine(film.get("voice_engine")):
+            tmp, _ = generate_voiceover(text, voice=film.get("voice", "energetic"))
         _replace_file(tmp, voice_path)
     duration = _fit_cap(voice_path, text, film)
     words = transcribe_with_whisper(voice_path)
@@ -950,7 +983,7 @@ def produce_film(args):
         open(os.path.join(work, "frames", ".clean"), "w").close()
 
     # ---- stickers (spread over all CPU cores: one PNG load/draw/save per frame adds up) ----
-    stickers = not _kit_film(film)
+    stickers = not _kit_film(film) and film.get("compose") != "hyperframes"   # (HyperFrames draws its own)
     if stickers:
         drop_clashing_stickers(beats, spans, os.path.join(work, "text_boxes.json"))
     cta = film.get("cta") if stickers else None
@@ -1006,8 +1039,73 @@ def _ambience_scenes(film, beats, spans):
             for b, s in zip(beats, spans)]
 
 
+def _hf_mix(film, total, work, voice_path, spans):
+    """The mix for a HyperFrames film, built like Cutaway Studio's: the music track levelled against the measured
+    voice and kept ~27 dB under it, the film's sound events dipped while words are spoken, two-pass loudnorm to
+    -14 LUFS. Returns (mix.wav, loudness)."""
+    from cutaway.stages import sound as cs
+    n = int(round(total * cs.SR))
+
+    def fit(x):
+        return np.pad(x, (0, max(0, n - len(x))))[:n]
+    voice = fit(cs.load(voice_path))
+    env = cs.envelope(voice)
+    ref = cs.speech_rms(voice, env)
+    if film.get("sound"):                   # a hand-placed sound design: real recordings per beat (engine/sound_design)
+        from engine import hf_compose, sound_design
+        fx = sound_design.render(film, hf_compose.beat_times(spans), total, ref, cs.SR)
+        fx = fit(fx) * (1 - (1 - cs.db(film.get("sound_duck_db", -4.0))) * env)
+    else:
+        events = json.load(open(os.path.join(work, "events.json"), encoding="utf-8"))
+        fx = fit(cs.load(sfx.render_events(events, FPS, total, os.path.join(work, "sfx.wav"),
+                                           ambience=film.get("ambience", True))))
+        fx = fx * film.get("sfx_gain", SFX_GAIN) * (1 - 0.5 * env)
+    music = np.zeros(n, dtype=np.float32)
+    track = film.get("music")
+    if track and track != "synth":
+        path = track if os.path.isabs(track) else os.path.join(PROJECT_ROOT, track)
+        if os.path.exists(path):
+            music = cs.music_bed(path, n, env, ref, film.get("music_db", cs.MUSIC_DB),
+                                 film.get("music_duck_db", cs.MUSIC_DUCK_DB))
+        else:
+            log.warning(f"Music track not found: {path}; the film has no music bed")
+    elif track == "synth":
+        music = fit(cs.load(write_wav(os.path.join(work, "music.wav"), sfx.music(total + 0.5), SR))) * cs.db(cs.MUSIC_DB)
+    mono = voice + music + fx
+    raw = os.path.join(work, "mix_raw.wav")
+    cs.save(raw, np.stack([mono, mono], axis=1).reshape(-1))
+    mix = os.path.join(work, "mix.wav")
+    loud = cs.loudnorm(raw, mix)
+    log.info(f"  mix {loud['I']:.1f} LUFS, true peak {loud['TP']:.1f} dBTP")
+    return mix, loud
+
+
+def _finish_hyperframes(film, beats, spans, words, total, work, voice_path, video, name):
+    """Post-production in HyperFrames (engine/hf_compose): labels pinned to moving parts, chapter and step
+    titles, the journey tracker and karaoke captions over the clean Blender render, then the HyperFrames render."""
+    from engine import hf_compose
+    mix, _loud = _hf_mix(film, total, work, voice_path, spans)
+    cap_words = hf_compose.caption_words(beats, script_word_timings(beats, words, total))
+    d, _warnings = hf_compose.build(film, work, spans, cap_words, total, video, mix)
+    hf_compose.lint(d)
+    out = os.path.join(get_output_dir(), f"{name}.mp4")
+    log.info("Rendering the HyperFrames composition...")
+    hf_compose.render(d, out)
+    final_duration = _assert_file_cap(out)
+    preview = os.path.join(get_output_dir(), f"{name}_preview.mp4")
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-i", out, "-c:v", "copy", "-c:a", "libopus", "-b:a", "128k",
+                    preview], check=True)
+    log.info(f"\nFILM: {out} ({final_duration:.1f}s)\nVS Code preview: {preview}\nHyperFrames project: {d}")
+    if os.getenv("POST_TEXT", "1") != "0":
+        from agents import post_text
+        post_text.write(film, out)
+    return out
+
+
 def _finish(args, film, beats, spans, words, total, work, voice_path, video):
     name = os.path.basename(os.path.normpath(work))[:-len("_work")]   # the film's name (work = <name>_work)
+    if film.get("compose") == "hyperframes":
+        return _finish_hyperframes(film, beats, spans, words, total, work, voice_path, video, name)
     # ---- sound design ----
     cuts = []                                          # no whoosh on scene changes (too noisy)
     pops = [s["start"] / FPS + 0.18 for b, s in zip(beats, spans) if _overlay(b)]

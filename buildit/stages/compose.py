@@ -22,10 +22,7 @@ def inputs(run):
 def labels(run, scenes) -> list[dict]:
     sb, W = run.need("storyboard.json"), run.need("words.json")["words"]
     out = []
-    for lb in sb.get("labels", []):
-        t0 = W[min(lb["word"], len(W) - 1)]["start"]
-        t1 = W[min(lb["until_word"], len(W) - 1)]["start"]
-        t1 = max(t1, t0 + 1.6)
+    for lb, t0, t1 in compose.label_times(sb, W):
         scene = next((s for s in scenes if s["start"] <= t0 < s["end"]), None)
         if scene is None:
             continue

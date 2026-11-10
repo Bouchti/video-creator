@@ -1,0 +1,35 @@
+{
+ "lang": "en",
+ "voice_prompt": "C:/Users/tibus/Documents/Projects/Video Creator/cartoon-shorts/shorts/marathon/voice/shout/female_ref.wav",
+ "device": "auto",
+ "items": [
+  {
+   "id": "s0",
+   "text": "He came by car!",
+   "exaggeration": 1.2,
+   "cfg_weight": 0.3,
+   "out": "C:/Users/tibus/Documents/Projects/Video Creator/cartoon-shorts/shorts/marathon/voice/shout/s0.wav"
+  },
+  {
+   "id": "s1",
+   "text": "HE CAME BY CAR!",
+   "exaggeration": 1.5,
+   "cfg_weight": 0.25,
+   "out": "C:/Users/tibus/Documents/Projects/Video Creator/cartoon-shorts/shorts/marathon/voice/shout/s1.wav"
+  },
+  {
+   "id": "s2",
+   "text": "He came... by CAR!",
+   "exaggeration": 1.0,
+   "cfg_weight": 0.35,
+   "out": "C:/Users/tibus/Documents/Projects/Video Creator/cartoon-shorts/shorts/marathon/voice/shout/s2.wav"
+  },
+  {
+   "id": "s3",
+   "text": "He came by car!!",
+   "exaggeration": 1.8,
+   "cfg_weight": 0.2,
+   "out": "C:/Users/tibus/Documents/Projects/Video Creator/cartoon-shorts/shorts/marathon/voice/shout/s3.wav"
+  }
+ ]
+}

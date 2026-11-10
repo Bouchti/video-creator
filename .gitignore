@@ -74,3 +74,27 @@ runs/
 refs/
 buildit-style-pack/
 buildit-style-pack.zip
+
+# Node projects, renders and heavy media (Nov 10)
+node_modules/
+out/
+render/
+*.blend
+*.blend1
+*.mov
+*.mkv
+*.webm
+*.exr
+# third-party clones and private reference-channel study material (never published)
+_downloads/
+cartoon-shorts/references/
+cartoon-shorts/shorts/**/refs/
+# large generated/downloaded assets
+learjet60-palm-beach/assets/
+learjet60-palm-beach/tools/
+learjet60-palm-beach/stills/
+cartoon-shorts/public/
+*.bak
+*.png
+!cartoon-shorts/shorts/*/package/cover.png
+*.jpg

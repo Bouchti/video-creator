@@ -1,0 +1,1195 @@
+{
+ "duration": 70.522167,
+ "words": [
+  {
+   "word": "Oregon",
+   "start": 0.0,
+   "end": 0.273
+  },
+  {
+   "word": "blew",
+   "start": 0.273,
+   "end": 0.527
+  },
+  {
+   "word": "up",
+   "start": 0.527,
+   "end": 0.709
+  },
+  {
+   "word": "a",
+   "start": 0.709,
+   "end": 0.8
+  },
+  {
+   "word": "whale.",
+   "start": 0.8,
+   "end": 1.073
+  },
+  {
+   "word": "On",
+   "start": 1.073,
+   "end": 1.691
+  },
+  {
+   "word": "purpose.",
+   "start": 1.691,
+   "end": 2.0
+  },
+  {
+   "word": "November",
+   "start": 2.48,
+   "end": 2.735
+  },
+  {
+   "word": "nineteen",
+   "start": 2.735,
+   "end": 3.489
+  },
+  {
+   "word": "seventy.",
+   "start": 3.489,
+   "end": 4.244
+  },
+  {
+   "word": "A",
+   "start": 4.244,
+   "end": 4.317
+  },
+  {
+   "word": "dead",
+   "start": 4.317,
+   "end": 4.517
+  },
+  {
+   "word": "sperm",
+   "start": 4.517,
+   "end": 4.807
+  },
+  {
+   "word": "whale,",
+   "start": 4.807,
+   "end": 5.117
+  },
+  {
+   "word": "longer",
+   "start": 5.353,
+   "end": 5.517
+  },
+  {
+   "word": "than",
+   "start": 5.517,
+   "end": 5.68
+  },
+  {
+   "word": "a",
+   "start": 5.68,
+   "end": 5.771
+  },
+  {
+   "word": "bus,",
+   "start": 5.771,
+   "end": 6.08
+  },
+  {
+   "word": "washes",
+   "start": 6.298,
+   "end": 6.498
+  },
+  {
+   "word": "up",
+   "start": 6.498,
+   "end": 6.68
+  },
+  {
+   "word": "on",
+   "start": 6.68,
+   "end": 6.789
+  },
+  {
+   "word": "the",
+   "start": 6.789,
+   "end": 6.88
+  },
+  {
+   "word": "beach",
+   "start": 6.88,
+   "end": 7.117
+  },
+  {
+   "word": "at",
+   "start": 7.117,
+   "end": 7.226
+  },
+  {
+   "word": "Florence.",
+   "start": 7.226,
+   "end": 7.48
+  },
+  {
+   "word": "It",
+   "start": 7.95,
+   "end": 8.022
+  },
+  {
+   "word": "weighs",
+   "start": 8.022,
+   "end": 8.259
+  },
+  {
+   "word": "eight",
+   "start": 8.259,
+   "end": 8.604
+  },
+  {
+   "word": "tons,",
+   "start": 8.604,
+   "end": 9.059
+  },
+  {
+   "word": "and",
+   "start": 9.059,
+   "end": 9.459
+  },
+  {
+   "word": "it",
+   "start": 9.459,
+   "end": 9.55
+  },
+  {
+   "word": "stinks.",
+   "start": 9.55,
+   "end": 9.841
+  },
+  {
+   "word": "In",
+   "start": 10.354,
+   "end": 10.427
+  },
+  {
+   "word": "Oregon,",
+   "start": 10.427,
+   "end": 10.736
+  },
+  {
+   "word": "the",
+   "start": 11.009,
+   "end": 11.081
+  },
+  {
+   "word": "beach",
+   "start": 11.081,
+   "end": 11.281
+  },
+  {
+   "word": "is",
+   "start": 11.281,
+   "end": 11.427
+  },
+  {
+   "word": "legally",
+   "start": 11.427,
+   "end": 11.681
+  },
+  {
+   "word": "a",
+   "start": 11.681,
+   "end": 11.899
+  },
+  {
+   "word": "highway.",
+   "start": 11.899,
+   "end": 12.136
+  },
+  {
+   "word": "So",
+   "start": 12.681,
+   "end": 12.79
+  },
+  {
+   "word": "the",
+   "start": 12.79,
+   "end": 13.045
+  },
+  {
+   "word": "dead",
+   "start": 13.045,
+   "end": 13.245
+  },
+  {
+   "word": "whale",
+   "start": 13.245,
+   "end": 13.481
+  },
+  {
+   "word": "is",
+   "start": 13.481,
+   "end": 13.663
+  },
+  {
+   "word": "a",
+   "start": 13.663,
+   "end": 13.736
+  },
+  {
+   "word": "job",
+   "start": 13.736,
+   "end": 13.972
+  },
+  {
+   "word": "for",
+   "start": 13.972,
+   "end": 14.19
+  },
+  {
+   "word": "the",
+   "start": 14.19,
+   "end": 14.281
+  },
+  {
+   "word": "highway",
+   "start": 14.281,
+   "end": 14.481
+  },
+  {
+   "word": "department.",
+   "start": 14.481,
+   "end": 14.772
+  },
+  {
+   "word": "Their",
+   "start": 15.141,
+   "end": 15.268
+  },
+  {
+   "word": "engineer,",
+   "start": 15.268,
+   "end": 15.814
+  },
+  {
+   "word": "George",
+   "start": 16.159,
+   "end": 16.432
+  },
+  {
+   "word": "Thornton,",
+   "start": 16.432,
+   "end": 16.832
+  },
+  {
+   "word": "has",
+   "start": 17.141,
+   "end": 17.195
+  },
+  {
+   "word": "a",
+   "start": 17.195,
+   "end": 17.304
+  },
+  {
+   "word": "plan:",
+   "start": 17.304,
+   "end": 17.65
+  },
+  {
+   "word": "blow",
+   "start": 17.959,
+   "end": 18.104
+  },
+  {
+   "word": "it",
+   "start": 18.104,
+   "end": 18.232
+  },
+  {
+   "word": "into",
+   "start": 18.232,
+   "end": 18.359
+  },
+  {
+   "word": "tiny",
+   "start": 18.359,
+   "end": 18.632
+  },
+  {
+   "word": "pieces,",
+   "start": 18.632,
+   "end": 18.995
+  },
+  {
+   "word": "and",
+   "start": 18.995,
+   "end": 19.432
+  },
+  {
+   "word": "let",
+   "start": 19.432,
+   "end": 19.541
+  },
+  {
+   "word": "the",
+   "start": 19.541,
+   "end": 19.668
+  },
+  {
+   "word": "seagulls",
+   "start": 19.668,
+   "end": 20.104
+  },
+  {
+   "word": "eat",
+   "start": 20.104,
+   "end": 20.195
+  },
+  {
+   "word": "them.",
+   "start": 20.195,
+   "end": 20.377
+  },
+  {
+   "word": "How",
+   "start": 20.714,
+   "end": 20.841
+  },
+  {
+   "word": "much",
+   "start": 20.841,
+   "end": 21.005
+  },
+  {
+   "word": "dynamite?",
+   "start": 21.005,
+   "end": 21.423
+  },
+  {
+   "word": "Half",
+   "start": 21.914,
+   "end": 22.023
+  },
+  {
+   "word": "a",
+   "start": 22.023,
+   "end": 22.132
+  },
+  {
+   "word": "ton.",
+   "start": 22.132,
+   "end": 22.278
+  },
+  {
+   "word": "Walter",
+   "start": 22.663,
+   "end": 22.899
+  },
+  {
+   "word": "Umenhofer,",
+   "start": 22.899,
+   "end": 23.481
+  },
+  {
+   "word": "a",
+   "start": 23.735,
+   "end": 23.79
+  },
+  {
+   "word": "war",
+   "start": 23.79,
+   "end": 23.972
+  },
+  {
+   "word": "veteran",
+   "start": 23.972,
+   "end": 24.299
+  },
+  {
+   "word": "who",
+   "start": 24.299,
+   "end": 24.481
+  },
+  {
+   "word": "knows",
+   "start": 24.481,
+   "end": 24.626
+  },
+  {
+   "word": "explosives,",
+   "start": 24.626,
+   "end": 25.19
+  },
+  {
+   "word": "warns",
+   "start": 25.535,
+   "end": 25.754
+  },
+  {
+   "word": "them:",
+   "start": 25.754,
+   "end": 25.899
+  },
+  {
+   "word": "twenty",
+   "start": 25.899,
+   "end": 26.39
+  },
+  {
+   "word": "sticks",
+   "start": 26.39,
+   "end": 26.717
+  },
+  {
+   "word": "is",
+   "start": 26.717,
+   "end": 26.899
+  },
+  {
+   "word": "plenty.",
+   "start": 26.899,
+   "end": 27.208
+  },
+  {
+   "word": "They",
+   "start": 27.826,
+   "end": 27.99
+  },
+  {
+   "word": "use",
+   "start": 27.99,
+   "end": 28.172
+  },
+  {
+   "word": "twenty",
+   "start": 28.172,
+   "end": 28.408
+  },
+  {
+   "word": "cases.",
+   "start": 28.408,
+   "end": 28.735
+  },
+  {
+   "word": "So",
+   "start": 29.175,
+   "end": 29.285
+  },
+  {
+   "word": "Walter",
+   "start": 29.285,
+   "end": 29.503
+  },
+  {
+   "word": "parks",
+   "start": 29.503,
+   "end": 29.812
+  },
+  {
+   "word": "his",
+   "start": 29.812,
+   "end": 29.975
+  },
+  {
+   "word": "brand",
+   "start": 29.975,
+   "end": 30.157
+  },
+  {
+   "word": "new",
+   "start": 30.157,
+   "end": 30.339
+  },
+  {
+   "word": "car,",
+   "start": 30.339,
+   "end": 30.594
+  },
+  {
+   "word": "and",
+   "start": 30.594,
+   "end": 30.921
+  },
+  {
+   "word": "the",
+   "start": 30.921,
+   "end": 30.975
+  },
+  {
+   "word": "crowd",
+   "start": 30.975,
+   "end": 31.175
+  },
+  {
+   "word": "steps",
+   "start": 31.175,
+   "end": 31.43
+  },
+  {
+   "word": "way",
+   "start": 31.43,
+   "end": 31.63
+  },
+  {
+   "word": "back.",
+   "start": 31.63,
+   "end": 31.794
+  },
+  {
+   "word": "Three.",
+   "start": 32.238,
+   "end": 32.438
+  },
+  {
+   "word": "Two.",
+   "start": 32.783,
+   "end": 33.129
+  },
+  {
+   "word": "One.",
+   "start": 33.456,
+   "end": 33.765
+  },
+  {
+   "word": "Then",
+   "start": 34.174,
+   "end": 34.465
+  },
+  {
+   "word": "it",
+   "start": 34.465,
+   "end": 34.555
+  },
+  {
+   "word": "starts",
+   "start": 34.555,
+   "end": 34.737
+  },
+  {
+   "word": "raining",
+   "start": 34.737,
+   "end": 35.01
+  },
+  {
+   "word": "whale.",
+   "start": 35.01,
+   "end": 35.301
+  },
+  {
+   "word": "Huge",
+   "start": 35.709,
+   "end": 35.946
+  },
+  {
+   "word": "chunks",
+   "start": 35.946,
+   "end": 36.273
+  },
+  {
+   "word": "of",
+   "start": 36.273,
+   "end": 36.455
+  },
+  {
+   "word": "blubber",
+   "start": 36.455,
+   "end": 36.764
+  },
+  {
+   "word": "land",
+   "start": 36.764,
+   "end": 37.0
+  },
+  {
+   "word": "on",
+   "start": 37.0,
+   "end": 37.146
+  },
+  {
+   "word": "the",
+   "start": 37.146,
+   "end": 37.236
+  },
+  {
+   "word": "crowd,",
+   "start": 37.236,
+   "end": 37.564
+  },
+  {
+   "word": "up",
+   "start": 37.782,
+   "end": 37.855
+  },
+  {
+   "word": "to",
+   "start": 37.855,
+   "end": 37.964
+  },
+  {
+   "word": "eight",
+   "start": 37.964,
+   "end": 38.136
+  },
+  {
+   "word": "hundred",
+   "start": 38.136,
+   "end": 38.309
+  },
+  {
+   "word": "feet",
+   "start": 38.309,
+   "end": 38.527
+  },
+  {
+   "word": "away.",
+   "start": 38.527,
+   "end": 38.764
+  },
+  {
+   "word": "Wait.",
+   "start": 39.19,
+   "end": 39.354
+  },
+  {
+   "word": "How",
+   "start": 39.79,
+   "end": 40.009
+  },
+  {
+   "word": "does",
+   "start": 40.009,
+   "end": 40.136
+  },
+  {
+   "word": "half",
+   "start": 40.136,
+   "end": 40.354
+  },
+  {
+   "word": "a",
+   "start": 40.354,
+   "end": 40.463
+  },
+  {
+   "word": "ton",
+   "start": 40.463,
+   "end": 40.609
+  },
+  {
+   "word": "of",
+   "start": 40.609,
+   "end": 40.7
+  },
+  {
+   "word": "dynamite",
+   "start": 40.7,
+   "end": 41.136
+  },
+  {
+   "word": "not",
+   "start": 41.136,
+   "end": 41.336
+  },
+  {
+   "word": "get",
+   "start": 41.336,
+   "end": 41.518
+  },
+  {
+   "word": "rid",
+   "start": 41.518,
+   "end": 41.681
+  },
+  {
+   "word": "of",
+   "start": 41.681,
+   "end": 41.79
+  },
+  {
+   "word": "a",
+   "start": 41.79,
+   "end": 41.881
+  },
+  {
+   "word": "whale?",
+   "start": 41.881,
+   "end": 42.063
+  },
+  {
+   "word": "You",
+   "start": 42.461,
+   "end": 42.552
+  },
+  {
+   "word": "see,",
+   "start": 42.552,
+   "end": 42.715
+  },
+  {
+   "word": "dynamite",
+   "start": 43.043,
+   "end": 43.443
+  },
+  {
+   "word": "doesn't",
+   "start": 43.443,
+   "end": 43.697
+  },
+  {
+   "word": "make",
+   "start": 43.697,
+   "end": 43.824
+  },
+  {
+   "word": "things",
+   "start": 43.824,
+   "end": 44.043
+  },
+  {
+   "word": "disappear.",
+   "start": 44.043,
+   "end": 44.552
+  },
+  {
+   "word": "It",
+   "start": 45.024,
+   "end": 45.206
+  },
+  {
+   "word": "just",
+   "start": 45.206,
+   "end": 45.333
+  },
+  {
+   "word": "makes",
+   "start": 45.333,
+   "end": 45.497
+  },
+  {
+   "word": "things",
+   "start": 45.497,
+   "end": 45.733
+  },
+  {
+   "word": "move.",
+   "start": 45.733,
+   "end": 46.043
+  },
+  {
+   "word": "Hit",
+   "start": 46.464,
+   "end": 46.737
+  },
+  {
+   "word": "a",
+   "start": 46.737,
+   "end": 46.827
+  },
+  {
+   "word": "bowl",
+   "start": 46.827,
+   "end": 46.955
+  },
+  {
+   "word": "of",
+   "start": 46.955,
+   "end": 47.137
+  },
+  {
+   "word": "jelly",
+   "start": 47.137,
+   "end": 47.246
+  },
+  {
+   "word": "with",
+   "start": 47.246,
+   "end": 47.518
+  },
+  {
+   "word": "a",
+   "start": 47.518,
+   "end": 47.646
+  },
+  {
+   "word": "hammer.",
+   "start": 47.646,
+   "end": 47.864
+  },
+  {
+   "word": "The",
+   "start": 48.355,
+   "end": 48.427
+  },
+  {
+   "word": "jelly",
+   "start": 48.427,
+   "end": 48.646
+  },
+  {
+   "word": "doesn't",
+   "start": 48.646,
+   "end": 48.9
+  },
+  {
+   "word": "vanish.",
+   "start": 48.9,
+   "end": 49.191
+  },
+  {
+   "word": "It",
+   "start": 49.773,
+   "end": 49.882
+  },
+  {
+   "word": "lands",
+   "start": 49.882,
+   "end": 50.1
+  },
+  {
+   "word": "on",
+   "start": 50.1,
+   "end": 50.264
+  },
+  {
+   "word": "everybody.",
+   "start": 50.264,
+   "end": 50.646
+  },
+  {
+   "word": "And",
+   "start": 51.11,
+   "end": 51.183
+  },
+  {
+   "word": "the",
+   "start": 51.183,
+   "end": 51.274
+  },
+  {
+   "word": "seagulls?",
+   "start": 51.274,
+   "end": 51.801
+  },
+  {
+   "word": "The",
+   "start": 52.165,
+   "end": 52.237
+  },
+  {
+   "word": "blast",
+   "start": 52.237,
+   "end": 52.51
+  },
+  {
+   "word": "scared",
+   "start": 52.51,
+   "end": 52.928
+  },
+  {
+   "word": "them",
+   "start": 52.928,
+   "end": 53.11
+  },
+  {
+   "word": "all",
+   "start": 53.11,
+   "end": 53.219
+  },
+  {
+   "word": "away.",
+   "start": 53.219,
+   "end": 53.492
+  },
+  {
+   "word": "Most",
+   "start": 54.074,
+   "end": 54.183
+  },
+  {
+   "word": "of",
+   "start": 54.183,
+   "end": 54.347
+  },
+  {
+   "word": "the",
+   "start": 54.347,
+   "end": 54.437
+  },
+  {
+   "word": "whale",
+   "start": 54.437,
+   "end": 54.601
+  },
+  {
+   "word": "is",
+   "start": 54.601,
+   "end": 54.783
+  },
+  {
+   "word": "still",
+   "start": 54.783,
+   "end": 54.965
+  },
+  {
+   "word": "lying",
+   "start": 54.965,
+   "end": 55.219
+  },
+  {
+   "word": "there.",
+   "start": 55.219,
+   "end": 55.419
+  },
+  {
+   "word": "The",
+   "start": 55.783,
+   "end": 55.874
+  },
+  {
+   "word": "engineer",
+   "start": 55.874,
+   "end": 56.111
+  },
+  {
+   "word": "told",
+   "start": 56.111,
+   "end": 56.365
+  },
+  {
+   "word": "the",
+   "start": 56.365,
+   "end": 56.511
+  },
+  {
+   "word": "newspaper,",
+   "start": 56.511,
+   "end": 56.892
+  },
+  {
+   "word": "it",
+   "start": 57.274,
+   "end": 57.402
+  },
+  {
+   "word": "went",
+   "start": 57.402,
+   "end": 57.511
+  },
+  {
+   "word": "just",
+   "start": 57.511,
+   "end": 57.729
+  },
+  {
+   "word": "exactly",
+   "start": 57.729,
+   "end": 58.22
+  },
+  {
+   "word": "right.",
+   "start": 58.22,
+   "end": 58.492
+  },
+  {
+   "word": "Fifty",
+   "start": 58.872,
+   "end": 59.072
+  },
+  {
+   "word": "years",
+   "start": 59.072,
+   "end": 59.254
+  },
+  {
+   "word": "later,",
+   "start": 59.254,
+   "end": 59.545
+  },
+  {
+   "word": "the",
+   "start": 59.835,
+   "end": 59.908
+  },
+  {
+   "word": "town",
+   "start": 59.908,
+   "end": 60.108
+  },
+  {
+   "word": "named",
+   "start": 60.108,
+   "end": 60.29
+  },
+  {
+   "word": "a",
+   "start": 60.29,
+   "end": 60.399
+  },
+  {
+   "word": "park",
+   "start": 60.399,
+   "end": 60.581
+  },
+  {
+   "word": "after",
+   "start": 60.581,
+   "end": 60.908
+  },
+  {
+   "word": "it.",
+   "start": 60.908,
+   "end": 61.072
+  },
+  {
+   "word": "Exploding",
+   "start": 61.581,
+   "end": 61.926
+  },
+  {
+   "word": "Whale",
+   "start": 61.926,
+   "end": 62.235
+  },
+  {
+   "word": "Memorial",
+   "start": 62.235,
+   "end": 62.581
+  },
+  {
+   "word": "Park.",
+   "start": 62.581,
+   "end": 62.908
+  },
+  {
+   "word": "And",
+   "start": 63.28,
+   "end": 63.571
+  },
+  {
+   "word": "Walter's",
+   "start": 63.571,
+   "end": 64.135
+  },
+  {
+   "word": "new",
+   "start": 64.135,
+   "end": 64.244
+  },
+  {
+   "word": "car?",
+   "start": 64.244,
+   "end": 64.498
+  },
+  {
+   "word": "A",
+   "start": 64.989,
+   "end": 65.117
+  },
+  {
+   "word": "falling",
+   "start": 65.117,
+   "end": 65.444
+  },
+  {
+   "word": "chunk",
+   "start": 65.444,
+   "end": 65.662
+  },
+  {
+   "word": "of",
+   "start": 65.662,
+   "end": 65.898
+  },
+  {
+   "word": "blubber",
+   "start": 65.898,
+   "end": 66.207
+  },
+  {
+   "word": "crushed",
+   "start": 66.207,
+   "end": 66.698
+  },
+  {
+   "word": "it.",
+   "start": 66.698,
+   "end": 66.862
+  },
+  {
+   "word": "He",
+   "start": 67.179,
+   "end": 67.27
+  },
+  {
+   "word": "had",
+   "start": 67.27,
+   "end": 67.342
+  },
+  {
+   "word": "bought",
+   "start": 67.342,
+   "end": 67.506
+  },
+  {
+   "word": "it",
+   "start": 67.506,
+   "end": 67.615
+  },
+  {
+   "word": "days",
+   "start": 67.615,
+   "end": 67.888
+  },
+  {
+   "word": "earlier,",
+   "start": 67.888,
+   "end": 68.342
+  },
+  {
+   "word": "in",
+   "start": 68.342,
+   "end": 68.633
+  },
+  {
+   "word": "a",
+   "start": 68.633,
+   "end": 68.742
+  },
+  {
+   "word": "sale",
+   "start": 68.742,
+   "end": 68.942
+  },
+  {
+   "word": "called,",
+   "start": 68.942,
+   "end": 69.342
+  },
+  {
+   "word": "get",
+   "start": 69.342,
+   "end": 69.724
+  },
+  {
+   "word": "a",
+   "start": 69.724,
+   "end": 69.815
+  },
+  {
+   "word": "whale",
+   "start": 69.815,
+   "end": 70.015
+  },
+  {
+   "word": "of",
+   "start": 70.015,
+   "end": 70.142
+  },
+  {
+   "word": "a",
+   "start": 70.142,
+   "end": 70.197
+  },
+  {
+   "word": "deal.",
+   "start": 70.197,
+   "end": 70.379
+  }
+ ]
+}

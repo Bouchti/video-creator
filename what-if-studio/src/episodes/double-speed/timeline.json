@@ -1,0 +1,295 @@
+{
+ "slug": "double-speed",
+ "title": "WHAT IF YOU COULD MOVE AT DOUBLE SPEED?",
+ "fps": 30,
+ "total": 628,
+ "segments": [
+  {
+   "shot": "S1",
+   "a": 0,
+   "b": 32,
+   "t0": 0,
+   "t1": 32,
+   "line": "Your mug slips."
+  },
+  {
+   "shot": "S2",
+   "a": 32,
+   "b": 71,
+   "t0": 0,
+   "t1": 39,
+   "line": "Double. Caught, so",
+   "look": "double"
+  },
+  {
+   "shot": "S3",
+   "a": 71,
+   "b": 108,
+   "t0": 0,
+   "t1": 37,
+   "line": "it never hits the floor."
+  },
+  {
+   "shot": "S4",
+   "a": 108,
+   "b": 150,
+   "t0": 0,
+   "t1": 42,
+   "line": "Mo races you upstairs."
+  },
+  {
+   "shot": "S5",
+   "a": 150,
+   "b": 177,
+   "t0": 0,
+   "t1": 27,
+   "line": "Double. You're already",
+   "look": "double"
+  },
+  {
+   "shot": "S6",
+   "a": 177,
+   "b": 208,
+   "t0": 0,
+   "t1": 31,
+   "line": "waiting at the top."
+  },
+  {
+   "shot": "S7",
+   "a": 208,
+   "b": 255,
+   "t0": 0,
+   "t1": 47,
+   "line": "Double again. The whole class",
+   "look": "double"
+  },
+  {
+   "shot": "S8",
+   "a": 255,
+   "b": 288,
+   "t0": 0,
+   "t1": 33,
+   "line": "freezes mid-blink."
+  },
+  {
+   "shot": "S9",
+   "a": 288,
+   "b": 350,
+   "t0": 0,
+   "t1": 62,
+   "line": "What if you could move at double speed?"
+  },
+  {
+   "shot": "S10",
+   "a": 350,
+   "b": 373,
+   "t0": 0,
+   "t1": 23,
+   "line": "One catch:"
+  },
+  {
+   "shot": "S11",
+   "a": 373,
+   "b": 436,
+   "t0": 0,
+   "t1": 63,
+   "line": "air pushes back with the square of your speed."
+  },
+  {
+   "shot": "S12",
+   "a": 436,
+   "b": 510,
+   "t0": 0,
+   "t1": 74,
+   "line": "Twice as fast, four times the push."
+  },
+  {
+   "shot": "S13",
+   "a": 510,
+   "b": 536,
+   "t0": 0,
+   "t1": 26,
+   "line": "That's real."
+  },
+  {
+   "shot": "S14",
+   "a": 536,
+   "b": 628,
+   "t0": 0,
+   "t1": 92,
+   "line": "So what happens when you trip?"
+  }
+ ],
+ "shots": [
+  {
+   "id": "S1",
+   "size": "medium",
+   "key": 14,
+   "len": 32,
+   "first": 0,
+   "line": "Your mug slips.",
+   "note": "Pip at the island; his elbow knocks the mug off the edge, it tips into the air"
+  },
+  {
+   "id": "S2",
+   "size": "macro insert, low angle",
+   "key": 18,
+   "len": 39,
+   "first": 32,
+   "line": "Double. Caught, so",
+   "note": "the mug mid-fall; Pip's mitten blurs in on a speed streak and catches it, coffee sloshing up"
+  },
+  {
+   "id": "S3",
+   "size": "medium",
+   "key": 20,
+   "len": 37,
+   "first": 71,
+   "line": "it never hits the floor.",
+   "note": "Pip holds the caught mug up, smug, steam rising; the clock on the wall reads normal"
+  },
+  {
+   "id": "S4",
+   "size": "wide",
+   "key": 14,
+   "len": 42,
+   "first": 108,
+   "line": "Mo races you upstairs.",
+   "note": "Mo at the bottom step points up: race you; Mo launches up the stairs"
+  },
+  {
+   "id": "S5",
+   "size": "wide",
+   "key": 6,
+   "len": 27,
+   "first": 150,
+   "line": "Double. You're already",
+   "note": "Pip is a blur of speed streaks shooting past Mo up the steps"
+  },
+  {
+   "id": "S6",
+   "size": "medium",
+   "key": 30,
+   "len": 31,
+   "first": 177,
+   "line": "waiting at the top.",
+   "note": "Pip leans on the banister at the top, arms crossed; Mo arrives panting"
+  },
+  {
+   "id": "S7",
+   "size": "wide",
+   "key": 20,
+   "len": 47,
+   "first": 208,
+   "line": "Double again. The whole class",
+   "note": "the whole class frozen in place; Pip alone moves between the desks, streaks behind him"
+  },
+  {
+   "id": "S8",
+   "size": "close-up",
+   "key": 14,
+   "len": 33,
+   "first": 255,
+   "line": "freezes mid-blink.",
+   "note": "a kid frozen mid-blink, eyes half shut; a pencil hangs in the air beside her"
+  },
+  {
+   "id": "S9",
+   "size": "title, wide",
+   "key": 40,
+   "len": 62,
+   "first": 288,
+   "line": "What if you could move at double speed?",
+   "note": "the premise over the city at dusk; Pip on the roof"
+  },
+  {
+   "id": "S10",
+   "size": "medium, low angle",
+   "key": 16,
+   "len": 23,
+   "first": 350,
+   "line": "One catch:",
+   "note": "Pip drops into a sprinter's crouch on the roof"
+  },
+  {
+   "id": "S11",
+   "size": "schematic",
+   "key": 40,
+   "len": 63,
+   "first": 373,
+   "line": "air pushes back with the square of your speed.",
+   "note": "a runner at speed x1 with one air-push arrow; speed doubles to x2"
+  },
+  {
+   "id": "S12",
+   "size": "schematic",
+   "key": 40,
+   "len": 74,
+   "first": 436,
+   "line": "Twice as fast, four times the push.",
+   "note": "x2 speed -> four push arrows, push x4 counting up; v squared"
+  },
+  {
+   "id": "S13",
+   "size": "close-up",
+   "key": 14,
+   "len": 26,
+   "first": 510,
+   "line": "That's real.",
+   "note": "Pip, worried, the light turning red"
+  },
+  {
+   "id": "S14",
+   "size": "wide, low angle",
+   "key": 30,
+   "len": 92,
+   "first": 536,
+   "line": "So what happens when you trip?",
+   "note": "Pip at full speed trips on the roof edge, tumbling; the sky goes red"
+  }
+ ],
+ "fx": [
+  {
+   "kind": "flash",
+   "color": "#DDF2FF",
+   "o": 0.4,
+   "f": 43
+  },
+  {
+   "kind": "flash",
+   "color": "#DDF2FF",
+   "o": 0.4,
+   "f": 152
+  },
+  {
+   "kind": "flash",
+   "color": "#DDF2FF",
+   "o": 0.4,
+   "f": 210
+  },
+  {
+   "kind": "flash",
+   "color": "#FFF3DC",
+   "f": 288
+  },
+  {
+   "kind": "flash",
+   "color": "#FF3344",
+   "f": 582
+  },
+  {
+   "kind": "shake",
+   "len": 10,
+   "amp": 10,
+   "f": 582
+  }
+ ],
+ "audio": {
+  "voiceVol": 0.8,
+  "sfxVol": 0.6282,
+  "musicVol": 0.175,
+  "voice": "double-speed/voice.wav",
+  "sfx": "double-speed/sfx.wav",
+  "music": "double-speed/music.wav"
+ }
+}

@@ -9,7 +9,8 @@ FPS = 30
 W, H = 1080, 1920
 SAFE_TOP, SAFE_BOTTOM, SAFE_RIGHT = 150, 1550, 140
 CAPTION_Y = (1470, 1590)            # word-pop captions band, under the subject, above the app's bottom UI
-SUBJECT_BAND = (200, 1440)          # where the machine sits: big, above the captions (blender/build_scene.BAND)
+SUBJECT_BAND = (330, 1440)          # where the machine sits: under the loop strip, above the captions
+                                    # (blender/build_scene.BAND)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = os.path.dirname(os.path.abspath(__file__))

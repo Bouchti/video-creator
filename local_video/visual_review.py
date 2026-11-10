@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from agents import llm
 from config.paths import CLAUDE_MODEL, get_env_path
+from local_video import looks
 
 from .faces import face_crops
 
@@ -234,8 +235,10 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
               f"Beat as written in the script (judge story meaning, people and facts against this; its staging "
               f"details may differ from the plan): {shot.subject_action}\n") if planned else \
         f"Visual action: {shot.subject_action}\n"
+    cutaway = looks.is_cutaway(shot)
     prompt = (
-        "Review this candidate as a pragmatic film editor judging whether it works in the finished story. "
+        (looks.CUTAWAY_REVIEW_NOTE if cutaway else "")
+        + "Review this candidate as a pragmatic film editor judging whether it works in the finished story. "
         "It must render only this assigned beat:\n"
         f"{action}Narration meaning: {shot.narration}\n"
         + (f"Intended end state: {end.group(1)}\n" if end else "")
@@ -270,10 +273,11 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
         "Camera movement and the resulting background perspective change are intentional, not a scene reset. "
         "Large opaque bubble clumps attached to a face or body, fused equipment, and implausible effect geometry "
         "must reduce image-quality and immersion scores. "
-        "The film must look like real camera footage. A painterly, illustrated, CGI or video-game look, dreamy "
-        "haze or glow over the whole frame, waxy plastic skin, or objects that melt or morph between frames is "
-        "fatal; milder softness, oversaturation or an artificial sheen must lower the image-quality score. "
-        "The picture must fill the whole vertical frame edge to edge: black letterbox or pillarbox bars, a "
+        + (looks.CUTAWAY_CLIP_LOOK if cutaway else
+           "The film must look like real camera footage. A painterly, illustrated, CGI or video-game look, dreamy "
+           "haze or glow over the whole frame, waxy plastic skin, or objects that melt or morph between frames is "
+           "fatal; milder softness, oversaturation or an artificial sheen must lower the image-quality score. ")
+        + "The picture must fill the whole vertical frame edge to edge: black letterbox or pillarbox bars, a "
         "wide picture boxed inside the frame, a split screen, stacked panels or an inset picture is fatal "
         "(a letterboxed ship plays as a small strip on a phone). A flag not fastened along one short edge to "
         "its own pole (floating in front of it, the pole through the cloth's middle) is fatal, and so is a flag "
@@ -289,7 +293,7 @@ def review_clip(path: str | Path, shot: Any, previous_frame: Path | None, manife
         "otherwise EXPECTED to match it closely; never "
         "penalize that. Identity reference stills show only how characters must look, not where or how lit. Judge story progression on frames 2 and 3, which must visibly advance to the new "
         "action instead of holding the opening composition. "
-        + (FAST_CLIP_RULE if _fast_mode() else "")
+        + ((FAST_CLIP_RULE_CUTAWAY if cutaway else FAST_CLIP_RULE) if _fast_mode() else "")
         + ("THIS IS THE HOOK, the first shot a scrolling viewer sees: it must grab within two seconds, with "
            "strong visible action from frame 1. A calm or near-static frame fails story_progression and "
            "immersion however clean it is. "
@@ -493,6 +497,17 @@ FAST_CLIP_RULE = (
 )
 
 
+def _for_cutaway(rule: str, photo_look: str) -> str:
+    """A fast-mode rule for a cutaway film: a render is its look, so a cartoon look is the one to reject."""
+    if photo_look not in rule:
+        raise ValueError(f"fast-mode rule no longer names {photo_look!r}; update its cutaway version")
+    return rule.replace(photo_look, "a cartoon, flat or toy-like look")
+
+
+FAST_CLIP_RULE_CUTAWAY = _for_cutaway(FAST_CLIP_RULE, "a CGI or illustrated look")
+FAST_KEYFRAME_RULE_CUTAWAY = _for_cutaway(FAST_KEYFRAME_RULE, "a surreal, illustrated or CGI look")
+
+
 def _fast_mode() -> bool:
     return os.getenv("LOCAL_VIDEO_FAST", "1").strip() != "0"
 
@@ -518,8 +533,10 @@ def review_keyframe(path: str | Path, shot: Any, identities: list[tuple[str, Pat
     light = getattr(shot, "light", "")
     cast = getattr(shot, "cast", None)
     period = str((getattr(shot, "continuity", None) or {}).get("period") or "")
+    cutaway = looks.is_cutaway(shot)
     prompt = (
-        "This still will be the FIRST FRAME of a short video shot; the video model animates from it and "
+        (looks.CUTAWAY_REVIEW_NOTE if cutaway else "")
+        + "This still will be the FIRST FRAME of a short video shot; the video model animates from it and "
         "cannot rearrange the people in it. Judge whether it sets up this shot:\n"
         f"Visual action: {shot.subject_action}\n"
         + (f"Narration at this moment: {shot.narration}\n" if getattr(shot, "narration", "") else "")
@@ -546,8 +563,9 @@ def review_keyframe(path: str | Path, shot: Any, identities: list[tuple[str, Pat
         "says seated); the wrong setting or light; anonymous extras who look or dress like the named "
         "character (the same uniform, hair and youth: the clip reads them as clones); a named character "
         "missing, duplicated, or dressed against "
-        "the identity lock; visible text, logos or watermarks; an illustrated, painterly or CGI look; "
-        "black letterbox or pillarbox bars, a split screen, stacked panels or an inset picture instead of "
+        "the identity lock; visible text, logos or watermarks; "
+        + ("a cartoon, flat, sketched or toy-like look; " if cutaway else "an illustrated, painterly or CGI look; ")
+        + "black letterbox or pillarbox bars, a split screen, stacked panels or an inset picture instead of "
         "one image filling the vertical frame; a flag not fastened along one short edge to its own pole "
         "(floating in front of or beside the pole, the pole running through the cloth's middle), or a flag or "
         "pole floating in the air instead of planted in the ground, on a building or held by a person; a flag "
@@ -570,11 +588,13 @@ def review_keyframe(path: str | Path, shot: Any, identities: list[tuple[str, Pat
            "(an animal's breed type, coat and colours; an object's shape and proportions). A clearly different "
            "one (another breed or coat, a stone of another shape) is fatal; pose, angle and light may differ. "
            if subjects else "")
-        + (FAST_KEYFRAME_RULE if _fast_mode() else "")
+        + ((FAST_KEYFRAME_RULE_CUTAWAY if cutaway else FAST_KEYFRAME_RULE) if _fast_mode() else "")
         + "The action's ending state is NOT required: this is the opening frame, so "
         "judge only what must already be true when the shot starts. Small differences in camera height, "
         "prop detail or background are not fatal. Score composition_match on how faithfully the opening "
-        "blocking matches, realism on whether it reads as a real photograph. Submit the structured output."
+        "blocking matches, realism on whether it reads as "
+        + ("a crisp photoreal 3D cutaway render with believable materials" if cutaway else "a real photograph")
+        + ". Submit the structured output."
     )
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -673,6 +693,8 @@ def review_final_video(path: str | Path, manifest: Any) -> dict[str, Any]:
         "or an ending that does not pay off the opening. It must read as real camera footage: reject a "
         "painterly, dreamy, glowing or CGI look and shapes that melt or morph."
     )
+    if looks.is_cutaway(manifest):
+        review_rules = looks.CUTAWAY_FINAL_RULES
     narration = str(manifest.script.get("spoken_script") or "").strip()
     prompt = (
         "Review these chronological frames from the complete vertical social video. Judge the whole edit, "

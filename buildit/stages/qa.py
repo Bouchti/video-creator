@@ -1,8 +1,9 @@
 """
 Stage 11 - qa/: the gates that block a release.
   hyperframes lint + check (zero errors), the HyperFrames render of the candidate, ffprobe (1080x1920, duration,
-  audio), blackdetect / freezedetect, loudness, every label number backed by a fact, and the rubric: a contact
-  sheet at each beat's midpoint next to reference frames, scored by a vision model (every item >= 4 for final).
+  audio), blackdetect / freezedetect, loudness, every label number backed by a fact, and the rubric: frames of
+  the finished video scored with the same rubric as the pre-render review (buildit/review.py; audio is measured).
+  Every item must reach 4, or the video is not packaged.
 """
 from __future__ import annotations
 
@@ -12,34 +13,16 @@ import os
 import re
 import subprocess
 
-from agents import llm
 from config.paths import get_ffmpeg
 from cutaway import hf
 from cutaway.stages.qa import _detect, _ffprobe
 from cutaway.stages.sound import measure
 
+from .. import review as review_mod
 from ..runner import StageError
 from .preview import sheet
 
 log = logging.getLogger("pipeline")
-RUBRIC = {
-    "hook": "An everyday object does something surprising in the first 2 s",
-    "story": "Each part arrives as the answer to a problem; a 12-year-old can follow the whole chain and SEE how the parts connect and what flows between them",
-    "look": "Premium and bright: a clean studio, the real machine recognisable at a glance, parts clearly mounted on it",
-    "animation": "Parts assemble with weight and overshoot; mechanisms run; the invisible (flows, heat) is shown",
-    "captions_labels": "Word-synced captions and pills are readable and never cover the action",
-    "audio": "Clear voice, ducked music, SFX on events, -14 LUFS (judge from the plan if you cannot hear it)",
-    "pacing": "Calm and clear: every step has time to land before the next, the camera glides instead of flashing between views, no dead air",
-    "accuracy": "Every claim sourced; analogies simplified but correct",
-}
-SCHEMA = {"type": "object", "properties": {
-    "scores": {"type": "object", "properties": {k: {"type": "object", "properties": {
-        "score": {"type": "integer", "minimum": 1, "maximum": 5}, "why": {"type": "string"}},
-        "required": ["score", "why"]} for k in RUBRIC}, "required": list(RUBRIC)},
-    "weakest": {"type": "string"}, "fixes": {"type": "array", "items": {"type": "string"}}},
-    "required": ["scores", "weakest", "fixes"]}
-
-
 def inputs(run):
     return [run.path("hf"), run.path("audio", "mix.wav"), run.quality]
 
@@ -69,24 +52,18 @@ def beat_frames(run, video: str) -> tuple[list[str], list[str]]:
     return paths, caps
 
 
-def rubric(run, sheet_path: str) -> dict:
-    script = run.need("script.json")
-    story = "\n".join(f"{b['id']} {b['role']}: {b['narration']}" for b in script["beats"])
-    return llm.ask("You are a demanding creative director for a premium 3D explainer channel.",
-                   f"""Contact sheet: one frame per beat of a vertical explainer. Narration:
-{story}
-
-Score 1-5 with a one-line reason each (5 = as good as the best of the genre):
-""" + "\n".join(f"- {k}: {v}" for k, v in RUBRIC.items()), SCHEMA, effort="medium", images=[("contact sheet: one frame per beat", sheet_path)],
-                   label="buildit_rubric")
-
-
-def review(run) -> dict:
+def review(run, loudness: dict | None = None) -> dict:
+    """Frames of the finished video (shot middles and beat middles), scored like the pre-render review."""
+    from . import sound as sound_stage
     video = candidate(run)
     paths, caps = beat_frames(run, video)
     sh = run.path("qa", "contact_sheet.jpg")
     sheet(paths, caps, sh, [])
-    return {"sheet": sh, **rubric(run, sh)}
+    big = review_mod.sheets(paths, caps, run.path("qa", "review"))
+    v = review_mod.panel(run, big, caps, extra="These are frames of the FINISHED video: the overlays are real.\n" +
+                         review_mod.engine_notes(run.need("storyboard.json")))
+    v["scores"]["audio"] = review_mod.audio_score(sound_stage.cues(run), run.need("words.json")["duration"], loudness)
+    return {"sheet": sh, **v}
 
 
 def run(run):
@@ -105,7 +82,7 @@ def run(run):
     out["detect"] = _detect(video)
     out["loudness"] = measure(video)
     out["facts"] = facts_check(run)
-    out["rubric"] = review(run)
+    out["rubric"] = review(run, out["loudness"])
     run.save("qa/qa.json", out)
     log.info("[qa] %s", {k: v for k, v in out.items() if k != "rubric"})
     log.info("[qa] rubric: %s", {k: v["score"] for k, v in out["rubric"]["scores"].items()})
@@ -128,8 +105,8 @@ def validate(run):
     if abs(q["loudness"]["I"] + 14) > 1.0 or q["loudness"]["TP"] > -0.5:
         problems.append(f"loudness {q['loudness']}")
     problems += q["facts"]
-    low = {k: v["score"] for k, v in q["rubric"]["scores"].items() if v["score"] < 4}
+    low = review_mod.low_items(q["rubric"]["scores"])
     if low and run.quality == "final":
-        log.warning("[qa] rubric below 4: %s (fixes: %s)", low, q["rubric"]["fixes"][:3])
+        problems.append(f"rubric below {review_mod.PASS}: {low} (fixes: {q['rubric']['fixes'][:4]})")
     if problems:
         raise StageError("QA gates failed:\n- " + "\n- ".join(problems))

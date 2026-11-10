@@ -55,7 +55,8 @@ SHAPE_SLOTS = {"cabinet": _CAB, "tank": _TANK, "frame": _FRAME}
 # host type: (shape, (W, D, H) metres, dressing, what it is, accent colour)
 HOSTS = {
     "fridge": ("cabinet", (0.76, 0.68, 1.70), "fridge",
-               "a kitchen fridge: white cabinet with clear walls, glass shelves, a milk bottle and food inside",
+               "a kitchen fridge, cut away: solid white body and back, closed doors, the left wall cut open to show "
+               "the freezer, a glass shelf and the crisper drawer",
                "#36b4ff"),
     "freezer": ("cabinet", (0.76, 0.68, 1.30), "fridge", "a chest-height freezer cabinet with clear walls",
                 "#36b4ff"),
@@ -74,12 +75,22 @@ HOSTS = {
                 "(engines, pumps, generators, anything without a cabinet)", "#ffb21e"),
 }
 
+# machines that pump heat OUT of their inside: a coil inside them is always the cold one
+COOLING = {"fridge", "freezer", "air_conditioner"}
+# where a dressing is opened up, its inside parts face that opening (the fridge is cut open on the left)
+FACING = {"fridge": {"inside": -90}}
+
 STAGE = {   # spots for props, as offsets from the machine (metres; front = -Y)
     "front": (0.0, -1.0, 0.0),
     "left": (-1.0, -1.0, 0.0),
     "right": (1.0, -1.0, 0.0),
 }
-FIT_MAX = 1.6           # a part may grow to fill its slot, up to this many times its kit size
+FIT_MAX = 1.25          # a part may grow to fill its slot, up to this many times its kit size
+FIT_MAX_SMALL = 1.0     # dials, knobs and plugs keep their size: blown up they read as giant blank discs
+# the largest a part may be drawn (metres, its biggest side) on a host: a fridge compressor the size of the fridge's
+# kick plate reads as a toy stuck on, not a part of it
+TRUE_SIZE = {"compressor": 0.44, "motor": 0.4, "pump": 0.4, "fan": 0.45, "valve": 0.16, "capillary": 0.32}
+SMALL_TYPES = {"thermostat", "gauge", "valve", "spark_plug", "key", "bulb", "battery", "magnet"}
 FIT_MIN = 0.35
 
 
@@ -110,6 +121,7 @@ def slot_box(sb: dict, slot: str) -> tuple[tuple, tuple, float]:
         if isinstance(fx, str) else fx * W
     y = {"back": D / 2 + d / 2 + 0.03, "front": -D / 2 - d / 2 - 0.01}.get(fy, 0.0) if isinstance(fy, str) else fy * D
     z = H + h / 2 + 0.005 if fz == "top" else fz * H
+    rot = FACING.get(host(sb)[2], {}).get(slot.split("_")[0], rot)
     return (x, y, z), (w, d, h), rot           # (w, d) are world X / Y extents
 
 
@@ -122,10 +134,17 @@ def place_part(sb: dict, part: dict) -> dict:
         (cx, cy, cz), (mw, md, mh), rot = slot_box(sb, slot)
         pw, pd = _turned(w0, d0, rot)
         k = min(mw / pw, md / pd, mh / h0)
-        k = max(FIT_MIN, min(FIT_MAX, k))
+        k = max(FIT_MIN, min(FIT_MAX_SMALL if part["type"] in SMALL_TYPES else FIT_MAX, k))
+        k = min(k, TRUE_SIZE.get(part["type"], 9.0) / max(w0, d0, h0))     # never bigger than the real thing reads
         w, d = _turned(w0 * k, d0 * k, rot)
         h = h0 * k
         z = cz - h / 2
+        _t, (W_, D_, _H), *_r = host(sb)
+        fy = host(sb)[5][slot][0][1]
+        if fy == "back":                       # flush on the back panel (a short bracket), not afloat in the slot
+            cy = D_ / 2 + 0.025 + d / 2
+        elif fy == "front":
+            cy = -D_ / 2 - 0.012 - d / 2
         if slot == "top":
             z = host(sb)[1][2] + 0.005
         return {"x": cx, "y": cy, "z": max(0.0, z), "w": w, "d": d, "h": h, "k": k0 * k, "rot": rot,
@@ -137,18 +156,20 @@ def place_part(sb: dict, part: dict) -> dict:
     cx_, cy_ = math.sin(a), -math.cos(a)                 # from the machine toward the home camera
     px_, py_ = math.cos(a), math.sin(a)                  # screen right in the home view
     r = 0.5 * math.hypot(W, D)
+    if any(str(q.get("mount") or "").startswith("back") for q in sb.get("parts", [])):
+        r += 0.45                                        # clear of the compressor and coil on the back too
     stage = part.get("stage") or "front"
-    if stage == "front":
-        out, side = r + 0.3 + max(w0, d0) / 2, 0.0
-    else:
-        out, side = r * 0.5, (r + 0.5 + max(w0, d0) / 2) * (-1 if stage == "left" else 1)
+    # never between the camera and the machine: "front" is just left of it on screen, the others further out
+    gap = r + 0.35 + max(w0, d0) / 2
+    out, side = {"front": (r * 0.6, -gap), "left": (r * 0.2, -(gap + 0.5)),
+                 "right": (r * 0.6, gap)}.get(stage, (r * 0.6, -gap))
     x, y = cx_ * out + px_ * side, cy_ * out + py_ * side
     rot = home_azimuth(sb)
     w, d = (abs(w0 * math.cos(a)) + abs(d0 * math.sin(a)), abs(w0 * math.sin(a)) + abs(d0 * math.cos(a)))
     return {"x": x, "y": y, "z": 0.0, "w": w, "d": d, "h": h0, "k": k0, "rot": rot, "slot": None, "stage": stage}
 
 
-SLOT_VIEW = {"inside": -30.0, "back": -150.0, "front": -20.0, "side_left": -90.0, "side_right": 90.0}
+SLOT_VIEW = {"inside": -80.0, "back": -150.0, "front": -20.0, "side_left": -90.0, "side_right": 90.0}
 
 
 def slot_view(sb: dict, slot: str) -> float:
@@ -167,7 +188,7 @@ def home_azimuth(sb: dict) -> float:
     always knows where things are."""
     slots = {p.get("mount") for p in sb.get("parts", []) if p.get("mount")}
     back = any(str(s).startswith("back") for s in slots)
-    return -135.0 if back else -35.0
+    return -120.0 if back else -60.0       # -120: the back AND, past the back corner, into the open left side
 
 
 def machine_box(sb: dict) -> tuple:

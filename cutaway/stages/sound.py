@@ -87,7 +87,8 @@ def speech_rms(voice: np.ndarray, env: np.ndarray) -> float:
     return rms(active) or rms(voice) or 0.1
 
 
-def music_bed(path: str, n: int, voice_env: np.ndarray, ref: float = 0.1) -> np.ndarray:
+def music_bed(path: str, n: int, voice_env: np.ndarray, ref: float = 0.1, gain_db: float = MUSIC_DB,
+              duck_db: float = MUSIC_DUCK_DB) -> np.ndarray:
     """The music track levelled against the narration (`ref`: its speaking RMS) before the gain and duck: a
     mastered track is ~10 dB hotter than speech, so a raw -17 dB still sat almost level with the voice."""
     m = load(path)
@@ -102,7 +103,7 @@ def music_bed(path: str, n: int, voice_env: np.ndarray, ref: float = 0.1) -> np.
     fade_in, fade_out = int(0.4 * SR), int(1.8 * SR)
     m[:fade_in] *= np.linspace(0, 1, fade_in)
     m[-fade_out:] *= np.linspace(1, 0, fade_out)
-    duck = db(MUSIC_DB) * (1 - (1 - db(MUSIC_DUCK_DB)) * voice_env)
+    duck = db(gain_db) * (1 - (1 - db(duck_db)) * voice_env)
     return m * duck
 
 

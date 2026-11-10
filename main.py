@@ -6,7 +6,9 @@ visual shown while it is spoken.
   pexels   - Stock/archival footage, real photos, and diagrams (~$0/video, fast)
   local-ai - Durable MiniMax/Wan production with strict scene and final review (default)
   evolution - Problem -> solution ladder ("you built a bridge... so you..."), filmed by the local AI:
-             MiniMax H3 via FreeVideo only, then a Real-ESRGAN x2plus final upscale
+             MiniMax H3 via FreeVideo only, then a Real-ESRGAN x2plus final upscale. Its look is a
+             photoreal 3D cutaway (FLUX still -> MiniMax clip per shot; local_video/looks.py) unless
+             --look photo or EVOLUTION_LOOK=photo
   unreal   - Local UE5 Sequencer/Movie Render Queue cinematics (no per-render API fee)
 
 Usage:
@@ -56,6 +58,7 @@ log = logging.getLogger("pipeline")
 DEFAULT_TONE = "mysterious"
 DEFAULT_VOICE = "mysterious"
 DEFAULT_SOURCE = "local-ai"
+from local_video.looks import evolution_look  # noqa: E402  (--source evolution's look: cutaway or photo)
 
 def default_duration() -> int:
     """Target length when --duration is not given: VIDEO_DURATION from .env, else 62 s."""
@@ -184,7 +187,8 @@ def run_pipeline(
             except Exception as e:
                 log.warning(f"Ladder research failed ({e}); writing from the topic evidence only.")
 
-        log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s")
+        log.info(f"Source: {source}  |  Tone: {tone}  |  Voice: {voice}  |  Duration: {duration}s"
+                 + (f"  |  Look: {evolution_look()}" if source == "evolution" else ""))
 
         if source == "director":
             # Max and his kids on the generic stage: the plan (script + staging as data) is written and
@@ -401,6 +405,9 @@ if __name__ == "__main__":
                         help="Backend for --source local-ai (Auto prefers MiniMax H3 and records Wan fallback); "
                              "--source evolution always uses MiniMax H3")
     parser.add_argument("--visual-style", default=None, help="Shared visual style for local-ai/unreal")
+    parser.add_argument("--look", choices=["cutaway", "photo"], default=None,
+                        help="Look of --source evolution: cutaway (photoreal 3D cross-section renders, the "
+                             "default) or photo (real documentary footage). Overrides EVOLUTION_LOOK in .env.")
     parser.add_argument("--reference-image", default=None, help="Optional continuity reference image")
     parser.add_argument("--music", default="subtle cinematic", help="Music preference or configured track")
     parser.add_argument("--ambience", default="natural location ambience", help="Ambience direction")
@@ -442,6 +449,9 @@ if __name__ == "__main__":
             raise SystemExit(1)
         raise SystemExit(0)
 
+    if args.look:
+        # Read by the topic scout, the script writer and the prompts (local_video/looks.evolution_look).
+        os.environ["EVOLUTION_LOOK"] = args.look
     # Pass tone=None if user didn't override, so Leader Agent's choice wins
     user_tone = args.tone
     result = run_pipeline(

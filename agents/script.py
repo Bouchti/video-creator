@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from config.paths import get_env_path
 from agents import llm
 from agents.beats import DIAGRAM_TEMPLATES, OVERLAY_TYPES, narration_from_beats, repair_beats
+from local_video import looks
 
 # Script modes: "footage" (stock footage, real photos and diagrams: the --source pexels path), "local-ai"
 # (generated live-action scenes) and "unreal" (primitive-shape engineering dioramas rendered in UE5).
@@ -769,6 +770,45 @@ smarter. The viewer is the builder, addressed as "you". The builder is never sho
 
 """
 
+# The evolution ladder in the cutaway look (local_video/looks.py, the default for --source evolution): the
+# story rules above stay; this block replaces how every picture looks and what each one must show.
+BEATS_LOCAL_AI_CUTAWAY = """═══ CUTAWAY LOOK — REPLACES HOW EVERY PICTURE LOOKS (every story rule above still applies) ═══
+
+This film is not camera footage. Every shot is a photoreal 3D CUTAWAY render, the look of a premium
+engineering explainer: the ground, walls and structures sliced open in one clean vertical cut so the
+viewer sees inside them (soil layers on the cut face, pipes and chambers cut in half lengthwise, the
+water, machinery and loads visible where they work), at a tidy miniature-diorama scale in warm
+late-afternoon light. No people anywhere: the builder is "you" and is never shown, and there are no
+anonymous workers or gloved hands either.
+
+C1. EVERY `visual.description` SAYS WHAT THE CUT REVEALS. Name the cut and what is inside it, then the
+    one thing that moves: "Cutaway of the street: the road sliced open beside the kerb, a concrete gully
+    chamber under the grate, rainwater pouring through the grate and filling it." Never only "a view of
+    the street": a shot of the outside alone wastes the look. Rule 10's "where a camera can stand" becomes
+    "where the cut is": underground, inside a wall and inside a machine are all filmable now.
+C2. SHOW HOW IT WORKS IN THE FLOW. The motion in each shot is what its line explains: water flowing
+    through a pipe or filling a chamber, a flap swinging shut, a pump lifting water, a load pressing on a
+    cut-open foundation. One slow, physical motion per shot.
+C3. ONE CUT-OPEN WORLD PER STAGE. Each stage's `location` sentence describes its diorama once (the
+    buildings, the street or field, the soil, the water, the era's materials) and every shot of that stage
+    is that same model seen from a new angle. Problem beats show the strain inside the cut (water backing
+    up a pipe, a joint cracking, sediment filling a chamber); solution beats show the new part already in
+    place and working inside the cut.
+C4. A THREAD TO FOLLOW. Where the subject has a flow (water, waste, air, a load), follow it from shot to
+    shot so the eye travels through the system. One small recurring object may ride the flow through
+    several shots (a floating leaf, a ball) when it helps; list it in `recurring_objects`.
+C5. `visual_style` is exactly: """" + looks.CUTAWAY_STYLE + """". No other style, grade or palette.
+C6. Shot sizes still change (rule 6 of the evolution format): alternate the whole cut-open diorama with
+    close-ups inside the cut (the flap valve, the pipe joint, the pump), keeping the same light.
+
+"""
+
+
+def cutaway_film(mode: str, content_mode: str) -> bool:
+    """An evolution film made in the cutaway look (EVOLUTION_LOOK, cutaway by default)."""
+    return mode == "local-ai" and content_mode == "evolution" and looks.evolution_look() == looks.CUTAWAY
+
+
 SYSTEM_PROMPT_TAIL = """═══ CONTENT SAFETY (NON-NEGOTIABLE) ═══
 
 Video generators and platforms REJECT this content. Never use, in narration or visuals:
@@ -810,6 +850,8 @@ def system_prompt(mode: str = "footage", content_mode: str = "documentary") -> s
              else BEATS_LOCAL_AI_DOCUMENTARY if mode == "local-ai" and content_mode == "documentary" else
              BEATS_LOCAL_AI if mode == "local-ai"
              else BEATS_UNREAL if mode == "unreal" else BEATS_FOOTAGE)
+    if cutaway_film(mode, content_mode):
+        beats += BEATS_LOCAL_AI_CUTAWAY
     return SYSTEM_PROMPT_HEAD + beats + SYSTEM_PROMPT_TAIL
 
 
@@ -880,6 +922,10 @@ PREVIOUS DRAFT:
 Submit the corrected FULL script as the structured output."""
     else:
         visual_hint = (
+            "Make every beat one stage of the problem -> solution ladder as a photoreal 3D cutaway render that "
+            "slices the ground and structures open to show how each design works inside, in its real place and "
+            "era. Use no people, diagrams, cards, labels, or generated text."
+            if cutaway_film(mode, content_mode) else
             "Make every beat one stage of the problem -> solution ladder, each design in its real photoreal "
             "place and era. Use no people, diagrams, cards, labels, or generated text."
             if mode == "local-ai" and content_mode == "evolution" else
@@ -913,6 +959,10 @@ Submit it as the structured output."""
         # The voiceover IS the beats — derived, so words and visuals can't drift.
         script["spoken_script"] = narration_from_beats(beats)
     script["content_mode"] = content_mode
+    if cutaway_film(mode, content_mode):
+        # Recorded on the script, so every later stage (and a resumed run) films it in this look.
+        script["look"] = looks.CUTAWAY
+        script["visual_style"] = looks.CUTAWAY_STYLE
     script["research_sources"] = research or []
     if angle:
         script["framing_angle"] = angle

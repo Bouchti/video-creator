@@ -181,3 +181,30 @@ python -m pytest -q
 ```
 
 Tests use mocks and do not start video generation or publish content.
+
+
+### PMP Exam Lab route (HyperFrames)
+
+`pmp_video/` makes PMP Exam Lab videos as HTML + GSAP compositions rendered by HyperFrames. It is separate
+from `main.py` and the Blender/AI routes, which it does not touch. Questions come verbatim from the
+pmp-simulator export (`../pmp-simulator/content/questions_export.json`, or `PMP_QUESTION_BANK`), so the
+correct answer is never written by the model; a question whose explanation argues for another option is
+skipped and named in the log so it can be fixed in the bank.
+
+```powershell
+python -m pmp_video short question                       # Scenario in 60 (9:16)
+python -m pmp_video short trap --domain people           # the tempting wrong answer
+python -m pmp_video short term --topic "Risk vs issue"   # Term Clash
+python -m pmp_video short mindset                        # one PMI mindset rule
+python -m pmp_video long walkthrough --count 10 --approach agile   # Exam Room (16:9, chapters)
+python -m pmp_video long course --topic "Business Environment for the 2026 PMP" --minutes 12 --notes notes.md
+python -m pmp_video render output\pmp\<project>         # re-render after editing script.json
+```
+
+Useful flags: `--script-only` (write script.json, review, then `render`), `--voice-engine silent` (layout check
+with no TTS), `--quality draft`, `--question-id <id>`, `--publish youtube` (prepares a package; `--publish-live`
+uploads). Each project in `output/pmp/` holds `script.json`, per-beat audio, `index.html`, the MP4 and
+`post.txt` (title, UTM-tagged description, chapters for long videos, pinned comment, playlist).
+Settings: `PMP_VOICE` (default `storyteller`), `PMP_MUSIC` (looped and ducked under the voice),
+`PMP_PAUSE_SECONDS`, `PMP_OUTPUT_DIR`. Tests: `pytest tests/test_pmp_video.py`;
+`python tests/run_pmp_demo.py --render` builds every format with a stand-in LLM and silent voice.

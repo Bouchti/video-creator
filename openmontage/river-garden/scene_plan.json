@@ -1,0 +1,287 @@
+{
+  "version": "1.0",
+  "scenes": [
+    {
+      "id": "c1",
+      "type": "generated",
+      "description": "The yellow excavator digs along the painted line, bucket scooping earth, the winding channel growing from the river toward the patio in fast time-lapse; spoil heaps build up. Camera locked high aerial, very slow push in. Sound of diesel engine and digging.",
+      "start_seconds": 0.0,
+      "end_seconds": 10.0,
+      "script_section_id": "s1",
+      "framing": "establishing",
+      "movement": "static",
+      "transition_in": "none",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "establishing",
+        "camera_movement": "static"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K0 keyframe via local ComfyUI FLUX 3 text-to-image workflow: High aerial three-quarter view from about 25 metres up, looking down the length of the back garden: a modern two-storey countryside house with grey roof, cream render and timber cladding sits at the top of the frame, its patio and back door facing the camera; a long rectangular lawn fills the middle of the frame, bordered by a timber fence on both sides; beyond the bottom fence a wide green river flows left to right across the bottom of the frame between grassy banks. A yellow tracked excavator stands on the lawn near the bottom fence. A winding line of orange marker paint runs from the riverbank, through a gap in the fence, curving across the lawn to a marked oval near the patio. Bright late-morning sun, clear blue sky, soft shadows. Photorealistic architectural 3D visualization, Unreal Engine 5 quality, highly detailed grass, water and stone textures, crisp focus, natural colour, vertical 9:16 composition."
+        },
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K1 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K0): Keep the exact same camera, house, fence, lawn and river. Replace the orange paint line with a freshly dug winding channel about two metres wide and one metre deep with raw brown earth walls, ending in a large oval pit beside the patio. Spoil heaps of soil beside the channel. Leave a narrow wall of earth at the river end so the channel is still dry. The excavator now sits beside the pit. Same lighting."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 10s, 9:16, start image=K0, end image=K1. Prompt: The yellow excavator digs along the painted line, bucket scooping earth, the winding channel growing from the river toward the patio in fast time-lapse; spoil heaps build up. Camera locked high aerial, very slow push in. Sound of diesel engine and digging."
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "type": "generated",
+      "description": "The excavator bucket breaks the last wall of earth; river water bursts into the channel, rushes along every bend and floods the pit, which transforms into a calm landscaped pond as the light turns golden; the water wheel starts turning. Slow push in. Rushing water sound.",
+      "start_seconds": 10.0,
+      "end_seconds": 18.0,
+      "script_section_id": "s3",
+      "framing": "establishing",
+      "movement": "dolly_in",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "establishing",
+        "camera_movement": "dolly_in"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K1 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K0): Keep the exact same camera, house, fence, lawn and river. Replace the orange paint line with a freshly dug winding channel about two metres wide and one metre deep with raw brown earth walls, ending in a large oval pit beside the patio. Spoil heaps of soil beside the channel. Leave a narrow wall of earth at the river end so the channel is still dry. The excavator now sits beside the pit. Same lighting."
+        },
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K2 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K1): Keep the exact same camera, house, fence and river. The earth wall is gone: clear green river water fills the whole winding channel and the oval pit, which is now a landscaped pond with stepping stones, a small timber footbridge over the stream, and a dark timber water wheel turning beside the patio. Spoil heaps removed, lawn neat, excavator gone. Warm golden-hour sunlight, long soft shadows."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 8s, 9:16, start image=K1, end image=K2. Prompt: The excavator bucket breaks the last wall of earth; river water bursts into the channel, rushes along every bend and floods the pit, which transforms into a calm landscaped pond as the light turns golden; the water wheel starts turning. Slow push in. Rushing water sound."
+        }
+      ]
+    },
+    {
+      "id": "c3",
+      "type": "generated",
+      "description": "Gentle golden-hour drift: koi glide in the clear pond, the timber water wheel turns steadily dripping water, ripples sparkle. Camera cranes down slowly toward the pond. Birdsong, trickling water.",
+      "start_seconds": 18.0,
+      "end_seconds": 23.0,
+      "script_section_id": "s4",
+      "framing": "wide",
+      "movement": "crane_down",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "wide",
+        "camera_movement": "crane_down"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K2 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K1): Keep the exact same camera, house, fence and river. The earth wall is gone: clear green river water fills the whole winding channel and the oval pit, which is now a landscaped pond with stepping stones, a small timber footbridge over the stream, and a dark timber water wheel turning beside the patio. Spoil heaps removed, lawn neat, excavator gone. Warm golden-hour sunlight, long soft shadows."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 5s, 9:16, start image=K2. Prompt: Gentle golden-hour drift: koi glide in the clear pond, the timber water wheel turns steadily dripping water, ripples sparkle. Camera cranes down slowly toward the pond. Birdsong, trickling water."
+        }
+      ]
+    },
+    {
+      "id": "c4",
+      "type": "generated",
+      "description": "Time-lapse over weeks: the stream water clouds to brown, the outside of each bend erodes, chunks of turf break off and slide into the water, the channel widens, sky turns overcast. Locked camera. Low rumbling water.",
+      "start_seconds": 23.0,
+      "end_seconds": 32.0,
+      "script_section_id": "s5",
+      "framing": "wide",
+      "movement": "static",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "wide",
+        "camera_movement": "static"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K2 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K1): Keep the exact same camera, house, fence and river. The earth wall is gone: clear green river water fills the whole winding channel and the oval pit, which is now a landscaped pond with stepping stones, a small timber footbridge over the stream, and a dark timber water wheel turning beside the patio. Spoil heaps removed, lawn neat, excavator gone. Warm golden-hour sunlight, long soft shadows."
+        },
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K3 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K2): Keep the house, fence and river. Same water garden, but weeks later: the stream water is now murky brown, the banks on the outside of every bend are eaten away and undercut, turf edges collapsing into the water, the stream noticeably wider, bare mud showing along the edges, a fence post leaning. Overcast flat daylight."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 9s, 9:16, start image=K2, end image=K3. Prompt: Time-lapse over weeks: the stream water clouds to brown, the outside of each bend erodes, chunks of turf break off and slide into the water, the channel widens, sky turns overcast. Locked camera. Low rumbling water."
+        }
+      ]
+    },
+    {
+      "id": "c5",
+      "type": "generated",
+      "description": "Fast time-lapse: the excavator returns and lines both banks with large grey boulders, rock by rock, the water clearing to green. Locked aerial camera. Clunks of stone.",
+      "start_seconds": 32.0,
+      "end_seconds": 38.0,
+      "script_section_id": "s6",
+      "framing": "wide",
+      "movement": "static",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "wide",
+        "camera_movement": "static"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K3 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K2): Keep the house, fence and river. Same water garden, but weeks later: the stream water is now murky brown, the banks on the outside of every bend are eaten away and undercut, turf edges collapsing into the water, the stream noticeably wider, bare mud showing along the edges, a fence post leaning. Overcast flat daylight."
+        },
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K4 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K3): Keep the exact same camera, house, fence and river. Both banks of the stream and the pond edge are now armoured with large grey granite boulders, a continuous wall of rock along every bend. The yellow excavator is back, holding a boulder in its bucket near the river end. The water is clear green again. Bright midday sun."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 6s, 9:16, start image=K3, end image=K4. Prompt: Fast time-lapse: the excavator returns and lines both banks with large grey boulders, rock by rock, the water clearing to green. Locked aerial camera. Clunks of stone."
+        }
+      ]
+    },
+    {
+      "id": "c6",
+      "type": "generated",
+      "description": "Time-lapse from bright day to stormy night: clouds roll in, rain begins, the river at the bottom of the frame swells, turns brown and rises to the top of its banks. Locked camera. Thunder, rising roar of water.",
+      "start_seconds": 38.0,
+      "end_seconds": 46.0,
+      "script_section_id": "s7",
+      "framing": "establishing",
+      "movement": "static",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "establishing",
+        "camera_movement": "static"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K4 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K3): Keep the exact same camera, house, fence and river. Both banks of the stream and the pond edge are now armoured with large grey granite boulders, a continuous wall of rock along every bend. The yellow excavator is back, holding a boulder in its bucket near the river end. The water is clear green again. Bright midday sun."
+        },
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K5 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K4): Keep the exact same camera, house, fence, rock-lined stream and pond. Excavator gone. Night has fallen in spring storm conditions: low dark grey clouds, heavy rain streaks, the river at the bottom of the frame swollen, fast, muddy brown, risen right to the top of its banks with white water, flooding the meadow beyond. Garden lights glowing on the patio."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 8s, 9:16, start image=K4, end image=K5. Prompt: Time-lapse from bright day to stormy night: clouds roll in, rain begins, the river at the bottom of the frame swells, turns brown and rises to the top of its banks. Locked camera. Thunder, rising roar of water."
+        }
+      ]
+    },
+    {
+      "id": "c7",
+      "type": "generated",
+      "description": "The flooded river surges through the fence gap into the channel, white water overtops the boulders and spreads across the lawn toward the house in sheets. Slow push in toward the patio. Roaring torrent, rain.",
+      "start_seconds": 46.0,
+      "end_seconds": 53.0,
+      "script_section_id": "s8",
+      "framing": "establishing",
+      "movement": "dolly_in",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "establishing",
+        "camera_movement": "dolly_in"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K5 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K4): Keep the exact same camera, house, fence, rock-lined stream and pond. Excavator gone. Night has fallen in spring storm conditions: low dark grey clouds, heavy rain streaks, the river at the bottom of the frame swollen, fast, muddy brown, risen right to the top of its banks with white water, flooding the meadow beyond. Garden lights glowing on the patio."
+        },
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K6 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K5): Keep the exact same camera, house and fence. The swollen brown river is now pouring through the gap in the fence and down the channel as a raging torrent, overtopping the boulders, spreading across the lawn in sheets of brown water; the pond has burst its edge and floodwater is reaching the patio and the back door. Storm, rain, dark clouds."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 7s, 9:16, start image=K5, end image=K6. Prompt: The flooded river surges through the fence gap into the channel, white water overtops the boulders and spreads across the lawn toward the house in sheets. Slow push in toward the patio. Roaring torrent, rain."
+        }
+      ]
+    },
+    {
+      "id": "c8",
+      "type": "generated",
+      "description": "Muddy floodwater surges through the open back door and races down the hallway toward camera, a rug lifts and floats, water splashing up the walls. Low ankle-height camera pushing forward. Rushing water, indoor echo.",
+      "start_seconds": 53.0,
+      "end_seconds": 58.0,
+      "script_section_id": "s9",
+      "framing": "close_up",
+      "movement": "dolly_in",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "close_up",
+        "camera_movement": "dolly_in"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K7 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K6): Same house in the same storm, but now an interior view at ankle height looking down the ground-floor hallway toward the open back door: fast muddy brown floodwater surging through the doorway and along the oak floor, a rug lifting, light from a lamp reflecting on the water. Cinematic, dim, wet."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 5s, 9:16, start image=K7. Prompt: Muddy floodwater surges through the open back door and races down the hallway toward camera, a rug lifts and floats, water splashing up the walls. Low ankle-height camera pushing forward. Rushing water, indoor echo."
+        }
+      ]
+    },
+    {
+      "id": "c9",
+      "type": "generated",
+      "description": "Slow rising aerial over the flooded street at dusk: the brown river flows between houses, the red hatchback drifts, emergency lights flash, rain falls. Camera cranes up and pulls back to reveal the whole neighbourhood under water. Rain, distant sirens.",
+      "start_seconds": 58.0,
+      "end_seconds": 68.0,
+      "script_section_id": "s10",
+      "framing": "extreme_wide",
+      "movement": "crane_up",
+      "transition_in": "hard_cut",
+      "overlay_notes": "One-word-at-a-time caption, centred at 62% height; small 'AI-generated' label bottom-left.",
+      "shot_language": {
+        "shot_size": "extreme_wide",
+        "camera_movement": "crane_up"
+      },
+      "required_assets": [
+        {
+          "type": "image",
+          "source": "generate",
+          "description": "K8 keyframe via local ComfyUI FLUX 3 edit workflow (input image: K6): Pull far back and higher: the same house seen from 80 metres up at dusk in the storm, now in the middle of a suburban street. The river has broken through the back garden and runs down the street between the houses as a wide brown flood, cars half submerged, a red hatchback floating, garden fences flattened, neighbouring gardens under water. Grey rain, emergency lights glowing."
+        },
+        {
+          "type": "video",
+          "source": "generate",
+          "description": "MiniMax H3 local (comfyui_video, model_family minimax_h3_local), image-to-video, 10s, 9:16, start image=K8. Prompt: Slow rising aerial over the flooded street at dusk: the brown river flows between houses, the red hatchback drifts, emergency lights flash, rain falls. Camera cranes up and pulls back to reveal the whole neighbourhood under water. Rain, distant sirens."
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from config.paths import get_env_path
 from agents import llm
 from agents.beats import validate_beats
+from local_video import looks
 
 load_dotenv(get_env_path())
 
@@ -209,6 +210,8 @@ Be lenient on cinematic style. Submit your verdict as the structured output."""
               LOCAL_AI_EVOLUTION_EVALUATOR_PROMPT if content_mode == "evolution"
               else LOCAL_AI_DOCUMENTARY_EVALUATOR_PROMPT if source == "local-ai" and content_mode == "documentary"
               else EVALUATOR_PROMPT)
+    if content_mode == "evolution" and looks.look_of(script) == looks.CUTAWAY:
+        system += CUTAWAY_EVALUATOR_NOTE
     result = llm.ask(system, prompt, VERDICT_TOOL["input_schema"], effort="medium")
     if not isinstance(result, dict) or result.get("verdict") not in {"PASS", "FAIL"}:
         raise ValueError("Evaluator response must contain verdict PASS or FAIL")
@@ -453,6 +456,15 @@ def wardrobe_feedback(script: dict) -> str | None:
 
 
 _SOLUTION_LINE = re.compile(r"^\W*so\b", re.I)
+
+
+CUTAWAY_EVALUATOR_NOTE = """
+THIS EVOLUTION FILM IS RENDERED AS PHOTOREAL 3D CUTAWAYS. Every visual is a cut-open diorama (the ground,
+walls and pipes sliced open to show inside), so underground, inside-a-wall and inside-a-machine views ARE
+filmable here: never fail a beat for showing a buried pipe, the inside of a chamber or a cut face of soil.
+FAIL a visual that puts people or hands on screen, and a visual that shows only the outside of the thing
+its words explain.
+"""
 
 
 def evolution_feedback(script: dict) -> str | None:

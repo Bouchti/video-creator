@@ -43,6 +43,8 @@ SCHEMA = {
         "through_line": {"type": "string", "description": "the object that turns into a real part, if any"},
         "chain": {"type": "array", "items": {"type": "object", "properties": {
             "analogy": {"type": "string"}, "problem": {"type": "string"},
+            "prop": {"type": ["string", "null"], "enum": vocab.PROPS + [None],
+                     "description": "the kit prop that SHOWS this analogy on screen (null: told over the machine)"},
             "part_added": {"type": "string", "description": "the machine part this step adds"},
             "kit_parts": {"type": "array", "items": {"type": "string", "enum": list(vocab.PARTS)}},
             "slot": {"type": "string", "description": "the host slot the part mounts in (its real place)"},
@@ -107,7 +109,9 @@ Choose the host machine model (the real product the parts mount on). Plan the an
 using only these 3D kit parts; put each step's parts in kit_parts and the host slot where that part really sits
 (e.g. a fridge's evaporator inside_top, compressor back_bottom, condenser back_middle). The hook object is a
 prop; it may later fly into the machine as the real part it resembles. Analogies may simplify but must not be
-wrong. If the story needs a part the kit does not have, list it in `missing` and set can_build false.
+wrong, and each one must be SHOWABLE: one of the kit's everyday props doing what the kit's events can show (a
+spray can frosting, a pump heating, a cup steaming its heat away, a balloon squeezed) -- never a person, a pool,
+a room or anything else the kit has no model of. Put that prop in `prop`. If the story needs a part the kit does not have, list it in `missing` and set can_build false.
 
 {vocab.describe()}""", SCHEMA, effort="high", label="buildit_brief")
     out["parts_needed"] = sorted({p for p in out["parts_needed"] if p in vocab.PARTS} |

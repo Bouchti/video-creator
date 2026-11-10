@@ -23,6 +23,7 @@ from typing import Any
 
 import requests
 
+from . import looks
 from .comfy import ComfyClient, ComfyError
 from .config import PipelineConfig, env_int
 from .models import MANIFEST_LOCK, ProjectManifest, Shot
@@ -383,11 +384,17 @@ def keyframe_prompt(shot: Shot, cards: dict[str, str] | None = None, outfits: di
     camera down to the sea or darken the sky in three seconds, so every take of those shots failed.
     """
     continuity = shot.continuity or {}
-    light = shot.light or continuity.get("time_of_day")
+    cutaway = looks.is_cutaway(continuity)
+    light = shot.light or (looks.CUTAWAY_LIGHT if cutaway else continuity.get("time_of_day"))
     face = next((mechanics for pattern, mechanics in _EXPRESSIONS if re.search(pattern, shot.subject_action, re.I)),
                 "")
     framing = framing_for(shot.subject_action, shot.camera_action)
-    parts = [f"Photograph of {face}, {framing}" if face else f"Photograph, {framing}"]
+    if cutaway:
+        # "Photograph" would pull FLUX toward camera footage; the render and the cut lead instead.
+        parts = [f"Photoreal 3D cutaway cross-section render, {looks.cutaway_framing(framing)}, the ground and "
+                 "structures sliced open to show their inside"]
+    else:
+        parts = [f"Photograph of {face}, {framing}" if face else f"Photograph, {framing}"]
     if light:
         parts.append(f"Light and sky in every part of the frame: {light}")
     parts.append(f"Subject: {_flux_text(shot.subject_action)}")
@@ -430,11 +437,16 @@ def keyframe_prompt(shot: Shot, cards: dict[str, str] | None = None, outfits: di
     if continuity.get("period"):             # positive only: FLUX reads "never modern" as "modern"
         parts.append(f"Period: {continuity['period']}, everything in frame of that era, aged and long used")
     style = continuity.get("visual_style")
-    if style:                                  # the same palette and grade the clip is rendered with
+    if style and not (cutaway and looks.CUTAWAY_STYLE[:60] in str(style)):
+        # the same palette and grade the clip is rendered with (a cutaway's fixed style closes the prompt)
         parts.append(f"Visual style: {_flux_text(str(style))[:400]}")
     parts.append("9:16 portrait composition, the subject filling a clear share of the frame")
-    parts.append(f"{PHOTO_LOOK}, realistic skin with pores and fine wrinkles, worn real materials, "
-                 "plain unmarked surfaces")
+    if cutaway:
+        # Word for word in every still, so every shot is drawn in the same world and light.
+        parts.append(f"Style: {looks.CUTAWAY_STYLE}. {looks.CUTAWAY_RENDER}, no people, plain unmarked surfaces")
+    else:
+        parts.append(f"{PHOTO_LOOK}, realistic skin with pores and fine wrinkles, worn real materials, "
+                     "plain unmarked surfaces")
     return ". ".join(part.rstrip(". ") for part in parts) + "."
 
 
@@ -497,6 +509,12 @@ _WEIRD = re.compile(r"\b(?:surreal|cgi|render\w*|illustrat\w*|cartoon\w*|painter
                     r"distort\w*|warp\w*|broken|fused|extra (?:limb|arm|leg|hand|finger|head)\w*|floating|"
                     r"text|letter\w*|lettering|logo\w*|watermark\w*|blank|empty frame|"
                     r"modern|anachronis\w*|wrong era|giant)\b", re.I)
+# The same for a cutaway film, which IS a render: "the render shows..." is no flaw there.
+_WEIRD_CUTAWAY = re.compile(_WEIRD.pattern.replace(r"cgi|render\w*|illustrat\w*|", ""), re.I)
+
+
+def _weird(problem: str, shot: Shot) -> bool:
+    return bool((_WEIRD_CUTAWAY if looks.is_cutaway(shot) else _WEIRD).search(problem))
 
 
 def _gpu_take(client_for, prompt: str, seed: int, width: int, height: int, raw: Path, config: PipelineConfig,
@@ -759,7 +777,7 @@ def prepare_keyframes(manifest: ProjectManifest, config: PipelineConfig, selecte
                     hires["likeness"] = hires["take"]
                 elif (keep_flawed and int(review.get("anatomy", 0)) >= threshold
                       and int(review.get("realism", 0)) >= threshold - 1
-                      and not any(_WEIRD.search(p) for p in review.get("fatal_problems") or [])
+                      and not any(_weird(p, shot) for p in review.get("fatal_problems") or [])
                       and float(review.get("score") or 0) > flawed_score):
                     flawed_score = float(review.get("score") or 0)
                     target.replace(flawed)

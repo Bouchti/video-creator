@@ -136,12 +136,29 @@ def _door(h, name, z0, z1, angle, bins):
 
 
 def _fridge(h):
+    """A real fridge, cut away: solid white body and back (the condenser hangs on the back, as on a real one),
+    closed doors with handles at the front, and the LEFT wall cut open, with foam-coloured cut edges, so the
+    inside is seen from the left / back-left like a cutaway illustration."""
     W, D, Ht = h.dims
-    white, base, t = _cabinet(h, front_glass=False, glass_left=False, glass_back=None)
+    white, base, t = _cabinet(h, front_glass=False, glass_left=False, glass_back=False)
     split = Ht * 0.68
-    # both doors swung wide open to the right, so the camera sees straight in from the front and the left
-    _door(h, "door_main", base + 0.005, split - 0.008, 155, [base + 0.25, split - 0.42])
-    _door(h, "door_freezer", split + 0.008, Ht - 0.005, 155, [])
+    _door(h, "door_main", base + 0.005, split - 0.008, 0, [base + 0.18, base + 0.55, split - 0.33])
+    _door(h, "door_freezer", split + 0.008, Ht - 0.005, 0, [])
+    inner_h = Ht - base - 2 * t
+    zc = base + t + inner_h / 2
+    _rail(h, "liner_b", (W - 2 * t - 0.02, 0.006, inner_h - 0.02), (0, D / 2 - 0.028, zc),
+          M.plastic("#b9c9d8", 0.5), 0.002)
+    # the cut through the insulated walls: a broad foam-yellow band all round the open side, so it reads as a
+    # cutaway of a solid fridge (not a glass cabinet)
+    foam = M.plastic("#f2c75c", 0.6)
+    x, bw = -W / 2 + 0.018, 0.055
+    for y in (-D / 2 + bw / 2, D / 2 - bw / 2):
+        _rail(h, "cut_v", (0.04, bw, Ht - base), (x, y, base + (Ht - base) / 2), foam, 0.003)
+    for z in (base + bw / 2, Ht - bw / 2):
+        _rail(h, "cut_h", (0.04, D - 2 * bw + 0.004, bw), (x, 0, z), foam, 0.003)
+    # the back panel is the dark metal of a real fridge's back: the condenser and compressor are mounted on it
+    _rail(h, "back_skin", (W - 0.01, 0.008, Ht - base - 0.01), (0, D / 2 + 0.004, base + (Ht - base) / 2),
+          M.brushed("#9aa1a9", 0.35), 0.004)
     # inside: freezer floor, a glass shelf, the crisper drawer with produce, a cool interior light
     _rail(h, "freezer_floor", (W - 2 * t - 0.02, D - 2 * t - 0.02, 0.018), (0, 0, split - 0.02),
           M.plastic("#aebfd0", 0.45), 0.006)
@@ -156,10 +173,22 @@ def _fridge(h):
     for i, (c, r, x) in enumerate(produce):
         o = h.add(solid(f"produce{i}", r, r * 1.8, r * 0.9, M.plastic(c, 0.35), segments=24))
         o.location = (x * W, -0.04 + 0.05 * (i % 2), dz0 + 0.005)
+    # a full fridge: a milk bottle, a jar and a juice carton on the glass shelf, a cake box above the drawer --
+    # along the front and back edges, so they never stand between the cut-open side and a part mounted inside
+    zs = Ht * 0.42 + 0.006
+    edge = D / 2 - t - 0.06
+    things = [("bottle_milk", 0.04, 0.24, "#f6f7f8", 0.28, -edge), ("jar", 0.05, 0.12, "#d9442b", -0.05, edge),
+              ("bottle_juice", 0.035, 0.2, "#f08a1c", 0.25, edge)]
+    for name, r, hh, c, x, y in things:
+        o = h.add(solid(f"shelf_{name}", r, hh, r * 0.4, M.plastic(c, 0.3), z0=zs, segments=24))
+        o.location = (x * W, y, 0)
+    h.add(geo.box("cake_box", (W * 0.3, 0.12, 0.09), (0.12 * W, edge - 0.02, dz1 + 0.055),
+                  mat=M.plastic("#7bc4e8", 0.4), fillet=0.01))
     lamp = h.add(geo.box("lamp", (W * 0.5, 0.05, 0.012), (0, -0.05, split - 0.04), mat=M.glow("#e9f6ff", 3.0)))
     lamp["glow"] = 1.0
     lamp.visible_shadow = False
     h.anchor("door", (0, -D / 2 - 0.02, Ht * 0.45))
+    h.anchor("food", (-0.05 * W, -0.02, dz0 + 0.07))
 
 
 def _washer(h):
@@ -241,4 +270,7 @@ def build(htype: str) -> Host:
     h.anchor("center", (0, -D / 2, Ht * 0.5))
     h.anchor("top", (0, 0, Ht))
     h.anchor("back", (0, D / 2, Ht * 0.5))
+    h.anchor("inside", (0, 0, Ht * 0.45))
+    if "food" not in h.anchors:
+        h.anchors["food"] = h.anchors["inside"]
     return h

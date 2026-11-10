@@ -52,8 +52,9 @@ PARTS = {
     "fan": ("a fan rotor with blades inside a ring duct", ["center", "front"], ["front", "back"], ["spin"]),
     "turbine": ("a bladed turbine disc on a shaft (spun by flowing gas)", ["center", "blades"], ["front", "back"],
                 ["spin"]),
-    "compressor": ("a squat brushed compressor box with a piston pump inside a glass window and a motor "
-                   "(squeezes gas)", ["center", "window", "motor"], ["in", "out"], ["pump"]),
+    "compressor": ("a squat black compressor with its side cut open: a chrome piston pumps up and down inside "
+                   "its cylinder while it runs (squeezes gas)", ["center", "window", "motor"], ["in", "out"],
+                   ["pump"]),
     "pump": ("a hand floor pump (handle pushes down)", ["handle", "barrel"], ["outlet"], ["stroke"]),
     "motor": ("an electric motor with a spinning shaft", ["center", "shaft"], [], ["spin"]),
     "spring": ("a chrome coil spring (compresses)", ["top", "center"], [], ["squeeze"]),
@@ -62,6 +63,9 @@ PARTS = {
     "nozzle": ("a narrowing brass nozzle (gas speeds up / pressure drops through it)", ["tip", "center"],
                ["in", "out"], []),
     "spark_plug": ("a spark plug (sparks)", ["tip", "top"], [], []),
+    "capillary": ("a long, very thin copper tube wound into a tight coil (the expansion device of a fridge or an "
+                  "air conditioner: the liquid squeezes through it and its pressure drops)", ["center", "start", "end"],
+                  ["in", "out"], []),
     "coil": ("a long copper pipe bent into a flat zig-zag coil (gives off or soaks up heat)",
              ["center", "start", "end"], ["in", "out"], []),
     "radiator": ("a block of thin metal fins with a pipe through it", ["center", "front"], ["in", "out"], []),
@@ -88,12 +92,16 @@ DIMS = {
     "belt_drive": (0.90, 0.10, 0.46), "fan": (0.60, 0.26, 0.60), "turbine": (0.56, 0.30, 0.56),
     "compressor": (0.50, 0.40, 0.42), "pump": (0.36, 0.14, 0.76), "motor": (0.32, 0.40, 0.30),
     "spring": (0.16, 0.16, 0.40), "lever": (0.90, 0.12, 0.30), "valve": (0.16, 0.16, 0.15),
-    "nozzle": (0.20, 0.20, 0.30), "spark_plug": (0.06, 0.06, 0.20), "coil": (0.70, 0.08, 0.60),
+    "nozzle": (0.20, 0.20, 0.30), "capillary": (0.30, 0.10, 0.30), "spark_plug": (0.06, 0.06, 0.20), "coil": (0.70, 0.08, 0.60),
     "radiator": (0.70, 0.18, 0.56), "burner": (0.30, 0.30, 0.12), "heater": (0.40, 0.10, 0.26),
     "battery": (0.20, 0.20, 0.40), "bulb": (0.16, 0.16, 0.28), "gauge": (0.30, 0.10, 0.30),
     "thermostat": (0.20, 0.08, 0.20), "magnet": (0.30, 0.10, 0.32), "key": (0.22, 0.05, 0.09),
 }
 assert set(DIMS) == set(PARTS)
+
+# everyday objects that can SHOW an analogy on screen (a person, a pool, a room cannot be filmed in the kit)
+PROPS = ["can", "spray_can", "bottle", "cup", "balloon", "candle", "ice_cube", "ball", "firecracker", "matchbox",
+         "kettle", "fan_desk", "bicycle_wheel", "pump", "hand", "spring", "magnet", "key", "battery", "bulb"]
 
 # parts a container fill / flow can live inside
 CONTAINERS = {"glass_tube", "glass_tank", "glass_box", "piston_cylinder", "balloon", "bottle", "spray_can"}
@@ -107,11 +115,12 @@ FLOWS = {
     "air": "white dashes", "fuel": "yellow dashes", "hot_gas": "red dashes (hot gas)",
     "cold_gas": "light-blue dashes (cold gas)", "hot_liquid": "orange dashes (warm liquid)",
     "cold_liquid": "deep-blue dashes (cold liquid)", "water": "cyan dashes", "steam": "white dashes",
-    "exhaust": "grey dashes", "electricity": "yellow-white dashes", "heat": "orange dashes", "oil": "amber dashes",
+    "exhaust": "grey dashes", "electricity": "yellow-white dashes", "oil": "amber dashes",
 }
+HEAT_ENDS = ["room"]        # heat_flow can end in the air around the machine; sources may be machine.food
 FLOW_COLORS = {
-    "air": "#f4f8ff", "fuel": "#ffd23a", "hot_gas": "#ff3b1f", "cold_gas": "#5cc8ff", "hot_liquid": "#ff8a1a",
-    "cold_liquid": "#2f6bff", "water": "#28c8ff", "steam": "#ffffff", "exhaust": "#9a948c",
+    "air": "#f4f8ff", "fuel": "#ffd23a", "hot_gas": "#ff3b1f", "cold_gas": "#9fe6ff", "hot_liquid": "#ff8a1a",
+    "cold_liquid": "#1e40ff", "water": "#28c8ff", "steam": "#ffffff", "exhaust": "#9a948c",
     "electricity": "#fff36b", "heat": "#ff6a1a", "oil": "#e0a030",
 }
 
@@ -128,6 +137,10 @@ EVENTS = {
     "flash": "a warm explosion flash at an anchor (bang)",
     "spark": "a small electric spark at an anchor",
     "heat": "a part glows hot (level 0..1)",
+    "heat_flow": "HEAT MOVING, shown as warm glowing waves drifting from target to `to`: target = where the heat "
+                 "comes from (machine.food = the food inside, a part, part.anchor), to = where it goes (a part id, "
+                 "or 'room' = out into the air around the machine); on true/false. Use it to show what a cooling "
+                 "or heating machine really does: food -> the cold coil, the hot coil -> room.",
     "frost": "a part frosts cold, pale blue-white (level 0..1)",
     "shake": "a part rattles for a moment",
     "rings": "translucent sound rings pulse out of an anchor",

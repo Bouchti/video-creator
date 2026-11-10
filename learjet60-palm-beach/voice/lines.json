@@ -1,0 +1,75 @@
+[
+ {
+  "id": "l1",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "Sunday, November first, twelve fifty-one PM. A business jet struck this neighborhood in Palm Beach County, almost straight down.",
+  "asr": "Sunday, Nov. 1, 1251 p.m. A business jet struck this neighborhood in Palm Beach County, almost straight down."
+ },
+ {
+  "id": "l2",
+  "voice": "af_heart",
+  "speed": 0.92,
+  "text": "All nine people on board were killed."
+ },
+ {
+  "id": "l3",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "The Learjet sixty had left Austin, Texas, for the Bahamas, cruising at thirty-five thousand feet.",
+  "asr": "The Learjet 60 had left Austin, Texas, for the Bahamas, cruising at 35,000 feet."
+ },
+ {
+  "id": "l4",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "Over South Florida, it flew into a line of thunderstorms."
+ },
+ {
+  "id": "l5",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "At twelve forty-seven, the crew reported turbulence and icing, and asked to climb to thirty-seven thousand feet.",
+  "asr": "At 1247, the crew reported turbulence and icing, and asked to climb to 37,000 feet."
+ },
+ {
+  "id": "l6",
+  "voice": "af_heart",
+  "speed": 0.92,
+  "text": "Moments later, the jet began to dive."
+ },
+ {
+  "id": "l7",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "The pilots reported an overspeed, a descent of twenty thousand feet a minute, and called mayday.",
+  "asr": "The pilots reported an overspeed, a descent of 20,000 feet a minute and called May Day."
+ },
+ {
+  "id": "l8",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "In about one minute, it fell from thirty-five thousand feet to under nine thousand.",
+  "asr": "In about one minute, it fell from 35,000 feet to under 9,000."
+ },
+ {
+  "id": "l9",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "It came down beside Military Trail. About six hundred residents were displaced.",
+  "asr": "It came down beside Military Trail. About 600 residents were displaced."
+ },
+ {
+  "id": "l10",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "Investigators see signs the jet may have begun breaking apart before impact."
+ },
+ {
+  "id": "l11",
+  "voice": "af_heart",
+  "speed": 1.02,
+  "text": "The cause is not yet known. The N T S B hopes to recover the cockpit voice recorder.",
+  "asr": "The cause is not yet known. The NTSB hopes to recover the cockpit voice recorder."
+ }
+]

@@ -1,0 +1,1075 @@
+{
+ "duration": 62.86125,
+ "words": [
+  {
+   "word": "A",
+   "start": 0.0,
+   "end": 0.109
+  },
+  {
+   "word": "tidal",
+   "start": 0.109,
+   "end": 0.345
+  },
+  {
+   "word": "wave",
+   "start": 0.345,
+   "end": 0.473
+  },
+  {
+   "word": "of",
+   "start": 0.473,
+   "end": 0.618
+  },
+  {
+   "word": "syrup",
+   "start": 0.618,
+   "end": 0.927
+  },
+  {
+   "word": "flooded",
+   "start": 0.927,
+   "end": 1.309
+  },
+  {
+   "word": "Boston.",
+   "start": 1.309,
+   "end": 1.709
+  },
+  {
+   "word": "Nineteen",
+   "start": 2.11,
+   "end": 2.534
+  },
+  {
+   "word": "nineteen.",
+   "start": 2.534,
+   "end": 2.958
+  },
+  {
+   "word": "Thirty-five",
+   "start": 2.958,
+   "end": 3.382
+  },
+  {
+   "word": "miles",
+   "start": 3.382,
+   "end": 3.764
+  },
+  {
+   "word": "an",
+   "start": 3.764,
+   "end": 3.946
+  },
+  {
+   "word": "hour.",
+   "start": 3.946,
+   "end": 4.182
+  },
+  {
+   "word": "It",
+   "start": 4.584,
+   "end": 4.657
+  },
+  {
+   "word": "started",
+   "start": 4.657,
+   "end": 4.911
+  },
+  {
+   "word": "with",
+   "start": 4.911,
+   "end": 5.111
+  },
+  {
+   "word": "one",
+   "start": 5.111,
+   "end": 5.33
+  },
+  {
+   "word": "giant",
+   "start": 5.33,
+   "end": 5.584
+  },
+  {
+   "word": "tank.",
+   "start": 5.584,
+   "end": 5.875
+  },
+  {
+   "word": "Fifty",
+   "start": 5.875,
+   "end": 6.657
+  },
+  {
+   "word": "feet",
+   "start": 6.657,
+   "end": 6.875
+  },
+  {
+   "word": "tall,",
+   "start": 6.875,
+   "end": 7.202
+  },
+  {
+   "word": "full",
+   "start": 7.457,
+   "end": 7.693
+  },
+  {
+   "word": "of",
+   "start": 7.693,
+   "end": 7.875
+  },
+  {
+   "word": "molasses.",
+   "start": 7.875,
+   "end": 8.275
+  },
+  {
+   "word": "The",
+   "start": 8.711,
+   "end": 8.784
+  },
+  {
+   "word": "man",
+   "start": 8.784,
+   "end": 8.929
+  },
+  {
+   "word": "in",
+   "start": 8.929,
+   "end": 9.02
+  },
+  {
+   "word": "charge",
+   "start": 9.02,
+   "end": 9.184
+  },
+  {
+   "word": "of",
+   "start": 9.184,
+   "end": 9.347
+  },
+  {
+   "word": "building",
+   "start": 9.347,
+   "end": 9.62
+  },
+  {
+   "word": "it",
+   "start": 9.62,
+   "end": 9.838
+  },
+  {
+   "word": "was",
+   "start": 9.838,
+   "end": 10.02
+  },
+  {
+   "word": "not",
+   "start": 10.02,
+   "end": 10.238
+  },
+  {
+   "word": "an",
+   "start": 10.238,
+   "end": 10.366
+  },
+  {
+   "word": "engineer.",
+   "start": 10.366,
+   "end": 10.729
+  },
+  {
+   "word": "He",
+   "start": 11.202,
+   "end": 11.329
+  },
+  {
+   "word": "was",
+   "start": 11.329,
+   "end": 11.475
+  },
+  {
+   "word": "the",
+   "start": 11.475,
+   "end": 11.584
+  },
+  {
+   "word": "company's",
+   "start": 11.584,
+   "end": 12.038
+  },
+  {
+   "word": "accountant.",
+   "start": 12.038,
+   "end": 12.347
+  },
+  {
+   "word": "The",
+   "start": 12.782,
+   "end": 12.855
+  },
+  {
+   "word": "accountant",
+   "start": 12.855,
+   "end": 13.182
+  },
+  {
+   "word": "could",
+   "start": 13.182,
+   "end": 13.437
+  },
+  {
+   "word": "not",
+   "start": 13.437,
+   "end": 13.582
+  },
+  {
+   "word": "even",
+   "start": 13.582,
+   "end": 13.709
+  },
+  {
+   "word": "read",
+   "start": 13.709,
+   "end": 13.909
+  },
+  {
+   "word": "the",
+   "start": 13.909,
+   "end": 14.037
+  },
+  {
+   "word": "blueprints.",
+   "start": 14.037,
+   "end": 14.4
+  },
+  {
+   "word": "He",
+   "start": 14.829,
+   "end": 14.883
+  },
+  {
+   "word": "never",
+   "start": 14.883,
+   "end": 15.065
+  },
+  {
+   "word": "tested",
+   "start": 15.065,
+   "end": 15.393
+  },
+  {
+   "word": "it",
+   "start": 15.393,
+   "end": 15.52
+  },
+  {
+   "word": "properly,",
+   "start": 15.52,
+   "end": 15.938
+  },
+  {
+   "word": "so",
+   "start": 15.938,
+   "end": 16.229
+  },
+  {
+   "word": "it",
+   "start": 16.229,
+   "end": 16.338
+  },
+  {
+   "word": "leaked",
+   "start": 16.338,
+   "end": 16.52
+  },
+  {
+   "word": "from",
+   "start": 16.52,
+   "end": 16.72
+  },
+  {
+   "word": "day",
+   "start": 16.72,
+   "end": 16.883
+  },
+  {
+   "word": "one.",
+   "start": 16.883,
+   "end": 17.12
+  },
+  {
+   "word": "His",
+   "start": 17.504,
+   "end": 17.577
+  },
+  {
+   "word": "solution?",
+   "start": 17.577,
+   "end": 17.977
+  },
+  {
+   "word": "He",
+   "start": 18.286,
+   "end": 18.449
+  },
+  {
+   "word": "painted",
+   "start": 18.449,
+   "end": 18.686
+  },
+  {
+   "word": "the",
+   "start": 18.686,
+   "end": 18.831
+  },
+  {
+   "word": "tank",
+   "start": 18.831,
+   "end": 19.031
+  },
+  {
+   "word": "brown.",
+   "start": 19.031,
+   "end": 19.322
+  },
+  {
+   "word": "So",
+   "start": 19.781,
+   "end": 19.871
+  },
+  {
+   "word": "the",
+   "start": 19.871,
+   "end": 19.981
+  },
+  {
+   "word": "leaks",
+   "start": 19.981,
+   "end": 20.308
+  },
+  {
+   "word": "would",
+   "start": 20.308,
+   "end": 20.653
+  },
+  {
+   "word": "match.",
+   "start": 20.653,
+   "end": 20.926
+  },
+  {
+   "word": "The",
+   "start": 21.4,
+   "end": 21.454
+  },
+  {
+   "word": "neighbors",
+   "start": 21.454,
+   "end": 21.727
+  },
+  {
+   "word": "just",
+   "start": 21.727,
+   "end": 22.0
+  },
+  {
+   "word": "showed",
+   "start": 22.0,
+   "end": 22.181
+  },
+  {
+   "word": "up",
+   "start": 22.181,
+   "end": 22.327
+  },
+  {
+   "word": "with",
+   "start": 22.327,
+   "end": 22.436
+  },
+  {
+   "word": "buckets,",
+   "start": 22.436,
+   "end": 22.709
+  },
+  {
+   "word": "and",
+   "start": 22.709,
+   "end": 23.127
+  },
+  {
+   "word": "took",
+   "start": 23.127,
+   "end": 23.254
+  },
+  {
+   "word": "the",
+   "start": 23.254,
+   "end": 23.363
+  },
+  {
+   "word": "free",
+   "start": 23.363,
+   "end": 23.527
+  },
+  {
+   "word": "molasses",
+   "start": 23.527,
+   "end": 23.909
+  },
+  {
+   "word": "home.",
+   "start": 23.909,
+   "end": 24.163
+  },
+  {
+   "word": "Then",
+   "start": 24.555,
+   "end": 24.682
+  },
+  {
+   "word": "came",
+   "start": 24.682,
+   "end": 24.918
+  },
+  {
+   "word": "one",
+   "start": 24.918,
+   "end": 25.209
+  },
+  {
+   "word": "warm",
+   "start": 25.209,
+   "end": 25.464
+  },
+  {
+   "word": "day",
+   "start": 25.464,
+   "end": 25.737
+  },
+  {
+   "word": "in",
+   "start": 25.737,
+   "end": 26.064
+  },
+  {
+   "word": "January.",
+   "start": 26.064,
+   "end": 26.409
+  },
+  {
+   "word": "The",
+   "start": 26.846,
+   "end": 26.919
+  },
+  {
+   "word": "tank",
+   "start": 26.919,
+   "end": 27.137
+  },
+  {
+   "word": "started",
+   "start": 27.137,
+   "end": 27.446
+  },
+  {
+   "word": "groaning.",
+   "start": 27.446,
+   "end": 27.901
+  },
+  {
+   "word": "Rivets",
+   "start": 28.281,
+   "end": 28.59
+  },
+  {
+   "word": "popped",
+   "start": 28.59,
+   "end": 28.754
+  },
+  {
+   "word": "out",
+   "start": 28.754,
+   "end": 28.972
+  },
+  {
+   "word": "like",
+   "start": 28.972,
+   "end": 29.118
+  },
+  {
+   "word": "machine-gun",
+   "start": 29.118,
+   "end": 29.554
+  },
+  {
+   "word": "fire.",
+   "start": 29.554,
+   "end": 29.809
+  },
+  {
+   "word": "And",
+   "start": 30.205,
+   "end": 30.278
+  },
+  {
+   "word": "two",
+   "start": 30.278,
+   "end": 30.459
+  },
+  {
+   "word": "million",
+   "start": 30.459,
+   "end": 30.659
+  },
+  {
+   "word": "gallons",
+   "start": 30.659,
+   "end": 31.023
+  },
+  {
+   "word": "came",
+   "start": 31.023,
+   "end": 31.259
+  },
+  {
+   "word": "out",
+   "start": 31.259,
+   "end": 31.405
+  },
+  {
+   "word": "at",
+   "start": 31.405,
+   "end": 31.514
+  },
+  {
+   "word": "once.",
+   "start": 31.514,
+   "end": 31.732
+  },
+  {
+   "word": "The",
+   "start": 32.188,
+   "end": 32.243
+  },
+  {
+   "word": "wave",
+   "start": 32.243,
+   "end": 32.406
+  },
+  {
+   "word": "knocked",
+   "start": 32.406,
+   "end": 32.606
+  },
+  {
+   "word": "a",
+   "start": 32.606,
+   "end": 32.77
+  },
+  {
+   "word": "streetcar",
+   "start": 32.77,
+   "end": 33.134
+  },
+  {
+   "word": "off",
+   "start": 33.134,
+   "end": 33.279
+  },
+  {
+   "word": "its",
+   "start": 33.279,
+   "end": 33.425
+  },
+  {
+   "word": "tracks",
+   "start": 33.425,
+   "end": 33.715
+  },
+  {
+   "word": "and",
+   "start": 33.715,
+   "end": 34.006
+  },
+  {
+   "word": "threw",
+   "start": 34.006,
+   "end": 34.134
+  },
+  {
+   "word": "a",
+   "start": 34.134,
+   "end": 34.225
+  },
+  {
+   "word": "truck",
+   "start": 34.225,
+   "end": 34.388
+  },
+  {
+   "word": "into",
+   "start": 34.388,
+   "end": 34.552
+  },
+  {
+   "word": "the",
+   "start": 34.552,
+   "end": 34.661
+  },
+  {
+   "word": "harbor.",
+   "start": 34.661,
+   "end": 34.861
+  },
+  {
+   "word": "One",
+   "start": 35.252,
+   "end": 35.398
+  },
+  {
+   "word": "boy",
+   "start": 35.398,
+   "end": 35.616
+  },
+  {
+   "word": "rode",
+   "start": 35.616,
+   "end": 35.816
+  },
+  {
+   "word": "the",
+   "start": 35.816,
+   "end": 35.943
+  },
+  {
+   "word": "top",
+   "start": 35.943,
+   "end": 36.143
+  },
+  {
+   "word": "of",
+   "start": 36.143,
+   "end": 36.27
+  },
+  {
+   "word": "it,",
+   "start": 36.27,
+   "end": 36.416
+  },
+  {
+   "word": "like",
+   "start": 36.543,
+   "end": 36.652
+  },
+  {
+   "word": "a",
+   "start": 36.652,
+   "end": 36.78
+  },
+  {
+   "word": "surfer.",
+   "start": 36.78,
+   "end": 37.107
+  },
+  {
+   "word": "Twenty-one",
+   "start": 37.457,
+   "end": 37.693
+  },
+  {
+   "word": "people",
+   "start": 37.693,
+   "end": 38.002
+  },
+  {
+   "word": "died.",
+   "start": 38.002,
+   "end": 38.275
+  },
+  {
+   "word": "Rescuers",
+   "start": 38.838,
+   "end": 39.238
+  },
+  {
+   "word": "rushed",
+   "start": 39.238,
+   "end": 39.511
+  },
+  {
+   "word": "in,",
+   "start": 39.511,
+   "end": 39.729
+  },
+  {
+   "word": "and",
+   "start": 40.038,
+   "end": 40.093
+  },
+  {
+   "word": "the",
+   "start": 40.093,
+   "end": 40.166
+  },
+  {
+   "word": "cold",
+   "start": 40.166,
+   "end": 40.366
+  },
+  {
+   "word": "turned",
+   "start": 40.366,
+   "end": 40.584
+  },
+  {
+   "word": "the",
+   "start": 40.584,
+   "end": 40.747
+  },
+  {
+   "word": "syrup",
+   "start": 40.747,
+   "end": 40.966
+  },
+  {
+   "word": "into",
+   "start": 40.966,
+   "end": 41.184
+  },
+  {
+   "word": "glue.",
+   "start": 41.184,
+   "end": 41.384
+  },
+  {
+   "word": "The",
+   "start": 41.789,
+   "end": 41.88
+  },
+  {
+   "word": "whole",
+   "start": 41.88,
+   "end": 42.025
+  },
+  {
+   "word": "city",
+   "start": 42.025,
+   "end": 42.335
+  },
+  {
+   "word": "got",
+   "start": 42.335,
+   "end": 42.535
+  },
+  {
+   "word": "sticky.",
+   "start": 42.535,
+   "end": 42.88
+  },
+  {
+   "word": "Subway",
+   "start": 43.498,
+   "end": 43.753
+  },
+  {
+   "word": "seats.",
+   "start": 43.753,
+   "end": 44.062
+  },
+  {
+   "word": "Payphones.",
+   "start": 44.498,
+   "end": 44.88
+  },
+  {
+   "word": "Everything.",
+   "start": 45.298,
+   "end": 45.698
+  },
+  {
+   "word": "The",
+   "start": 46.167,
+   "end": 46.222
+  },
+  {
+   "word": "company's",
+   "start": 46.222,
+   "end": 46.622
+  },
+  {
+   "word": "excuse?",
+   "start": 46.622,
+   "end": 46.985
+  },
+  {
+   "word": "A",
+   "start": 47.658,
+   "end": 47.749
+  },
+  {
+   "word": "bomb,",
+   "start": 47.749,
+   "end": 48.04
+  },
+  {
+   "word": "planted",
+   "start": 48.04,
+   "end": 48.567
+  },
+  {
+   "word": "by",
+   "start": 48.567,
+   "end": 48.767
+  },
+  {
+   "word": "anarchists.",
+   "start": 48.767,
+   "end": 49.349
+  },
+  {
+   "word": "Three",
+   "start": 49.693,
+   "end": 49.82
+  },
+  {
+   "word": "years",
+   "start": 49.82,
+   "end": 50.038
+  },
+  {
+   "word": "of",
+   "start": 50.038,
+   "end": 50.22
+  },
+  {
+   "word": "hearings",
+   "start": 50.22,
+   "end": 50.42
+  },
+  {
+   "word": "later,",
+   "start": 50.42,
+   "end": 50.729
+  },
+  {
+   "word": "the",
+   "start": 51.002,
+   "end": 51.075
+  },
+  {
+   "word": "court",
+   "start": 51.075,
+   "end": 51.257
+  },
+  {
+   "word": "said",
+   "start": 51.257,
+   "end": 51.493
+  },
+  {
+   "word": "no.",
+   "start": 51.493,
+   "end": 51.747
+  },
+  {
+   "word": "It",
+   "start": 52.184,
+   "end": 52.311
+  },
+  {
+   "word": "was",
+   "start": 52.311,
+   "end": 52.42
+  },
+  {
+   "word": "just",
+   "start": 52.42,
+   "end": 52.529
+  },
+  {
+   "word": "a",
+   "start": 52.529,
+   "end": 52.657
+  },
+  {
+   "word": "bad",
+   "start": 52.657,
+   "end": 52.875
+  },
+  {
+   "word": "tank.",
+   "start": 52.875,
+   "end": 53.147
+  },
+  {
+   "word": "The",
+   "start": 53.556,
+   "end": 53.61
+  },
+  {
+   "word": "harbor",
+   "start": 53.61,
+   "end": 53.774
+  },
+  {
+   "word": "stayed",
+   "start": 53.774,
+   "end": 53.992
+  },
+  {
+   "word": "brown",
+   "start": 53.992,
+   "end": 54.246
+  },
+  {
+   "word": "until",
+   "start": 54.246,
+   "end": 54.483
+  },
+  {
+   "word": "summer,",
+   "start": 54.483,
+   "end": 54.81
+  },
+  {
+   "word": "and",
+   "start": 55.137,
+   "end": 55.192
+  },
+  {
+   "word": "the",
+   "start": 55.192,
+   "end": 55.265
+  },
+  {
+   "word": "streets",
+   "start": 55.265,
+   "end": 55.501
+  },
+  {
+   "word": "smelled",
+   "start": 55.501,
+   "end": 55.719
+  },
+  {
+   "word": "sweet",
+   "start": 55.719,
+   "end": 56.101
+  },
+  {
+   "word": "for",
+   "start": 56.101,
+   "end": 56.301
+  },
+  {
+   "word": "decades.",
+   "start": 56.301,
+   "end": 56.574
+  },
+  {
+   "word": "And",
+   "start": 57.119,
+   "end": 57.283
+  },
+  {
+   "word": "what",
+   "start": 57.283,
+   "end": 57.483
+  },
+  {
+   "word": "was",
+   "start": 57.483,
+   "end": 57.61
+  },
+  {
+   "word": "all",
+   "start": 57.61,
+   "end": 57.719
+  },
+  {
+   "word": "that",
+   "start": 57.719,
+   "end": 57.865
+  },
+  {
+   "word": "molasses",
+   "start": 57.865,
+   "end": 58.228
+  },
+  {
+   "word": "for?",
+   "start": 58.228,
+   "end": 58.501
+  },
+  {
+   "word": "Making",
+   "start": 58.81,
+   "end": 59.192
+  },
+  {
+   "word": "alcohol.",
+   "start": 59.192,
+   "end": 59.483
+  },
+  {
+   "word": "The",
+   "start": 59.935,
+   "end": 60.026
+  },
+  {
+   "word": "very",
+   "start": 60.026,
+   "end": 60.171
+  },
+  {
+   "word": "next",
+   "start": 60.171,
+   "end": 60.389
+  },
+  {
+   "word": "day,",
+   "start": 60.389,
+   "end": 60.68
+  },
+  {
+   "word": "America",
+   "start": 60.917,
+   "end": 61.189
+  },
+  {
+   "word": "approved",
+   "start": 61.189,
+   "end": 61.571
+  },
+  {
+   "word": "the",
+   "start": 61.571,
+   "end": 61.753
+  },
+  {
+   "word": "law",
+   "start": 61.753,
+   "end": 61.917
+  },
+  {
+   "word": "that",
+   "start": 61.917,
+   "end": 62.044
+  },
+  {
+   "word": "banned",
+   "start": 62.044,
+   "end": 62.317
+  },
+  {
+   "word": "alcohol.",
+   "start": 62.317,
+   "end": 62.626
+  }
+ ]
+}

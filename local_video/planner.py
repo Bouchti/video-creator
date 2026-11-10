@@ -8,6 +8,7 @@ import random
 import re
 from typing import Any
 
+from . import looks
 from .models import Shot
 
 
@@ -632,6 +633,7 @@ def _continuity(
         "recurring_objects": "; ".join(str(item) for item in objects if item),
         "visual_style": visual_style,
         "period": story_period(script),
+        "look": looks.look_of(script),
     }
 
 
@@ -805,9 +807,19 @@ def construct_prompt(
     the screen geography (fleets swapping sides), and the recurring objects with their markings
     (the kettle and the ships changed design between shots because no prompt ever described them).
     """
+    cutaway = looks.is_cutaway(continuity)
     suffix = MINIMAX_SUFFIX if backend == "minimax" else WAN_SUFFIX
     style = generator_text(continuity.get("visual_style") or "photographic realism")
-    parts = [f"Live-action, {style.rstrip('.')}, {framing}, 9:16 vertical frame, the picture filling it edge to edge."]
+    if cutaway:
+        framing = looks.cutaway_framing(framing)
+        # The fixed cutaway style leads every clip word for word (looks.CUTAWAY_STYLE); a scene's own
+        # style words follow it only when they add something.
+        extra = "" if looks.CUTAWAY_STYLE[:60] in style else f"; {style.rstrip('.')}"
+        parts = [f"{looks.CUTAWAY_STYLE}{extra}, {framing}, 9:16 vertical frame, the picture filling it edge to "
+                 "edge. No people anywhere in the picture."]
+    else:
+        parts = [f"Live-action, {style.rstrip('.')}, {framing}, 9:16 vertical frame, the picture filling it "
+                 "edge to edge."]
     characters = str(continuity.get("characters") or "")
     if cast_names:
         plural = len(cast_names) > 1
@@ -848,10 +860,13 @@ def construct_prompt(
         parts.append(_sentence(f"Colour palette: {generator_text(palette)}"))
     # A fixed "clear air" contradicted every hazy, smoky or ash-darkened light, and won: 28 reviews on
     # the volcano run said the sky came back pale and bright instead of ash-darkened.
-    parts.append(_sentence(f"Light: {light}, held steady in every frame") if light
-                 else "Natural daylight with real shadows.")
+    if cutaway:
+        parts.append(_sentence(f"Light: {light or looks.CUTAWAY_LIGHT}, held steady in every frame"))
+    else:
+        parts.append(_sentence(f"Light: {light}, held steady in every frame") if light
+                     else "Natural daylight with real shadows.")
     parts.append(camera_prose(camera_action))
-    parts.append(f"Photorealistic: {suffix}.")
+    parts.append(f"Render: {looks.CUTAWAY_RENDER}." if cutaway else f"Photorealistic: {suffix}.")
     parts.append(H3_NO_TEXT)
     sound = f"{ambience}, environmental sound only, no voices" if ambience else ""
     return h3_prompt(" ".join(p for p in parts if p), sound)
@@ -987,7 +1002,8 @@ def plan_shots(
             ),
             negative_prompt=(
                 "static image, frozen motion, black frame, low detail, flicker, duplicate subject, "
-                "warped anatomy, broken geometry, abrupt lighting change, " + REALISM_BAN + ". " + QUALITY_BAN
+                "warped anatomy, broken geometry, abrupt lighting change, "
+                + (looks.CUTAWAY_BAN if looks.is_cutaway(script) else REALISM_BAN) + ". " + QUALITY_BAN
             ),
             seed=_seed(script.get("video_title") or concept, index),
             narration=segments[index],

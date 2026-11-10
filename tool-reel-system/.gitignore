@@ -1,0 +1,20 @@
+node_modules/
+out/
+.env
+__pycache__/
+*.pyc
+
+# per-video media never belongs in git
+template/public/*
+!template/public/.gitkeep
+!template/public/shots/
+template/public/shots/*
+!template/public/shots/.gitkeep
+
+# per-video edit projects (root level only; must not swallow .claude/skills/tool-reel-edit)
+/*-edit/
+
+# scratch audio the scripts drop while working
+scripts/.*.wav
+template/scripts/.*.wav
+template/scripts/.*.json

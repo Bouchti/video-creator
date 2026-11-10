@@ -159,6 +159,17 @@ EVOLUTION_QUERIES = [
     "evolution of cranes and lifting machines history", "how railway track design evolved engineering",
     "evolution of sea walls and flood defences engineering", "how irrigation systems evolved engineering",
 ]
+# The same searches for an evolution film in the cutaway look: things whose working is hidden inside.
+CUTAWAY_EVOLUTION_QUERIES = [
+    "how hidden infrastructure evolved engineering history step by step",
+    "engineering history of what is under our streets each problem solved",
+    "history of sewer design engineering evolution", "how storm drains and street drainage evolved",
+    "history of water wells and pumps engineering", "how the flush toilet and plumbing evolved engineering",
+    "history of septic tanks and wastewater treatment design", "how building foundations evolved engineering",
+    "how dam spillways and outlets evolved engineering", "history of canal lock chambers and gates engineering",
+    "how water towers and water supply pressure evolved", "history of tunnel lining and drainage engineering",
+    "how flood barriers and backflow valves evolved engineering", "how aqueducts and water pipes evolved",
+]
 # Subjects the old Blender evolution sets already filmed (engine/sets: bridge_evolution).
 FILMED_EVOLUTION_SUBJECTS = ["bridge"]
 
@@ -166,6 +177,9 @@ FILMED_EVOLUTION_SUBJECTS = ["bridge"]
 def _evolution_queries() -> list[str]:
     """Two broad searches and four named design histories, varied run to run (no time window)."""
     import random
+    from local_video import looks
+    if looks.evolution_look() == looks.CUTAWAY:      # two broad searches, then the named hidden systems
+        return random.sample(CUTAWAY_EVOLUTION_QUERIES[:2], 2) + random.sample(CUTAWAY_EVOLUTION_QUERIES[2:], 4)
     return random.sample(EVOLUTION_QUERIES[:4], 2) + random.sample(EVOLUTION_QUERIES[4:], 4)
 
 
@@ -416,6 +430,19 @@ EVOLUTION LADDER (mandatory for the evolution route):
 """
 
 
+CUTAWAY_TOPIC_RULES = """
+CUTAWAY LOOK (this evolution film is rendered as photoreal 3D cutaways that slice the ground and structures
+open; these rules replace "each an outdoor structure a camera can film in clear daylight" and the
+AI-VIDEO REALISM rule that the camera must stand in open air: a cut-open view of what is underground,
+inside a wall or inside a machine is filmable here, though open water and microscopic views still are not):
+- Prefer a built thing whose working is hidden: buried, enclosed or underground (street drains and sewers,
+  wells and water supply, toilets and plumbing, septic tanks, foundations, tunnels, dam outlets, canal lock
+  chambers, water towers, pumps, flood barriers). The cut shows its inside, so stages that differ
+  underground or inside ARE filmable.
+- Still reject stages that differ only in electronics, chemistry or software, or that need microscopic shots.
+"""
+
+
 TOPIC_TOOL = {
     "name": "submit_topic_selection",
     "description": "Submit your chosen topic and angle for today's video.",
@@ -599,7 +626,9 @@ MAX-AND-KIDS STAGE (mandatory for the director route):
     schema = TOPIC_TOOL["input_schema"]
     if source == "evolution":
         used = used_evolution_subjects(recently_used)
+        from local_video import looks
         unreal_rules += EVOLUTION_TOPIC_RULES + (
+            CUTAWAY_TOPIC_RULES if looks.evolution_look() == looks.CUTAWAY else "") + (
             "\nALREADY FILMED AS EVOLUTION VIDEOS: every video evolves a DIFFERENT kind of thing. Never pick "
             "any of these, or a variant of one (a suspension bridge is a bridge): " + ", ".join(used) + "\n")
         schema = {**schema, "properties": {**schema["properties"], "subject": {

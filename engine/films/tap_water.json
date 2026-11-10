@@ -1,0 +1,581 @@
+{
+ "title": "Where your tap water comes from",
+ "description": "Follow one glass of tap water backwards: rain, a reservoir, a treatment plant, a water tower, the main under your street and the pipe up to your tap.",
+ "voice": "energetic",
+ "voice_engine": "chatterbox",
+ "compose": "hyperframes",
+ "music": "cutaway/assets/music/Clean Soul.mp3",
+ "music_intent": "calm, warm, soft keys, barely there under the voice",
+ "credits": [
+  "Music: \"Clean Soul\" Kevin MacLeod (incompetech.com). Licensed under Creative Commons: By Attribution 4.0 License, http://creativecommons.org/licenses/by/4.0/",
+  "Sound effects: BigSoundBank.com (CC0)"
+ ],
+ "tail": 2.4,
+ "beat_pause": 0,
+ "chapter_pause": 0.45,
+ "chapters": [
+  {
+   "id": "source",
+   "label": "SOURCE"
+  },
+  {
+   "id": "plant",
+   "label": "PLANT"
+  },
+  {
+   "id": "tower",
+   "label": "TOWER"
+  },
+  {
+   "id": "street",
+   "label": "STREET"
+  },
+  {
+   "id": "home",
+   "label": "HOME"
+  }
+ ],
+ "beats": [
+  {
+   "id": "tap",
+   "station": "home",
+   "chapter": null,
+   "text": "You turn on the tap, and clean water rushes out. Instantly.",
+   "hook": "WHERE DOES IT COME FROM?"
+  },
+  {
+   "id": "why",
+   "station": "home",
+   "chapter": null,
+   "text": "But where does it come from? And what pushes it all the way to you?",
+   "callouts": [
+    {
+     "anchor": "home_supply",
+     "text": "Supply pipe",
+     "at": 0.45
+    }
+   ]
+  },
+  {
+   "id": "rain",
+   "station": "source",
+   "chapter": "source",
+   "text": "It starts as rain, running off the hills into rivers and lakes."
+  },
+  {
+   "id": "dam",
+   "station": "source",
+   "chapter": "source",
+   "text": "A dam holds it back, in a reservoir.",
+   "callouts": [
+    {
+     "anchor": "dam",
+     "text": "Dam",
+     "at": 0.15
+    },
+    {
+     "anchor": "reservoir",
+     "text": "Reservoir",
+     "at": 0.45
+    }
+   ]
+  },
+  {
+   "id": "intake",
+   "station": "source",
+   "chapter": "source",
+   "text": "Deep below the surface, an intake pipe draws water in, through screens that stop fish and leaves.",
+   "callouts": [
+    {
+     "anchor": "intake_screen",
+     "text": "Intake screen",
+     "at": 0.45
+    }
+   ]
+  },
+  {
+   "id": "plant_arrive",
+   "station": "plant",
+   "chapter": "plant",
+   "text": "It flows to a treatment plant, still cloudy with tiny bits of dirt."
+  },
+  {
+   "id": "coagulant",
+   "station": "plant",
+   "chapter": "plant",
+   "title": "MIX",
+   "text": "First, a coagulant is mixed in fast. It makes those bits sticky.",
+   "callouts": [
+    {
+     "anchor": "coagulant",
+     "text": "Coagulant",
+     "at": 0.15
+    }
+   ]
+  },
+  {
+   "id": "floc",
+   "station": "plant",
+   "chapter": "plant",
+   "title": "CLUMP",
+   "text": "Slow paddles stir the water, and the bits clump into fluffy flakes called floc.",
+   "callouts": [
+    {
+     "anchor": "paddle",
+     "text": "Paddles",
+     "at": 0.1
+    },
+    {
+     "anchor": "floc",
+     "text": "Floc",
+     "at": 0.7
+    }
+   ]
+  },
+  {
+   "id": "settle",
+   "station": "plant",
+   "chapter": "plant",
+   "title": "SETTLE",
+   "text": "In a long, calm tank, the heavy floc sinks to the bottom.",
+   "callouts": [
+    {
+     "anchor": "sludge",
+     "text": "Sludge",
+     "at": 0.55
+    }
+   ]
+  },
+  {
+   "id": "filter",
+   "station": "plant",
+   "chapter": "plant",
+   "title": "FILTER",
+   "text": "The clear water on top trickles down through sand and gravel, which trap whatever is left.",
+   "callouts": [
+    {
+     "anchor": "sand",
+     "text": "Sand",
+     "at": 0.35
+    },
+    {
+     "anchor": "gravel",
+     "text": "Gravel",
+     "at": 0.5
+    }
+   ]
+  },
+  {
+   "id": "chlorine",
+   "station": "plant",
+   "chapter": "plant",
+   "title": "DISINFECT",
+   "text": "Then a little chlorine kills the germs, and keeps protecting the water all the way to your home.",
+   "callouts": [
+    {
+     "anchor": "chlorine",
+     "text": "Chlorine",
+     "at": 0.1
+    }
+   ]
+  },
+  {
+   "id": "clearwell",
+   "station": "plant",
+   "chapter": "plant",
+   "text": "The clean water waits in a covered tank,",
+   "callouts": [
+    {
+     "anchor": "clearwell",
+     "text": "Clean water tank",
+     "at": 0.1
+    }
+   ]
+  },
+  {
+   "id": "pumps",
+   "station": "plant",
+   "chapter": "plant",
+   "text": "until powerful pumps push it uphill, into a water tower.",
+   "callouts": [
+    {
+     "anchor": "pump",
+     "text": "Pumps",
+     "at": 0.1
+    }
+   ]
+  },
+  {
+   "id": "tower",
+   "station": "tower",
+   "chapter": "tower",
+   "text": "That tower is the secret. Its height pushes water through every pipe in town."
+  },
+  {
+   "id": "pressure",
+   "station": "tower",
+   "chapter": "tower",
+   "text": "Every ten metres of height adds about one bar of pressure.",
+   "stat": {
+    "display": "10 m = 1 bar",
+    "ruler": [
+     "tower_base",
+     "tower_top"
+    ],
+    "ruler_m": 30
+   }
+  },
+  {
+   "id": "night",
+   "station": "tower",
+   "chapter": "tower",
+   "text": "At night, when nobody is using water, the pumps fill it back up."
+  },
+  {
+   "id": "main",
+   "station": "street",
+   "chapter": "street",
+   "text": "From the tower, water flows into mains buried under your street.",
+   "callouts": [
+    {
+     "anchor": "water_main",
+     "text": "Water main",
+     "at": 0.45
+    }
+   ]
+  },
+  {
+   "id": "sewer",
+   "station": "street",
+   "chapter": "street",
+   "text": "Unlike the sewer below them, these pipes are always full, and always under pressure.",
+   "callouts": [
+    {
+     "anchor": "sewer_main",
+     "text": "Sewer",
+     "at": 0.12
+    },
+    {
+     "anchor": "water_main",
+     "text": "Full and pressurised",
+     "at": 0.5
+    }
+   ]
+  },
+  {
+   "id": "service",
+   "station": "street",
+   "chapter": "street",
+   "text": "A smaller pipe branches off to your house,",
+   "callouts": [
+    {
+     "anchor": "service_pipe",
+     "text": "Service pipe",
+     "at": 0.2
+    }
+   ]
+  },
+  {
+   "id": "meter",
+   "station": "street",
+   "chapter": "street",
+   "text": "through the meter that counts every litre,",
+   "callouts": [
+    {
+     "anchor": "meter",
+     "text": "Water meter",
+     "at": 0.1
+    }
+   ]
+  },
+  {
+   "id": "upstairs",
+   "station": "home",
+   "chapter": "home",
+   "text": "and up inside the walls to every tap, even upstairs."
+  },
+  {
+   "id": "glass",
+   "station": "home",
+   "chapter": "home",
+   "text": "All that work, for one glass of water."
+  },
+  {
+   "id": "question",
+   "station": "home",
+   "chapter": "home",
+   "text": "So, tap or bottled: which one do you drink?",
+   "question": "TAP OR BOTTLED?"
+  }
+ ],
+ "music_db": -22,
+ "music_duck_db": -4,
+ "sound_duck_db": -4,
+ "sound": [
+  {
+   "file": "faucet-3-s0652",
+   "from": "tap",
+   "to": "tap",
+   "db": -12,
+   "lp": 6000
+  },
+  {
+   "file": "faucet-3-s0652",
+   "from": "why",
+   "to": "why",
+   "db": -26,
+   "lp": 1500
+  },
+  {
+   "file": "countryside-s0097",
+   "from": "why",
+   "to": "why",
+   "db": -22
+  },
+  {
+   "file": "summer-rain-on-terrace-s1019",
+   "from": "rain",
+   "to": "rain",
+   "db": -13,
+   "lp": 6000
+  },
+  {
+   "file": "mountain-stream-2-s2755",
+   "from": "rain",
+   "to": "rain",
+   "db": -24,
+   "lp": 4000,
+   "at": 0.4
+  },
+  {
+   "file": "pond-in-a-field-s0691",
+   "from": "dam",
+   "to": "dam",
+   "db": -17
+  },
+  {
+   "file": "small-dam-s0871",
+   "from": "dam",
+   "to": "dam",
+   "db": -24,
+   "lp": 3000
+  },
+  {
+   "file": "underwater-s3430",
+   "from": "intake",
+   "to": "intake",
+   "db": -13,
+   "lp": 1800
+  },
+  {
+   "file": "water-flow-1-s0204",
+   "from": "intake",
+   "to": "intake",
+   "db": -24,
+   "lp": 1200
+  },
+  {
+   "file": "watercourse-3-s3134",
+   "from": "plant_arrive",
+   "to": "plant_arrive",
+   "db": -15,
+   "lp": 5000
+  },
+  {
+   "file": "drops-of-water-1-s1384",
+   "from": "coagulant",
+   "to": "coagulant",
+   "db": -18,
+   "lp": 5000
+  },
+  {
+   "file": "stir-in-water-2-s0651",
+   "from": "coagulant",
+   "to": "coagulant",
+   "db": -15,
+   "lp": 6000,
+   "at": 0.25
+  },
+  {
+   "file": "electric-pump-s0709",
+   "from": "coagulant",
+   "to": "coagulant",
+   "db": -27,
+   "lp": 2500
+  },
+  {
+   "file": "rowing-slowly-s1514",
+   "from": "floc",
+   "to": "floc",
+   "db": -13,
+   "lp": 6000
+  },
+  {
+   "file": "pond-in-a-field-s0691",
+   "from": "settle",
+   "to": "settle",
+   "db": -19
+  },
+  {
+   "file": "watercourse-1-s3132",
+   "from": "settle",
+   "to": "settle",
+   "db": -30,
+   "lp": 2500
+  },
+  {
+   "file": "liquid-flowing-over-the-soil-s0563",
+   "from": "filter",
+   "to": "filter",
+   "db": -15,
+   "lp": 4000
+  },
+  {
+   "file": "drops-of-water-2-s1385",
+   "from": "filter",
+   "to": "filter",
+   "db": -25,
+   "lp": 5000
+  },
+  {
+   "file": "water-bubbles-s0150",
+   "from": "chlorine",
+   "to": "chlorine",
+   "db": -15,
+   "lp": 5000
+  },
+  {
+   "file": "water-flow-2-s0205",
+   "from": "chlorine",
+   "to": "chlorine",
+   "db": -26,
+   "lp": 2500
+  },
+  {
+   "file": "drops-of-water-2-s1385",
+   "from": "clearwell",
+   "to": "clearwell",
+   "db": -17,
+   "lp": 5000
+  },
+  {
+   "file": "underwater-s3430",
+   "from": "clearwell",
+   "to": "clearwell",
+   "db": -28,
+   "lp": 800
+  },
+  {
+   "file": "electric-pump-water-s0710",
+   "from": "pumps",
+   "to": "pumps",
+   "db": -12,
+   "lp": 5000
+  },
+  {
+   "file": "electric-pump-s0709",
+   "from": "pumps",
+   "to": "pumps",
+   "db": -22,
+   "lp": 3000
+  },
+  {
+   "file": "countryside-s0097",
+   "from": "tower",
+   "to": "pressure",
+   "db": -17
+  },
+  {
+   "file": "water-flow-1-s0204",
+   "from": "tower",
+   "to": "tower",
+   "db": -25,
+   "lp": 1500
+  },
+  {
+   "file": "campaign-at-night-1-s0110",
+   "from": "night",
+   "to": "night",
+   "db": -15
+  },
+  {
+   "file": "electric-pump-s0709",
+   "from": "night",
+   "to": "night",
+   "db": -28,
+   "lp": 1500
+  },
+  {
+   "file": "water-flow-1-s0204",
+   "from": "main",
+   "to": "main",
+   "db": -14,
+   "lp": 1500
+  },
+  {
+   "file": "water-flowing-down-a-sewer-2-s2438",
+   "from": "sewer",
+   "to": "sewer",
+   "db": -14,
+   "lp": 4000
+  },
+  {
+   "file": "water-flow-1-s0204",
+   "from": "sewer",
+   "to": "sewer",
+   "db": -24,
+   "lp": 1500
+  },
+  {
+   "file": "water-flow-3-s1219",
+   "from": "service",
+   "to": "service",
+   "db": -16,
+   "lp": 2000
+  },
+  {
+   "file": "water-meter-s1304",
+   "from": "meter",
+   "to": "meter",
+   "db": -11,
+   "lp": 6000
+  },
+  {
+   "file": "water-flow-3-s1219",
+   "from": "meter",
+   "to": "meter",
+   "db": -26,
+   "lp": 1500
+  },
+  {
+   "file": "water-flow-2-s0205",
+   "from": "upstairs",
+   "to": "upstairs",
+   "db": -18,
+   "lp": 1200
+  },
+  {
+   "file": "faucet-3-s0652",
+   "from": "glass",
+   "to": "glass",
+   "db": -20,
+   "lp": 6000
+  },
+  {
+   "file": "glass-of-water-filling-2-s1243",
+   "from": "glass",
+   "to": "glass",
+   "db": -9,
+   "lp": 8000,
+   "at": 0.1,
+   "hit": true,
+   "len": 2.2
+  },
+  {
+   "file": "countryside-s0097",
+   "from": "question",
+   "to": "question",
+   "db": -28
+  }
+ ]
+}

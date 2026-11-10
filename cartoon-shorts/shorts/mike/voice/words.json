@@ -1,0 +1,1180 @@
+{
+ "duration": 65.524667,
+ "words": [
+  {
+   "word": "This",
+   "start": 0.0,
+   "end": 0.145
+  },
+  {
+   "word": "rooster",
+   "start": 0.145,
+   "end": 0.473
+  },
+  {
+   "word": "lived",
+   "start": 0.473,
+   "end": 0.691
+  },
+  {
+   "word": "eighteen",
+   "start": 0.691,
+   "end": 1.018
+  },
+  {
+   "word": "months",
+   "start": 1.018,
+   "end": 1.364
+  },
+  {
+   "word": "without",
+   "start": 1.364,
+   "end": 1.673
+  },
+  {
+   "word": "a",
+   "start": 1.673,
+   "end": 1.818
+  },
+  {
+   "word": "head.",
+   "start": 1.818,
+   "end": 1.982
+  },
+  {
+   "word": "Colorado,",
+   "start": 2.341,
+   "end": 2.687
+  },
+  {
+   "word": "nineteen",
+   "start": 2.687,
+   "end": 3.396
+  },
+  {
+   "word": "forty-five.",
+   "start": 3.396,
+   "end": 4.105
+  },
+  {
+   "word": "Farmer",
+   "start": 4.105,
+   "end": 4.45
+  },
+  {
+   "word": "Lloyd",
+   "start": 4.45,
+   "end": 4.687
+  },
+  {
+   "word": "Olsen",
+   "start": 4.687,
+   "end": 5.105
+  },
+  {
+   "word": "picks",
+   "start": 5.105,
+   "end": 5.487
+  },
+  {
+   "word": "a",
+   "start": 5.487,
+   "end": 5.632
+  },
+  {
+   "word": "rooster",
+   "start": 5.632,
+   "end": 5.905
+  },
+  {
+   "word": "for",
+   "start": 5.905,
+   "end": 6.069
+  },
+  {
+   "word": "dinner.",
+   "start": 6.069,
+   "end": 6.25
+  },
+  {
+   "word": "His",
+   "start": 6.642,
+   "end": 6.751
+  },
+  {
+   "word": "mother-in-law",
+   "start": 6.751,
+   "end": 7.188
+  },
+  {
+   "word": "is",
+   "start": 7.188,
+   "end": 7.333
+  },
+  {
+   "word": "coming,",
+   "start": 7.333,
+   "end": 7.533
+  },
+  {
+   "word": "and",
+   "start": 7.861,
+   "end": 7.933
+  },
+  {
+   "word": "she",
+   "start": 7.933,
+   "end": 8.061
+  },
+  {
+   "word": "loves",
+   "start": 8.061,
+   "end": 8.242
+  },
+  {
+   "word": "the",
+   "start": 8.242,
+   "end": 8.424
+  },
+  {
+   "word": "neck.",
+   "start": 8.424,
+   "end": 8.57
+  },
+  {
+   "word": "So",
+   "start": 8.961,
+   "end": 9.07
+  },
+  {
+   "word": "Lloyd",
+   "start": 9.07,
+   "end": 9.306
+  },
+  {
+   "word": "aims",
+   "start": 9.306,
+   "end": 9.597
+  },
+  {
+   "word": "the",
+   "start": 9.597,
+   "end": 9.743
+  },
+  {
+   "word": "axe",
+   "start": 9.743,
+   "end": 9.961
+  },
+  {
+   "word": "high,",
+   "start": 9.961,
+   "end": 10.288
+  },
+  {
+   "word": "to",
+   "start": 10.288,
+   "end": 10.633
+  },
+  {
+   "word": "leave",
+   "start": 10.633,
+   "end": 10.779
+  },
+  {
+   "word": "her",
+   "start": 10.779,
+   "end": 10.924
+  },
+  {
+   "word": "as",
+   "start": 10.924,
+   "end": 11.033
+  },
+  {
+   "word": "much",
+   "start": 11.033,
+   "end": 11.233
+  },
+  {
+   "word": "neck",
+   "start": 11.233,
+   "end": 11.433
+  },
+  {
+   "word": "as",
+   "start": 11.433,
+   "end": 11.615
+  },
+  {
+   "word": "possible.",
+   "start": 11.615,
+   "end": 11.997
+  },
+  {
+   "word": "Whack.",
+   "start": 12.391,
+   "end": 12.734
+  },
+  {
+   "word": "And",
+   "start": 12.989,
+   "end": 13.062
+  },
+  {
+   "word": "the",
+   "start": 13.062,
+   "end": 13.116
+  },
+  {
+   "word": "chicken",
+   "start": 13.116,
+   "end": 13.334
+  },
+  {
+   "word": "just",
+   "start": 13.334,
+   "end": 13.552
+  },
+  {
+   "word": "walks",
+   "start": 13.552,
+   "end": 13.789
+  },
+  {
+   "word": "away.",
+   "start": 13.789,
+   "end": 14.007
+  },
+  {
+   "word": "The",
+   "start": 14.439,
+   "end": 14.493
+  },
+  {
+   "word": "next",
+   "start": 14.493,
+   "end": 14.62
+  },
+  {
+   "word": "morning,",
+   "start": 14.62,
+   "end": 14.984
+  },
+  {
+   "word": "Mike",
+   "start": 15.184,
+   "end": 15.275
+  },
+  {
+   "word": "is",
+   "start": 15.275,
+   "end": 15.402
+  },
+  {
+   "word": "still",
+   "start": 15.402,
+   "end": 15.584
+  },
+  {
+   "word": "walking",
+   "start": 15.584,
+   "end": 15.857
+  },
+  {
+   "word": "around.",
+   "start": 15.857,
+   "end": 16.184
+  },
+  {
+   "word": "Trying",
+   "start": 16.784,
+   "end": 16.948
+  },
+  {
+   "word": "to",
+   "start": 16.948,
+   "end": 17.075
+  },
+  {
+   "word": "peck.",
+   "start": 17.075,
+   "end": 17.73
+  },
+  {
+   "word": "Trying",
+   "start": 17.73,
+   "end": 17.966
+  },
+  {
+   "word": "to",
+   "start": 17.966,
+   "end": 18.111
+  },
+  {
+   "word": "crow.",
+   "start": 18.111,
+   "end": 18.311
+  },
+  {
+   "word": "With",
+   "start": 18.766,
+   "end": 18.93
+  },
+  {
+   "word": "no",
+   "start": 18.93,
+   "end": 19.13
+  },
+  {
+   "word": "head.",
+   "start": 19.13,
+   "end": 19.366
+  },
+  {
+   "word": "Wait.",
+   "start": 19.72,
+   "end": 19.902
+  },
+  {
+   "word": "How",
+   "start": 20.229,
+   "end": 20.611
+  },
+  {
+   "word": "is",
+   "start": 20.611,
+   "end": 20.72
+  },
+  {
+   "word": "that",
+   "start": 20.72,
+   "end": 20.847
+  },
+  {
+   "word": "even",
+   "start": 20.847,
+   "end": 21.083
+  },
+  {
+   "word": "possible?",
+   "start": 21.083,
+   "end": 21.556
+  },
+  {
+   "word": "You",
+   "start": 22.028,
+   "end": 22.119
+  },
+  {
+   "word": "see,",
+   "start": 22.119,
+   "end": 22.247
+  },
+  {
+   "word": "the",
+   "start": 22.519,
+   "end": 22.628
+  },
+  {
+   "word": "axe",
+   "start": 22.628,
+   "end": 22.792
+  },
+  {
+   "word": "missed",
+   "start": 22.792,
+   "end": 23.028
+  },
+  {
+   "word": "the",
+   "start": 23.028,
+   "end": 23.21
+  },
+  {
+   "word": "big",
+   "start": 23.21,
+   "end": 23.392
+  },
+  {
+   "word": "vein",
+   "start": 23.392,
+   "end": 23.61
+  },
+  {
+   "word": "in",
+   "start": 23.61,
+   "end": 23.756
+  },
+  {
+   "word": "his",
+   "start": 23.756,
+   "end": 23.883
+  },
+  {
+   "word": "neck,",
+   "start": 23.883,
+   "end": 24.101
+  },
+  {
+   "word": "and",
+   "start": 24.356,
+   "end": 24.41
+  },
+  {
+   "word": "a",
+   "start": 24.41,
+   "end": 24.501
+  },
+  {
+   "word": "blood",
+   "start": 24.501,
+   "end": 24.647
+  },
+  {
+   "word": "clot",
+   "start": 24.647,
+   "end": 24.919
+  },
+  {
+   "word": "stopped",
+   "start": 24.919,
+   "end": 25.174
+  },
+  {
+   "word": "the",
+   "start": 25.174,
+   "end": 25.356
+  },
+  {
+   "word": "bleeding.",
+   "start": 25.356,
+   "end": 25.538
+  },
+  {
+   "word": "And",
+   "start": 25.931,
+   "end": 26.022
+  },
+  {
+   "word": "it",
+   "start": 26.022,
+   "end": 26.062
+  },
+  {
+   "word": "left",
+   "start": 26.062,
+   "end": 26.203
+  },
+  {
+   "word": "most",
+   "start": 26.203,
+   "end": 26.44
+  },
+  {
+   "word": "of",
+   "start": 26.44,
+   "end": 26.603
+  },
+  {
+   "word": "his",
+   "start": 26.603,
+   "end": 26.713
+  },
+  {
+   "word": "brain",
+   "start": 26.713,
+   "end": 27.14
+  },
+  {
+   "word": "stem,",
+   "start": 27.14,
+   "end": 27.567
+  },
+  {
+   "word": "the",
+   "start": 27.567,
+   "end": 27.607
+  },
+  {
+   "word": "part",
+   "start": 27.607,
+   "end": 27.749
+  },
+  {
+   "word": "that",
+   "start": 27.749,
+   "end": 27.894
+  },
+  {
+   "word": "runs",
+   "start": 27.894,
+   "end": 28.076
+  },
+  {
+   "word": "breathing,",
+   "start": 28.076,
+   "end": 28.422
+  },
+  {
+   "word": "the",
+   "start": 28.822,
+   "end": 28.894
+  },
+  {
+   "word": "heartbeat,",
+   "start": 28.894,
+   "end": 29.167
+  },
+  {
+   "word": "and",
+   "start": 29.167,
+   "end": 29.476
+  },
+  {
+   "word": "walking.",
+   "start": 29.476,
+   "end": 29.785
+  },
+  {
+   "word": "It's",
+   "start": 30.223,
+   "end": 30.35
+  },
+  {
+   "word": "like",
+   "start": 30.35,
+   "end": 30.441
+  },
+  {
+   "word": "unplugging",
+   "start": 30.441,
+   "end": 31.023
+  },
+  {
+   "word": "a",
+   "start": 31.023,
+   "end": 31.132
+  },
+  {
+   "word": "computer",
+   "start": 31.132,
+   "end": 31.441
+  },
+  {
+   "word": "screen.",
+   "start": 31.441,
+   "end": 31.768
+  },
+  {
+   "word": "The",
+   "start": 32.277,
+   "end": 32.495
+  },
+  {
+   "word": "screen",
+   "start": 32.495,
+   "end": 32.75
+  },
+  {
+   "word": "goes",
+   "start": 32.75,
+   "end": 32.95
+  },
+  {
+   "word": "dark,",
+   "start": 32.95,
+   "end": 33.259
+  },
+  {
+   "word": "but",
+   "start": 33.623,
+   "end": 33.695
+  },
+  {
+   "word": "the",
+   "start": 33.695,
+   "end": 33.786
+  },
+  {
+   "word": "computer",
+   "start": 33.786,
+   "end": 34.095
+  },
+  {
+   "word": "keeps",
+   "start": 34.095,
+   "end": 34.332
+  },
+  {
+   "word": "running.",
+   "start": 34.332,
+   "end": 34.641
+  },
+  {
+   "word": "So",
+   "start": 35.026,
+   "end": 35.153
+  },
+  {
+   "word": "Lloyd",
+   "start": 35.153,
+   "end": 35.353
+  },
+  {
+   "word": "feeds",
+   "start": 35.353,
+   "end": 35.59
+  },
+  {
+   "word": "him",
+   "start": 35.59,
+   "end": 35.735
+  },
+  {
+   "word": "milk",
+   "start": 35.735,
+   "end": 35.935
+  },
+  {
+   "word": "and",
+   "start": 35.935,
+   "end": 36.062
+  },
+  {
+   "word": "water",
+   "start": 36.062,
+   "end": 36.353
+  },
+  {
+   "word": "with",
+   "start": 36.353,
+   "end": 36.517
+  },
+  {
+   "word": "an",
+   "start": 36.517,
+   "end": 36.626
+  },
+  {
+   "word": "eyedropper,",
+   "start": 36.626,
+   "end": 37.081
+  },
+  {
+   "word": "straight",
+   "start": 37.244,
+   "end": 37.426
+  },
+  {
+   "word": "down",
+   "start": 37.426,
+   "end": 37.608
+  },
+  {
+   "word": "the",
+   "start": 37.608,
+   "end": 37.717
+  },
+  {
+   "word": "neck.",
+   "start": 37.717,
+   "end": 37.881
+  },
+  {
+   "word": "The",
+   "start": 38.236,
+   "end": 38.308
+  },
+  {
+   "word": "rooster",
+   "start": 38.308,
+   "end": 38.581
+  },
+  {
+   "word": "keeps",
+   "start": 38.581,
+   "end": 38.781
+  },
+  {
+   "word": "on",
+   "start": 38.781,
+   "end": 38.981
+  },
+  {
+   "word": "growing,",
+   "start": 38.981,
+   "end": 39.272
+  },
+  {
+   "word": "from",
+   "start": 39.272,
+   "end": 39.636
+  },
+  {
+   "word": "two",
+   "start": 39.636,
+   "end": 39.74
+  },
+  {
+   "word": "and",
+   "start": 39.74,
+   "end": 39.845
+  },
+  {
+   "word": "a",
+   "start": 39.845,
+   "end": 39.949
+  },
+  {
+   "word": "half",
+   "start": 39.949,
+   "end": 40.054
+  },
+  {
+   "word": "pounds,",
+   "start": 40.054,
+   "end": 40.308
+  },
+  {
+   "word": "to",
+   "start": 40.308,
+   "end": 40.69
+  },
+  {
+   "word": "almost",
+   "start": 40.69,
+   "end": 40.927
+  },
+  {
+   "word": "eight.",
+   "start": 40.927,
+   "end": 41.353
+  },
+  {
+   "word": "He",
+   "start": 41.608,
+   "end": 41.662
+  },
+  {
+   "word": "goes",
+   "start": 41.662,
+   "end": 41.808
+  },
+  {
+   "word": "on",
+   "start": 41.808,
+   "end": 41.971
+  },
+  {
+   "word": "tour.",
+   "start": 41.971,
+   "end": 42.226
+  },
+  {
+   "word": "People",
+   "start": 42.699,
+   "end": 42.88
+  },
+  {
+   "word": "pay",
+   "start": 42.88,
+   "end": 43.099
+  },
+  {
+   "word": "twenty-five",
+   "start": 43.099,
+   "end": 43.571
+  },
+  {
+   "word": "cents",
+   "start": 43.571,
+   "end": 43.935
+  },
+  {
+   "word": "to",
+   "start": 43.935,
+   "end": 44.153
+  },
+  {
+   "word": "see",
+   "start": 44.153,
+   "end": 44.335
+  },
+  {
+   "word": "him.",
+   "start": 44.335,
+   "end": 44.571
+  },
+  {
+   "word": "Life",
+   "start": 45.317,
+   "end": 45.444
+  },
+  {
+   "word": "magazine",
+   "start": 45.444,
+   "end": 45.88
+  },
+  {
+   "word": "takes",
+   "start": 45.88,
+   "end": 46.117
+  },
+  {
+   "word": "his",
+   "start": 46.117,
+   "end": 46.317
+  },
+  {
+   "word": "picture.",
+   "start": 46.317,
+   "end": 46.571
+  },
+  {
+   "word": "Lloyd",
+   "start": 46.974,
+   "end": 47.138
+  },
+  {
+   "word": "makes",
+   "start": 47.138,
+   "end": 47.356
+  },
+  {
+   "word": "four",
+   "start": 47.356,
+   "end": 47.585
+  },
+  {
+   "word": "thousand",
+   "start": 47.585,
+   "end": 47.814
+  },
+  {
+   "word": "five",
+   "start": 47.814,
+   "end": 48.043
+  },
+  {
+   "word": "hundred",
+   "start": 48.043,
+   "end": 48.272
+  },
+  {
+   "word": "dollars",
+   "start": 48.272,
+   "end": 48.501
+  },
+  {
+   "word": "a",
+   "start": 48.501,
+   "end": 48.883
+  },
+  {
+   "word": "month.",
+   "start": 48.883,
+   "end": 49.029
+  },
+  {
+   "word": "Other",
+   "start": 49.438,
+   "end": 49.601
+  },
+  {
+   "word": "farmers",
+   "start": 49.601,
+   "end": 49.947
+  },
+  {
+   "word": "try",
+   "start": 49.947,
+   "end": 50.128
+  },
+  {
+   "word": "to",
+   "start": 50.128,
+   "end": 50.201
+  },
+  {
+   "word": "make",
+   "start": 50.201,
+   "end": 50.328
+  },
+  {
+   "word": "their",
+   "start": 50.328,
+   "end": 50.474
+  },
+  {
+   "word": "own",
+   "start": 50.474,
+   "end": 50.71
+  },
+  {
+   "word": "headless",
+   "start": 50.71,
+   "end": 51.001
+  },
+  {
+   "word": "chicken.",
+   "start": 51.001,
+   "end": 51.31
+  },
+  {
+   "word": "None",
+   "start": 51.874,
+   "end": 51.983
+  },
+  {
+   "word": "of",
+   "start": 51.983,
+   "end": 52.11
+  },
+  {
+   "word": "them",
+   "start": 52.11,
+   "end": 52.238
+  },
+  {
+   "word": "last",
+   "start": 52.238,
+   "end": 52.51
+  },
+  {
+   "word": "more",
+   "start": 52.51,
+   "end": 52.819
+  },
+  {
+   "word": "than",
+   "start": 52.819,
+   "end": 52.965
+  },
+  {
+   "word": "eleven",
+   "start": 52.965,
+   "end": 53.274
+  },
+  {
+   "word": "days.",
+   "start": 53.274,
+   "end": 53.583
+  },
+  {
+   "word": "One",
+   "start": 54.055,
+   "end": 54.2
+  },
+  {
+   "word": "night,",
+   "start": 54.2,
+   "end": 54.419
+  },
+  {
+   "word": "in",
+   "start": 54.419,
+   "end": 54.619
+  },
+  {
+   "word": "a",
+   "start": 54.619,
+   "end": 54.659
+  },
+  {
+   "word": "motel,",
+   "start": 54.659,
+   "end": 55.11
+  },
+  {
+   "word": "Mike",
+   "start": 55.2,
+   "end": 55.437
+  },
+  {
+   "word": "starts",
+   "start": 55.437,
+   "end": 55.655
+  },
+  {
+   "word": "to",
+   "start": 55.655,
+   "end": 55.819
+  },
+  {
+   "word": "choke.",
+   "start": 55.819,
+   "end": 56.019
+  },
+  {
+   "word": "The",
+   "start": 56.429,
+   "end": 56.501
+  },
+  {
+   "word": "syringe",
+   "start": 56.501,
+   "end": 56.756
+  },
+  {
+   "word": "that",
+   "start": 56.756,
+   "end": 56.901
+  },
+  {
+   "word": "clears",
+   "start": 56.901,
+   "end": 57.101
+  },
+  {
+   "word": "his",
+   "start": 57.101,
+   "end": 57.283
+  },
+  {
+   "word": "throat?",
+   "start": 57.283,
+   "end": 57.556
+  },
+  {
+   "word": "Lloyd",
+   "start": 58.01,
+   "end": 58.156
+  },
+  {
+   "word": "left",
+   "start": 58.156,
+   "end": 58.41
+  },
+  {
+   "word": "it",
+   "start": 58.41,
+   "end": 58.52
+  },
+  {
+   "word": "at",
+   "start": 58.52,
+   "end": 58.61
+  },
+  {
+   "word": "the",
+   "start": 58.61,
+   "end": 58.683
+  },
+  {
+   "word": "show.",
+   "start": 58.683,
+   "end": 58.865
+  },
+  {
+   "word": "Today,",
+   "start": 59.257,
+   "end": 59.475
+  },
+  {
+   "word": "his",
+   "start": 59.802,
+   "end": 59.984
+  },
+  {
+   "word": "town",
+   "start": 59.984,
+   "end": 60.184
+  },
+  {
+   "word": "throws",
+   "start": 60.184,
+   "end": 60.402
+  },
+  {
+   "word": "him",
+   "start": 60.402,
+   "end": 60.566
+  },
+  {
+   "word": "a",
+   "start": 60.566,
+   "end": 60.621
+  },
+  {
+   "word": "party",
+   "start": 60.621,
+   "end": 60.93
+  },
+  {
+   "word": "every",
+   "start": 60.93,
+   "end": 61.221
+  },
+  {
+   "word": "year.",
+   "start": 61.221,
+   "end": 61.602
+  },
+  {
+   "word": "Mike",
+   "start": 62.312,
+   "end": 62.457
+  },
+  {
+   "word": "the",
+   "start": 62.457,
+   "end": 62.602
+  },
+  {
+   "word": "Headless",
+   "start": 62.602,
+   "end": 62.839
+  },
+  {
+   "word": "Chicken",
+   "start": 62.839,
+   "end": 63.112
+  },
+  {
+   "word": "Day.",
+   "start": 63.112,
+   "end": 63.33
+  },
+  {
+   "word": "And",
+   "start": 63.658,
+   "end": 63.749
+  },
+  {
+   "word": "the",
+   "start": 63.749,
+   "end": 63.821
+  },
+  {
+   "word": "mother-in-law?",
+   "start": 63.821,
+   "end": 64.658
+  },
+  {
+   "word": "She",
+   "start": 64.658,
+   "end": 64.803
+  },
+  {
+   "word": "never",
+   "start": 64.803,
+   "end": 65.003
+  },
+  {
+   "word": "got",
+   "start": 65.003,
+   "end": 65.167
+  },
+  {
+   "word": "her",
+   "start": 65.167,
+   "end": 65.312
+  },
+  {
+   "word": "neck.",
+   "start": 65.312,
+   "end": 65.44
+  }
+ ]
+}

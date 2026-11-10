@@ -1,0 +1,95 @@
+{
+  "version": "1.0",
+  "title": "What if you ran a river through your garden?",
+  "total_duration_seconds": 68,
+  "sections": [
+    {
+      "id": "s1",
+      "label": "Hook",
+      "text": "You live forty metres from a river. So you do the obvious thing.",
+      "start_seconds": 0,
+      "end_seconds": 4.5,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s2",
+      "label": "Dig",
+      "text": "You dig a channel right through your back garden, all the way to your patio.",
+      "start_seconds": 4.5,
+      "end_seconds": 10,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s3",
+      "label": "Let it in",
+      "text": "Then you knock out the last wall of dirt, and let the river in.",
+      "start_seconds": 10,
+      "end_seconds": 15,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s4",
+      "label": "Paradise",
+      "text": "And it's perfect. A stream, a pond, a water wheel turning by your back door. Fresh water, all year round, for free.",
+      "start_seconds": 15,
+      "end_seconds": 23,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s5",
+      "label": "Erosion",
+      "text": "But moving water never stops working. Every second it carries a little of your soil away. The bends get wider, the banks cave in.",
+      "start_seconds": 23,
+      "end_seconds": 32,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s6",
+      "label": "Armour",
+      "text": "So you fight back. Tonnes of granite along every bank.",
+      "start_seconds": 32,
+      "end_seconds": 37,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s7",
+      "label": "Rise",
+      "text": "And it holds. Until spring. Snow melts upstream, and overnight the river rises two metres.",
+      "start_seconds": 37,
+      "end_seconds": 45,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s8",
+      "label": "Torrent",
+      "text": "And you just built it the easiest path in the valley. Now the whole river wants your garden.",
+      "start_seconds": 45,
+      "end_seconds": 52,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s9",
+      "label": "Inside",
+      "text": "It pours over the rocks, across the lawn, and straight through your back door.",
+      "start_seconds": 52,
+      "end_seconds": 58,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s10",
+      "label": "Street",
+      "text": "And since your garden opens onto the street, it doesn't stop at your house.",
+      "start_seconds": 58,
+      "end_seconds": 64,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    },
+    {
+      "id": "s11",
+      "label": "Payoff",
+      "text": "Turns out you didn't borrow a river. You moved it.",
+      "start_seconds": 64,
+      "end_seconds": 68,
+      "speaker_directions": "Calm, curious, slightly deadpan second-person narrator; quickens from s7 onward."
+    }
+  ]
+}

@@ -566,15 +566,40 @@ def b_turbine(p, k, color):
 
 
 def b_compressor(p, k, color):
+    """A hermetic fridge compressor, its front cut open: inside, a crank turns and a connecting rod drives a
+    chrome piston up and down its cylinder, against a pale back wall so the motion reads from across the room."""
     w, d, h = 0.42 * k, 0.32 * k, 0.36 * k
-    p.add(geo.box(f"{p.id}_case", (w, d, h), (0, 0, h / 2), mat=finish(color, "black"), fillet=0.05 * k, segments=5))
-    win = geo.box(f"{p.id}_window", (0.2 * k, 0.01 * k, 0.22 * k), (-0.05 * k, -d / 2 - 0.002 * k, h / 2),
-                  mat=M.glass(), fillet=0.02 * k)
-    p.add(win)
-    p.add(geo.box(f"{p.id}_bezel", (0.23 * k, 0.006 * k, 0.25 * k), (-0.05 * k, -d / 2 + 0.002 * k, h / 2),
-                  mat=M.graphite(), fillet=0.025 * k))
-    inner = p.group("inner", loc=(-0.05 * k, -d / 2 + 0.03 * k, h / 2))
-    p.add(solid(f"{p.id}_ipiston", 0.06 * k, 0.06 * k, 0.008 * k, M.brushed()), inner)
+    # a dark graphite shell, not pure black: in a close-up a black box swallows the light and reads as a hole
+    shell = M.paint("#3a3f46", 0.32) if color in (None, "black") else finish(color, "black")
+    case = geo.box(f"{p.id}_case", (w, d, h), (0, 0, h / 2), mat=shell, fillet=0.05 * k, segments=5)
+    cx, cut_w, cut_h, depth = -0.05 * k, 0.22 * k, 0.27 * k, 0.12 * k
+    cz = 0.035 * k + cut_h / 2
+    geo.boolean(case, geo.box("cut", (cut_w, depth * 2, cut_h), (cx, -d / 2, cz), fillet=0.02 * k))
+    p.add(case)
+    yb = -d / 2 + depth                                   # the back of the cut-open cavity
+    p.add(geo.box(f"{p.id}_wall", (cut_w, 0.006 * k, cut_h), (cx, yb - 0.002 * k, cz), mat=M.plastic("#d3dbe3", 0.4)))
+    p.add(geo.box(f"{p.id}_rim", (cut_w + 0.012 * k, 0.006 * k, 0.012 * k), (cx, -d / 2 - 0.001 * k, cz + cut_h / 2),
+                  mat=M.paint("#e3ac10", 0.35)))
+    p.add(geo.box(f"{p.id}_rim", (cut_w + 0.012 * k, 0.006 * k, 0.012 * k), (cx, -d / 2 - 0.001 * k, cz - cut_h / 2),
+                  mat=M.paint("#e3ac10", 0.35)))
+    ym = yb - 0.04 * k                                    # the mechanism's plane
+    crank_z, rc, L = 0.085 * k, 0.03 * k, 0.12 * k
+    for sx in (-1, 1):                                    # the cylinder walls
+        p.add(geo.box(f"{p.id}_bore", (0.01 * k, 0.07 * k, 0.12 * k), (cx + sx * 0.058 * k, ym, crank_z + L + 0.035 * k),
+                      mat=M.chrome(), fillet=0.003 * k))
+    p.add(geo.box(f"{p.id}_head", (0.13 * k, 0.07 * k, 0.018 * k), (cx, ym, crank_z + L + 0.1 * k), mat=M.brushed(),
+                  fillet=0.004 * k))
+    piston = p.group("piston", loc=(cx, ym, crank_z + L))
+    p.add(_y_axis(solid(f"{p.id}_piston", 0.052 * k, 0.05 * k, 0.006 * k, M.chrome(), z0=-0.025 * k)), piston)
+    for z in (-0.008, 0.008):
+        p.add(_y_axis(ring(f"{p.id}_pring", 0.053 * k, 0.004 * k, mat=M.graphite(), z=0.0)), piston).location.z = z * k
+    crank = p.group("crank", loc=(cx, ym + 0.01 * k, crank_z))
+    p.add(_y_axis(solid(f"{p.id}_crankdisc", 0.045 * k, 0.02 * k, 0.004 * k, M.brushed(), z0=-0.01 * k)), crank)
+    p.add(_y_axis(solid(f"{p.id}_pin", 0.01 * k, 0.03 * k, 0.002 * k, M.paint(PAINT["red"]), z0=-0.03 * k)),
+          crank).location = (0, 0, rc)
+    rod = p.group("rod", loc=(cx, ym - 0.012 * k, crank_z + L / 2))
+    p.add(geo.box(f"{p.id}_rod", (0.016 * k, 0.012 * k, L), (0, 0, 0), mat=M.brushed("#c3c6ca", 0.3),
+                  fillet=0.005 * k), rod)
     motor = p.group("motor", loc=(w / 2 - 0.02 * k, 0, h * 0.45))
     p.add(_x_axis(solid(f"{p.id}_motor", 0.09 * k, 0.12 * k, 0.02 * k, M.paint(PAINT["black"], 0.35), z0=0.0)), motor)
     fanr = p.group("fanr", motor, (0.125 * k, 0, 0))
@@ -587,12 +612,18 @@ def b_compressor(p, k, color):
         p.add(geo.box(f"{p.id}_foot", (0.06 * k, d * 0.8, 0.025 * k), (sx * 0.14 * k, 0, 0.0125 * k), mat=M.rubber()))
 
     def pump(a):
-        inner.location.z = h / 2 - 0.03 * k + 0.05 * k * (0.5 + 0.5 * math.cos(a))
+        px_, pz_ = rc * math.sin(a), crank_z + rc * math.cos(a)
+        zp = pz_ + math.sqrt(max(1e-9, L * L - px_ * px_))
+        piston.location.z = zp
+        crank.rotation_euler = (0, a, 0)
+        rod.location = (cx + px_ / 2, ym - 0.012 * k, (pz_ + zp) / 2)
+        rod.rotation_euler = (0, math.atan2(-px_, zp - pz_), 0)
         fanr.rotation_euler = (a * 2, 0, 0)
     p.drivers["pump"] = pump
-    p.anchor("center", (0, -d / 2, h / 2)); p.anchor("window", (-0.05 * k, -d / 2, h / 2))
+    pump(0.0)
+    p.anchor("center", (0, -d / 2, h / 2)); p.anchor("window", (cx, -d / 2, cz))
     p.anchor("motor", (w / 2 + 0.06 * k, -0.05 * k, h * 0.45))
-    for name, x in (("in", -0.12 * k), ("out", 0.1 * k)):
+    for name, x in (("in", 0.06 * k), ("out", 0.15 * k)):
         p.add(solid(f"{p.id}_{name}", 0.03 * k, 0.05 * k, 0.01 * k, M.brass(), z0=h - 0.01 * k)).location.x = x
         p.port(name, (x, 0, h + 0.04 * k), (0, 0, 1))
 
@@ -698,9 +729,36 @@ def b_coil(p, k, color):
                       fillet=0.008 * k))
     p.add(geo.box(f"{p.id}_foot", (0.66 * k, 0.08 * k, 0.025 * k), (0, 0.02 * k, 0.0125 * k), mat=M.graphite(),
                   fillet=0.01 * k))
-    p.anchor("center", (0, -0.03 * k, 0.3 * k)); p.anchor("start", pts[0]); p.anchor("end", pts[-1])
+    # the centre anchor sits ON a pipe run (row 3), so a pill's leader line ends on copper, not between the rows
+    p.anchor("center", (0, -0.02 * k, z + 3 * 0.09 * k)); p.anchor("start", pts[0]); p.anchor("end", pts[-1])
     p.port("in", pts[0], (-1, 0, 0)); p.port("out", pts[-1], (1 if pts[-1][0] > 0 else -1, 0, 0))
     p.flow_path = pts
+
+
+def b_capillary(p, k, color):
+    """A fridge's capillary: metres of very thin copper tube wound into a tight coil on a dark clip strip, a
+    straight lead in on the left and out on the right (thin on purpose: that is the whole trick)."""
+    r, turns, z = 0.07 * k, 7, 0.16 * k
+    x0, x1 = -0.11 * k, 0.11 * k
+    coil = []
+    n = turns * 24
+    for i in range(n + 1):
+        a = i / 24 * math.tau
+        coil.append((x0 + (x1 - x0) * i / n, -r * math.sin(a), z + r * math.cos(a)))
+    pts = [(-0.15 * k, 0, z + r)] + coil + [(0.15 * k, 0, z + r)]
+    p.add(geo.sweep(f"{p.id}_tube", pts, 0.0055 * k, mat=M.copper(), segments=10, resolution=2))
+    p.add(geo.box(f"{p.id}_strip", (0.26 * k, 0.03 * k, 0.025 * k), (0, r + 0.02 * k, z), mat=M.graphite(),
+                  fillet=0.006 * k))
+    for x in (-0.07, 0.0, 0.07):
+        p.add(geo.box(f"{p.id}_clip", (0.012 * k, 0.03 * k, 2.1 * r), (x * k, r + 0.012 * k, z), mat=M.graphite(),
+                      fillet=0.004 * k))
+    p.add(geo.box(f"{p.id}_foot", (0.26 * k, 0.06 * k, 0.02 * k), (0, 0.0, 0.01 * k), mat=M.graphite(),
+                  fillet=0.006 * k))
+    p.add(geo.box(f"{p.id}_post", (0.02 * k, 0.02 * k, z - r), (0, r + 0.02 * k, (z - r) / 2), mat=M.graphite()))
+    p.anchor("center", (0, -r - 0.01 * k, z)); p.anchor("start", pts[0]); p.anchor("end", pts[-1])
+    p.port("in", pts[0], (-1, 0, 0)); p.port("out", pts[-1], (1, 0, 0))
+    p.flow_path = pts
+    p.flow_r = 0.0068 * k
 
 
 def b_radiator(p, k, color):
@@ -785,19 +843,50 @@ def b_gauge(p, k, color):
 
 
 def b_thermostat(p, k, color):
+    """A thermostat dial that reads at a glance: a dark face, a scale running from blue (colder) to red, a white
+    knob with a red pointer that turns."""
     c = p.group("c", loc=(0, 0, 0.1 * k))
-    p.add(_y_axis(solid(f"{p.id}_plate", 0.1 * k, 0.02 * k, 0.005 * k, M.plastic("#f2efea", 0.35), z0=0.0)), c)
-    knob = p.group("knob", c, (0, -0.005 * k, 0))
-    p.add(_y_axis(solid(f"{p.id}_knob", 0.065 * k, 0.04 * k, 0.012 * k, finish(color, "white"), z0=-0.04 * k)), knob)
-    p.add(geo.box(f"{p.id}_mark", (0.008 * k, 0.004 * k, 0.04 * k), (0, -0.046 * k, 0.035 * k), mat=M.paint(PAINT["red"])), knob)
-    for i in range(7):
-        a = math.radians(-120 + 40 * i)
-        t = geo.box(f"{p.id}_tick", (0.012 * k, 0.006 * k, 0.03 * k), (0, 0, 0), mat=M.paint("#3a6fd8" if i < 3 else PAINT["red"]))
-        t.location = (0.085 * k * math.sin(a), -0.012 * k, 0.085 * k * math.cos(a))
+    p.add(_y_axis(solid(f"{p.id}_plate", 0.1 * k, 0.02 * k, 0.006 * k, M.graphite("#23262b", 0.4), z0=0.0)), c)
+    p.add(_y_axis(ring(f"{p.id}_bezel", 0.1 * k, 0.012 * k, mat=M.chrome(), z=0.0)), c).location.y = -0.004 * k
+    for i in range(11):
+        u = i / 10
+        a = math.radians(-135 + 270 * u)
+        col = "#%02x%02x%02x" % (int(0x3a + (0xff - 0x3a) * u), int(0x8d + (0x3b - 0x8d) * u), int(0xff + (0x1f - 0xff) * u))
+        t = geo.box(f"{p.id}_tick", (0.02 * k, 0.006 * k, 0.026 * k), (0, 0, 0), mat=M.glow(col, 1.2))
+        t.location = (0.074 * k * math.sin(a), -0.023 * k, 0.074 * k * math.cos(a))    # on the face (y = -0.02)
         t.rotation_euler = (0, a, 0)
+        t["glow"] = 1.0                               # glow materials shine by the object's "glow" property
         p.add(t, c)
+    knob = p.group("knob", c, (0, -0.02 * k, 0))
+    p.add(_y_axis(solid(f"{p.id}_knob", 0.045 * k, 0.025 * k, 0.008 * k, M.plastic("#f4f2ee", 0.3), z0=0.0)), knob)
+    p.add(geo.box(f"{p.id}_mark", (0.01 * k, 0.006 * k, 0.034 * k), (0, -0.027 * k, 0.02 * k), mat=M.paint(PAINT["red"])),
+          knob)
     p.add(geo.box(f"{p.id}_post", (0.03 * k, 0.03 * k, 0.05 * k), (0, 0.02 * k, 0.025 * k), mat=M.graphite()))
     p.drivers["turn"] = lambda a: setattr(knob, "rotation_euler", (0, a, 0))
+    # a thermometer beside the dial: the fridge's temperature falling while the compressor runs, rising while
+    # it is off (posed by the scene); blue mark = cold enough (switch off), red mark = too warm (switch on)
+    tx = 0.13 * k
+    p.add(geo.box(f"{p.id}_tbody", (0.03 * k, 0.012 * k, 0.17 * k), (tx, -0.006 * k, 0.1 * k), mat=M.graphite("#23262b", 0.4),
+                  fillet=0.012 * k))
+    tube = geo.box(f"{p.id}_ttube", (0.014 * k, 0.006 * k, 0.14 * k), (tx, -0.014 * k, 0.1 * k), mat=M.clear_pane(),
+                   fillet=0.006 * k)
+    p.add(tube)
+    fl = p.group("tfluid", loc=(tx, -0.015 * k, 0.03 * k))
+    p.add(geo.box(f"{p.id}_tfluid", (0.009 * k, 0.005 * k, 0.14 * k), (0, 0, 0.07 * k), mat=M.paint("#e8381e", 0.3)), fl)
+    p.temp_fluid, p.temp_cold_col = fl, "#3a8dff"
+    p.add(_y_axis(solid(f"{p.id}_tbulb", 0.012 * k, 0.008 * k, 0.003 * k, M.paint("#e8381e", 0.3), z0=0.0))
+          ).location = (tx, -0.008 * k, 0.025 * k)
+    for z, col in ((0.06, "#3a8dff"), (0.155, "#ff3b1f")):
+        mk = geo.box(f"{p.id}_tmark", (0.03 * k, 0.004 * k, 0.005 * k), (tx, -0.02 * k, z * k), mat=M.glow(col, 2.0))
+        mk["glow"] = 1.0
+        p.add(mk)
+    # the status lamp under the dial: green while it has the compressor running, dark when it has switched it off
+    for name, mat in (("lamp_on", M.glow("#3dff6e", 6.0)), ("lamp_off", M.plastic("#3a3d42", 0.4))):
+        lamp = _y_axis(solid(f"{p.id}_{name}", 0.016 * k, 0.012 * k, 0.004 * k, mat, z0=0.0))
+        lamp.location = (0, -0.03 * k, -0.06 * k)
+        lamp["glow"] = 1.0
+        p.add(lamp, c)
+        setattr(p, name, lamp)
     p.anchor("center", (0, -0.05 * k, 0.1 * k))
 
 

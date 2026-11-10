@@ -51,17 +51,20 @@ def fillet(pts, radius=0.05, steps=7):
     return _dedupe(out, 1e-5)
 
 
-def route(a, da, b, db, plane_y=None, lead=0.06, radius=0.05):
+def route(a, da, b, db, plane_y=None, lead=0.06, radius=0.05, x_run=None):
     """A pipe from port a (outward direction da) to port b: out of each port, then along the plane y = plane_y
-    (the machine's back) when given, vertical before horizontal, with rounded bends."""
+    (the machine's back) when given, vertical before horizontal, with rounded bends. x_run moves the vertical run
+    sideways (to go around a part mounted on the back instead of through it)."""
     a, b = Vector(a), Vector(b)
     a1, b1 = a + Vector(da).normalized() * lead, b + Vector(db).normalized() * lead
     if plane_y is None:
         mid = [Vector((a1.x, a1.y, b1.z))] if abs(a1.z - b1.z) > 1e-3 else []
         pts = [a, a1, *mid, Vector((b1.x, a1.y, b1.z)), b1, b]
     else:
-        pts = [a, a1, Vector((a1.x, plane_y, a1.z)), Vector((a1.x, plane_y, b1.z)),
+        x = a1.x if x_run is None else x_run
+        pts = [a, a1, Vector((a1.x, plane_y, a1.z)), Vector((x, plane_y, a1.z)), Vector((x, plane_y, b1.z)),
                Vector((b1.x, plane_y, b1.z)), b1, b]
+        pts = [p for i, p in enumerate(pts) if i == 0 or (p - pts[i - 1]).length > 1e-4]
     return fillet(pts, radius)
 
 

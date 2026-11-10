@@ -1,0 +1,1245 @@
+{
+ "duration": 69.276458,
+ "words": [
+  {
+   "word": "The",
+   "start": 0.0,
+   "end": 0.073
+  },
+  {
+   "word": "first",
+   "start": 0.073,
+   "end": 0.218
+  },
+  {
+   "word": "man",
+   "start": 0.218,
+   "end": 0.4
+  },
+  {
+   "word": "to",
+   "start": 0.4,
+   "end": 0.527
+  },
+  {
+   "word": "finish",
+   "start": 0.527,
+   "end": 0.745
+  },
+  {
+   "word": "this",
+   "start": 0.745,
+   "end": 1.036
+  },
+  {
+   "word": "Olympic",
+   "start": 1.036,
+   "end": 1.309
+  },
+  {
+   "word": "marathon...",
+   "start": 1.309,
+   "end": 1.655
+  },
+  {
+   "word": "got",
+   "start": 2.159,
+   "end": 2.25
+  },
+  {
+   "word": "there",
+   "start": 2.25,
+   "end": 2.378
+  },
+  {
+   "word": "by",
+   "start": 2.378,
+   "end": 2.523
+  },
+  {
+   "word": "car.",
+   "start": 2.523,
+   "end": 2.723
+  },
+  {
+   "word": "Saint",
+   "start": 3.152,
+   "end": 3.389
+  },
+  {
+   "word": "Louis,",
+   "start": 3.389,
+   "end": 3.516
+  },
+  {
+   "word": "nineteen-oh-four.",
+   "start": 3.516,
+   "end": 4.398
+  },
+  {
+   "word": "Ninety",
+   "start": 4.398,
+   "end": 5.28
+  },
+  {
+   "word": "degrees,",
+   "start": 5.28,
+   "end": 5.625
+  },
+  {
+   "word": "on",
+   "start": 5.625,
+   "end": 6.134
+  },
+  {
+   "word": "dusty",
+   "start": 6.134,
+   "end": 6.461
+  },
+  {
+   "word": "dirt",
+   "start": 6.461,
+   "end": 6.643
+  },
+  {
+   "word": "roads.",
+   "start": 6.643,
+   "end": 6.952
+  },
+  {
+   "word": "The",
+   "start": 7.947,
+   "end": 8.002
+  },
+  {
+   "word": "man",
+   "start": 8.002,
+   "end": 8.129
+  },
+  {
+   "word": "in",
+   "start": 8.129,
+   "end": 8.22
+  },
+  {
+   "word": "charge",
+   "start": 8.22,
+   "end": 8.565
+  },
+  {
+   "word": "set",
+   "start": 8.565,
+   "end": 8.838
+  },
+  {
+   "word": "up",
+   "start": 8.838,
+   "end": 8.947
+  },
+  {
+   "word": "just",
+   "start": 8.947,
+   "end": 9.093
+  },
+  {
+   "word": "one",
+   "start": 9.093,
+   "end": 9.384
+  },
+  {
+   "word": "water",
+   "start": 9.384,
+   "end": 9.675
+  },
+  {
+   "word": "stop.",
+   "start": 9.675,
+   "end": 10.002
+  },
+  {
+   "word": "On",
+   "start": 10.002,
+   "end": 10.62
+  },
+  {
+   "word": "purpose.",
+   "start": 10.62,
+   "end": 10.911
+  },
+  {
+   "word": "He",
+   "start": 11.347,
+   "end": 11.401
+  },
+  {
+   "word": "wanted",
+   "start": 11.401,
+   "end": 11.565
+  },
+  {
+   "word": "to",
+   "start": 11.565,
+   "end": 11.692
+  },
+  {
+   "word": "study",
+   "start": 11.692,
+   "end": 11.947
+  },
+  {
+   "word": "dehydration.",
+   "start": 11.947,
+   "end": 12.711
+  },
+  {
+   "word": "Officials",
+   "start": 13.068,
+   "end": 13.413
+  },
+  {
+   "word": "drove",
+   "start": 13.413,
+   "end": 13.631
+  },
+  {
+   "word": "cars",
+   "start": 13.631,
+   "end": 13.94
+  },
+  {
+   "word": "ahead",
+   "start": 13.94,
+   "end": 14.249
+  },
+  {
+   "word": "of",
+   "start": 14.249,
+   "end": 14.377
+  },
+  {
+   "word": "the",
+   "start": 14.377,
+   "end": 14.468
+  },
+  {
+   "word": "runners,",
+   "start": 14.468,
+   "end": 14.704
+  },
+  {
+   "word": "so",
+   "start": 15.013,
+   "end": 15.177
+  },
+  {
+   "word": "everyone",
+   "start": 15.177,
+   "end": 15.522
+  },
+  {
+   "word": "ran",
+   "start": 15.522,
+   "end": 15.795
+  },
+  {
+   "word": "in",
+   "start": 15.795,
+   "end": 15.995
+  },
+  {
+   "word": "a",
+   "start": 15.995,
+   "end": 16.068
+  },
+  {
+   "word": "cloud",
+   "start": 16.068,
+   "end": 16.268
+  },
+  {
+   "word": "of",
+   "start": 16.268,
+   "end": 16.413
+  },
+  {
+   "word": "dust.",
+   "start": 16.413,
+   "end": 16.577
+  },
+  {
+   "word": "At",
+   "start": 17.033,
+   "end": 17.123
+  },
+  {
+   "word": "mile",
+   "start": 17.123,
+   "end": 17.305
+  },
+  {
+   "word": "nine,",
+   "start": 17.305,
+   "end": 17.669
+  },
+  {
+   "word": "a",
+   "start": 17.869,
+   "end": 17.923
+  },
+  {
+   "word": "runner",
+   "start": 17.923,
+   "end": 18.105
+  },
+  {
+   "word": "named",
+   "start": 18.105,
+   "end": 18.342
+  },
+  {
+   "word": "Fred",
+   "start": 18.342,
+   "end": 18.578
+  },
+  {
+   "word": "Lorz",
+   "start": 18.578,
+   "end": 18.887
+  },
+  {
+   "word": "got",
+   "start": 18.887,
+   "end": 19.069
+  },
+  {
+   "word": "cramps.",
+   "start": 19.069,
+   "end": 19.469
+  },
+  {
+   "word": "So",
+   "start": 19.87,
+   "end": 19.961
+  },
+  {
+   "word": "he",
+   "start": 19.961,
+   "end": 20.051
+  },
+  {
+   "word": "hopped",
+   "start": 20.051,
+   "end": 20.324
+  },
+  {
+   "word": "into",
+   "start": 20.324,
+   "end": 20.415
+  },
+  {
+   "word": "a",
+   "start": 20.415,
+   "end": 20.561
+  },
+  {
+   "word": "car,",
+   "start": 20.561,
+   "end": 20.797
+  },
+  {
+   "word": "and",
+   "start": 20.797,
+   "end": 21.124
+  },
+  {
+   "word": "waved",
+   "start": 21.124,
+   "end": 21.415
+  },
+  {
+   "word": "at",
+   "start": 21.415,
+   "end": 21.488
+  },
+  {
+   "word": "the",
+   "start": 21.488,
+   "end": 21.579
+  },
+  {
+   "word": "runners",
+   "start": 21.579,
+   "end": 21.815
+  },
+  {
+   "word": "as",
+   "start": 21.815,
+   "end": 22.051
+  },
+  {
+   "word": "he",
+   "start": 22.051,
+   "end": 22.124
+  },
+  {
+   "word": "drove",
+   "start": 22.124,
+   "end": 22.324
+  },
+  {
+   "word": "past",
+   "start": 22.324,
+   "end": 22.579
+  },
+  {
+   "word": "them.",
+   "start": 22.579,
+   "end": 22.797
+  },
+  {
+   "word": "Ten",
+   "start": 23.147,
+   "end": 23.329
+  },
+  {
+   "word": "miles",
+   "start": 23.329,
+   "end": 23.511
+  },
+  {
+   "word": "later,",
+   "start": 23.511,
+   "end": 23.875
+  },
+  {
+   "word": "the",
+   "start": 24.147,
+   "end": 24.22
+  },
+  {
+   "word": "car",
+   "start": 24.22,
+   "end": 24.402
+  },
+  {
+   "word": "broke",
+   "start": 24.402,
+   "end": 24.602
+  },
+  {
+   "word": "down.",
+   "start": 24.602,
+   "end": 24.893
+  },
+  {
+   "word": "So",
+   "start": 25.475,
+   "end": 25.566
+  },
+  {
+   "word": "Fred",
+   "start": 25.566,
+   "end": 25.766
+  },
+  {
+   "word": "jogged",
+   "start": 25.766,
+   "end": 26.147
+  },
+  {
+   "word": "the",
+   "start": 26.147,
+   "end": 26.202
+  },
+  {
+   "word": "rest.",
+   "start": 26.202,
+   "end": 26.366
+  },
+  {
+   "word": "Fred",
+   "start": 26.797,
+   "end": 27.016
+  },
+  {
+   "word": "crossed",
+   "start": 27.016,
+   "end": 27.325
+  },
+  {
+   "word": "the",
+   "start": 27.325,
+   "end": 27.47
+  },
+  {
+   "word": "line",
+   "start": 27.47,
+   "end": 27.616
+  },
+  {
+   "word": "first.",
+   "start": 27.616,
+   "end": 28.016
+  },
+  {
+   "word": "The",
+   "start": 28.507,
+   "end": 28.597
+  },
+  {
+   "word": "crowd",
+   "start": 28.597,
+   "end": 28.852
+  },
+  {
+   "word": "went",
+   "start": 28.852,
+   "end": 29.107
+  },
+  {
+   "word": "wild.",
+   "start": 29.107,
+   "end": 29.361
+  },
+  {
+   "word": "The",
+   "start": 29.764,
+   "end": 29.818
+  },
+  {
+   "word": "President's",
+   "start": 29.818,
+   "end": 30.255
+  },
+  {
+   "word": "daughter",
+   "start": 30.255,
+   "end": 30.509
+  },
+  {
+   "word": "put",
+   "start": 30.509,
+   "end": 30.709
+  },
+  {
+   "word": "a",
+   "start": 30.709,
+   "end": 30.818
+  },
+  {
+   "word": "wreath",
+   "start": 30.818,
+   "end": 31.037
+  },
+  {
+   "word": "on",
+   "start": 31.037,
+   "end": 31.128
+  },
+  {
+   "word": "his",
+   "start": 31.128,
+   "end": 31.273
+  },
+  {
+   "word": "head,",
+   "start": 31.273,
+   "end": 31.455
+  },
+  {
+   "word": "and",
+   "start": 31.455,
+   "end": 31.855
+  },
+  {
+   "word": "almost",
+   "start": 31.855,
+   "end": 32.055
+  },
+  {
+   "word": "handed",
+   "start": 32.055,
+   "end": 32.309
+  },
+  {
+   "word": "him",
+   "start": 32.309,
+   "end": 32.491
+  },
+  {
+   "word": "the",
+   "start": 32.491,
+   "end": 32.582
+  },
+  {
+   "word": "gold.",
+   "start": 32.582,
+   "end": 32.782
+  },
+  {
+   "word": "Then",
+   "start": 33.182,
+   "end": 33.291
+  },
+  {
+   "word": "someone",
+   "start": 33.291,
+   "end": 33.527
+  },
+  {
+   "word": "shouted:",
+   "start": 33.527,
+   "end": 33.836
+  },
+  {
+   "word": "he",
+   "start": 33.856,
+   "end": 34.001
+  },
+  {
+   "word": "came",
+   "start": 34.001,
+   "end": 34.147
+  },
+  {
+   "word": "by",
+   "start": 34.147,
+   "end": 34.274
+  },
+  {
+   "word": "car!",
+   "start": 34.274,
+   "end": 34.529
+  },
+  {
+   "word": "The",
+   "start": 35.249,
+   "end": 35.322
+  },
+  {
+   "word": "real",
+   "start": 35.322,
+   "end": 35.467
+  },
+  {
+   "word": "leader,",
+   "start": 35.467,
+   "end": 35.74
+  },
+  {
+   "word": "Thomas",
+   "start": 35.903,
+   "end": 36.103
+  },
+  {
+   "word": "Hicks,",
+   "start": 36.103,
+   "end": 36.522
+  },
+  {
+   "word": "wanted",
+   "start": 36.74,
+   "end": 36.885
+  },
+  {
+   "word": "to",
+   "start": 36.885,
+   "end": 37.049
+  },
+  {
+   "word": "lie",
+   "start": 37.049,
+   "end": 37.194
+  },
+  {
+   "word": "down.",
+   "start": 37.194,
+   "end": 37.485
+  },
+  {
+   "word": "His",
+   "start": 37.922,
+   "end": 38.049
+  },
+  {
+   "word": "trainers",
+   "start": 38.049,
+   "end": 38.376
+  },
+  {
+   "word": "said",
+   "start": 38.376,
+   "end": 38.685
+  },
+  {
+   "word": "no.",
+   "start": 38.685,
+   "end": 38.958
+  },
+  {
+   "word": "They",
+   "start": 39.345,
+   "end": 39.418
+  },
+  {
+   "word": "gave",
+   "start": 39.418,
+   "end": 39.527
+  },
+  {
+   "word": "him",
+   "start": 39.527,
+   "end": 39.691
+  },
+  {
+   "word": "rat",
+   "start": 39.691,
+   "end": 39.836
+  },
+  {
+   "word": "poison,",
+   "start": 39.836,
+   "end": 40.218
+  },
+  {
+   "word": "mixed",
+   "start": 40.545,
+   "end": 40.691
+  },
+  {
+   "word": "with",
+   "start": 40.691,
+   "end": 40.873
+  },
+  {
+   "word": "egg",
+   "start": 40.873,
+   "end": 41.018
+  },
+  {
+   "word": "whites...",
+   "start": 41.018,
+   "end": 41.291
+  },
+  {
+   "word": "and",
+   "start": 41.782,
+   "end": 41.854
+  },
+  {
+   "word": "a",
+   "start": 41.854,
+   "end": 41.963
+  },
+  {
+   "word": "shot",
+   "start": 41.963,
+   "end": 42.109
+  },
+  {
+   "word": "of",
+   "start": 42.109,
+   "end": 42.218
+  },
+  {
+   "word": "brandy.",
+   "start": 42.218,
+   "end": 42.545
+  },
+  {
+   "word": "Then",
+   "start": 42.826,
+   "end": 42.953
+  },
+  {
+   "word": "another",
+   "start": 42.953,
+   "end": 43.19
+  },
+  {
+   "word": "dose.",
+   "start": 43.19,
+   "end": 43.39
+  },
+  {
+   "word": "He",
+   "start": 43.877,
+   "end": 43.917
+  },
+  {
+   "word": "started",
+   "start": 43.917,
+   "end": 44.114
+  },
+  {
+   "word": "seeing",
+   "start": 44.114,
+   "end": 44.404
+  },
+  {
+   "word": "things.",
+   "start": 44.404,
+   "end": 44.823
+  },
+  {
+   "word": "His",
+   "start": 45.186,
+   "end": 45.368
+  },
+  {
+   "word": "team",
+   "start": 45.368,
+   "end": 45.568
+  },
+  {
+   "word": "carried",
+   "start": 45.568,
+   "end": 45.823
+  },
+  {
+   "word": "him",
+   "start": 45.823,
+   "end": 45.968
+  },
+  {
+   "word": "over",
+   "start": 45.968,
+   "end": 46.095
+  },
+  {
+   "word": "the",
+   "start": 46.095,
+   "end": 46.204
+  },
+  {
+   "word": "line,",
+   "start": 46.204,
+   "end": 46.459
+  },
+  {
+   "word": "with",
+   "start": 46.714,
+   "end": 46.859
+  },
+  {
+   "word": "his",
+   "start": 46.859,
+   "end": 47.023
+  },
+  {
+   "word": "feet",
+   "start": 47.023,
+   "end": 47.204
+  },
+  {
+   "word": "still",
+   "start": 47.204,
+   "end": 47.441
+  },
+  {
+   "word": "running",
+   "start": 47.441,
+   "end": 47.695
+  },
+  {
+   "word": "in",
+   "start": 47.695,
+   "end": 47.841
+  },
+  {
+   "word": "the",
+   "start": 47.841,
+   "end": 47.95
+  },
+  {
+   "word": "air.",
+   "start": 47.95,
+   "end": 48.132
+  },
+  {
+   "word": "Fourth",
+   "start": 48.482,
+   "end": 48.7
+  },
+  {
+   "word": "place",
+   "start": 48.7,
+   "end": 48.973
+  },
+  {
+   "word": "went",
+   "start": 48.973,
+   "end": 49.136
+  },
+  {
+   "word": "to",
+   "start": 49.136,
+   "end": 49.282
+  },
+  {
+   "word": "a",
+   "start": 49.282,
+   "end": 49.354
+  },
+  {
+   "word": "Cuban",
+   "start": 49.354,
+   "end": 49.573
+  },
+  {
+   "word": "mailman",
+   "start": 49.573,
+   "end": 50.1
+  },
+  {
+   "word": "who",
+   "start": 50.1,
+   "end": 50.354
+  },
+  {
+   "word": "had",
+   "start": 50.354,
+   "end": 50.409
+  },
+  {
+   "word": "lost",
+   "start": 50.409,
+   "end": 50.573
+  },
+  {
+   "word": "all",
+   "start": 50.573,
+   "end": 50.864
+  },
+  {
+   "word": "his",
+   "start": 50.864,
+   "end": 51.009
+  },
+  {
+   "word": "money",
+   "start": 51.009,
+   "end": 51.209
+  },
+  {
+   "word": "gambling.",
+   "start": 51.209,
+   "end": 51.518
+  },
+  {
+   "word": "He",
+   "start": 51.916,
+   "end": 51.989
+  },
+  {
+   "word": "ran",
+   "start": 51.989,
+   "end": 52.152
+  },
+  {
+   "word": "in",
+   "start": 52.152,
+   "end": 52.261
+  },
+  {
+   "word": "his",
+   "start": 52.261,
+   "end": 52.37
+  },
+  {
+   "word": "street",
+   "start": 52.37,
+   "end": 52.607
+  },
+  {
+   "word": "clothes,",
+   "start": 52.607,
+   "end": 52.97
+  },
+  {
+   "word": "cut",
+   "start": 53.243,
+   "end": 53.334
+  },
+  {
+   "word": "into",
+   "start": 53.334,
+   "end": 53.48
+  },
+  {
+   "word": "shorts.",
+   "start": 53.48,
+   "end": 53.752
+  },
+  {
+   "word": "He",
+   "start": 54.209,
+   "end": 54.264
+  },
+  {
+   "word": "snatched",
+   "start": 54.264,
+   "end": 54.555
+  },
+  {
+   "word": "two",
+   "start": 54.555,
+   "end": 54.737
+  },
+  {
+   "word": "peaches,",
+   "start": 54.737,
+   "end": 55.173
+  },
+  {
+   "word": "ate",
+   "start": 55.173,
+   "end": 55.464
+  },
+  {
+   "word": "rotten",
+   "start": 55.464,
+   "end": 55.7
+  },
+  {
+   "word": "apples",
+   "start": 55.7,
+   "end": 55.955
+  },
+  {
+   "word": "from",
+   "start": 55.955,
+   "end": 56.155
+  },
+  {
+   "word": "an",
+   "start": 56.155,
+   "end": 56.227
+  },
+  {
+   "word": "orchard...",
+   "start": 56.227,
+   "end": 56.555
+  },
+  {
+   "word": "and",
+   "start": 56.841,
+   "end": 56.932
+  },
+  {
+   "word": "took",
+   "start": 56.932,
+   "end": 57.041
+  },
+  {
+   "word": "a",
+   "start": 57.041,
+   "end": 57.15
+  },
+  {
+   "word": "nap.",
+   "start": 57.15,
+   "end": 57.387
+  },
+  {
+   "word": "And",
+   "start": 57.387,
+   "end": 57.932
+  },
+  {
+   "word": "still",
+   "start": 57.932,
+   "end": 58.168
+  },
+  {
+   "word": "came",
+   "start": 58.168,
+   "end": 58.405
+  },
+  {
+   "word": "fourth.",
+   "start": 58.405,
+   "end": 58.833
+  },
+  {
+   "word": "Another",
+   "start": 59.088,
+   "end": 59.306
+  },
+  {
+   "word": "runner",
+   "start": 59.306,
+   "end": 59.561
+  },
+  {
+   "word": "got",
+   "start": 59.561,
+   "end": 59.706
+  },
+  {
+   "word": "chased",
+   "start": 59.706,
+   "end": 59.961
+  },
+  {
+   "word": "a",
+   "start": 59.961,
+   "end": 60.106
+  },
+  {
+   "word": "mile",
+   "start": 60.106,
+   "end": 60.324
+  },
+  {
+   "word": "off",
+   "start": 60.324,
+   "end": 60.506
+  },
+  {
+   "word": "course",
+   "start": 60.506,
+   "end": 60.779
+  },
+  {
+   "word": "by",
+   "start": 60.779,
+   "end": 60.997
+  },
+  {
+   "word": "a",
+   "start": 60.997,
+   "end": 61.088
+  },
+  {
+   "word": "dog.",
+   "start": 61.088,
+   "end": 61.252
+  },
+  {
+   "word": "And",
+   "start": 61.674,
+   "end": 61.746
+  },
+  {
+   "word": "Fred",
+   "start": 61.746,
+   "end": 61.928
+  },
+  {
+   "word": "Lorz?",
+   "start": 61.928,
+   "end": 62.528
+  },
+  {
+   "word": "He",
+   "start": 62.528,
+   "end": 62.728
+  },
+  {
+   "word": "was",
+   "start": 62.728,
+   "end": 62.874
+  },
+  {
+   "word": "banned",
+   "start": 62.874,
+   "end": 63.11
+  },
+  {
+   "word": "for",
+   "start": 63.11,
+   "end": 63.31
+  },
+  {
+   "word": "life.",
+   "start": 63.31,
+   "end": 63.619
+  },
+  {
+   "word": "The",
+   "start": 64.165,
+   "end": 64.237
+  },
+  {
+   "word": "ban",
+   "start": 64.237,
+   "end": 64.455
+  },
+  {
+   "word": "lasted",
+   "start": 64.455,
+   "end": 64.837
+  },
+  {
+   "word": "six",
+   "start": 64.837,
+   "end": 65.201
+  },
+  {
+   "word": "months.",
+   "start": 65.201,
+   "end": 65.401
+  },
+  {
+   "word": "The",
+   "start": 65.884,
+   "end": 65.975
+  },
+  {
+   "word": "next",
+   "start": 65.975,
+   "end": 66.102
+  },
+  {
+   "word": "spring,",
+   "start": 66.102,
+   "end": 66.429
+  },
+  {
+   "word": "he",
+   "start": 66.666,
+   "end": 66.738
+  },
+  {
+   "word": "won",
+   "start": 66.738,
+   "end": 66.847
+  },
+  {
+   "word": "the",
+   "start": 66.847,
+   "end": 66.957
+  },
+  {
+   "word": "Boston",
+   "start": 66.957,
+   "end": 67.229
+  },
+  {
+   "word": "Marathon.",
+   "start": 67.229,
+   "end": 67.629
+  },
+  {
+   "word": "On",
+   "start": 68.033,
+   "end": 68.16
+  },
+  {
+   "word": "foot,",
+   "start": 68.16,
+   "end": 68.469
+  },
+  {
+   "word": "this",
+   "start": 68.469,
+   "end": 68.924
+  },
+  {
+   "word": "time.",
+   "start": 68.924,
+   "end": 69.178
+  }
+ ]
+}

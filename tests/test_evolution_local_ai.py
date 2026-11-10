@@ -88,8 +88,10 @@ class EvaluatorTests(unittest.TestCase):
 class LeaderTests(unittest.TestCase):
     def test_evolution_searches_design_ladders_not_the_channel_queries(self):
         from agents import leader
+        # The photo look's design histories (the cutaway look's searches: tests/test_cutaway_look.py).
         with patch.object(leader, "channel_profile", return_value="history stories"), \
-                patch.object(leader, "_search", return_value=[]) as search:
+                patch.object(leader, "_search", return_value=[]) as search, \
+                patch.dict(os.environ, {"EVOLUTION_LOOK": "photo"}):
             leader.search_trending_subjects(source="evolution")
         queries = search.call_args.args[0]
         self.assertTrue(set(queries) <= set(leader.EVOLUTION_QUERIES))

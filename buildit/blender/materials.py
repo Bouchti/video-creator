@@ -49,14 +49,14 @@ def _out(g, shader_socket, volume=None, thermal: bool = False):
         frost = g.n("ShaderNodeAttribute", attribute_type="OBJECT", attribute_name="frost")
         # frost: a white rime coat over the surface, in patches (mixes the shader, never tints it pink)
         nz = g.n("ShaderNodeTexNoise", i_Scale=45.0, i_Detail=5.0)
-        patch = g.n("ShaderNodeMapRange", i_From_Min=0.38, i_From_Max=0.62, i_To_Min=0.35, i_To_Max=1.0)
+        patch = g.n("ShaderNodeMapRange", i_From_Min=0.35, i_From_Max=0.65, i_To_Min=0.8, i_To_Max=1.15)
         g.link(nz.outputs["Fac"], patch.inputs["Value"])
         fv = g.n("ShaderNodeMath", operation="MULTIPLY", use_clamp=True)
         g.link(frost.outputs["Fac"], fv.inputs[0])
         g.link(sock(patch, "Result", True), fv.inputs[1])
         rime = g.n("ShaderNodeBsdfPrincipled", i_Roughness=0.85)
-        rime.inputs["Base Color"].default_value = hex_rgb("#d9ecff")
-        for name, v in (("Emission Color", hex_rgb("#9fd6ff")), ("Emission Strength", 0.35)):
+        rime.inputs["Base Color"].default_value = hex_rgb("#c4e2ff")     # icy blue-white: reads on a white studio
+        for name, v in (("Emission Color", hex_rgb("#8fcfff")), ("Emission Strength", 0.55)):
             if name in rime.inputs:                 # a cold blue sheen: frost reads even on a white part
                 rime.inputs[name].default_value = v
         coat = g.n("ShaderNodeMixShader")
@@ -420,7 +420,28 @@ def flow_pipe(base: str = "#c77a4e", metal: float = 1.0, roughness: float = 0.26
     s.inputs[1].default_value = 11.0
     g.link(k.outputs["Value"], s.inputs[0])
     em = g.n("ShaderNodeEmission")
-    g.link(col.outputs["Color"], em.inputs["Color"])
+    # a state change along a coil: the dashes shade from flow_col at the inlet to flow_col2 at the outlet
+    # (object properties "flow_grad" 0/1 and "flow_len" metres): a cold coil's liquid boiling to gas, a hot coil's
+    # gas condensing to liquid
+    col2 = g.n("ShaderNodeAttribute", attribute_type="OBJECT", attribute_name="flow_col2")
+    grad = g.n("ShaderNodeAttribute", attribute_type="OBJECT", attribute_name="flow_grad")
+    ln = g.n("ShaderNodeAttribute", attribute_type="OBJECT", attribute_name="flow_len")
+    ln_ = g.n("ShaderNodeMath", operation="MAXIMUM")
+    ln_.inputs[1].default_value = 0.05
+    g.link(ln.outputs["Fac"], ln_.inputs[0])
+    u = g.n("ShaderNodeMath", operation="DIVIDE", use_clamp=True)
+    g.link(sep.outputs["X"], u.inputs[0])
+    g.link(ln_.outputs["Value"], u.inputs[1])
+    fu = g.n("ShaderNodeMath", operation="MULTIPLY", use_clamp=True)
+    g.link(u.outputs["Value"], fu.inputs[0])
+    g.link(grad.outputs["Fac"], fu.inputs[1])
+    mix = g.n("ShaderNodeMix", data_type="RGBA")
+    rgba_in = [x for x in mix.inputs if x.type == "RGBA"]
+    g.link(fu.outputs["Value"], mix.inputs[0])
+    g.link(col.outputs["Color"], rgba_in[0])
+    g.link(col2.outputs["Color"], rgba_in[1])
+    out_c = next(x for x in mix.outputs if x.type == "RGBA")
+    g.link(out_c, em.inputs["Color"])
     g.link(s.outputs["Value"], em.inputs["Strength"])
     add = g.n("ShaderNodeAddShader")
     g.link(b.outputs["BSDF"], add.inputs[0])
@@ -496,4 +517,46 @@ def clear_pane(tint: str = "#f4f8fa"):
     _out(g, mix.outputs["Shader"])
     mat.surface_render_method = "BLENDED"
     mat.use_backface_culling = True
+    return mat
+
+
+@_cached
+def gas(color: str = "#f4fbff", glow: str = "#cfeaff", glow_strength: float = 0.5, density: float = 14.0,
+        scale: float = 3.5):
+    """REAL gas, not dots: a soft volume with billowing noise inside a unit-sphere puff that fades out toward its
+    edge (object properties "gas_fade" 0..1 and "gas_t" drive how much there is and how it churns). Puffs are
+    strung along a path by the scene (spray from a can, heat haze off a coil, steam, vapour)."""
+    mat = _new(f"gas_{color}_{glow}_{density}")
+    g = G(mat)
+    tc = g.n("ShaderNodeTexCoord")
+    fade = g.n("ShaderNodeAttribute", attribute_type="OBJECT", attribute_name="gas_fade")
+    tt = g.n("ShaderNodeAttribute", attribute_type="OBJECT", attribute_name="gas_t")
+    noise = g.n("ShaderNodeTexNoise", noise_dimensions="4D", i_Scale=scale, i_Detail=6.0, i_Roughness=0.6)
+    g.link(tc.outputs["Object"], noise.inputs["Vector"])
+    g.link(tt.outputs["Fac"], noise.inputs["W"])
+    shape = g.n("ShaderNodeMapRange", i_From_Min=0.42, i_From_Max=0.72, i_To_Min=0.0, i_To_Max=1.0)
+    g.link(noise.outputs["Fac"], shape.inputs["Value"])
+    rad = g.n("ShaderNodeVectorMath", operation="LENGTH")
+    g.link(tc.outputs["Object"], rad.inputs[0])
+    edge = g.n("ShaderNodeMapRange", i_From_Min=1.0, i_From_Max=0.35, i_To_Min=0.0, i_To_Max=1.0)
+    g.link(rad.outputs["Value"], edge.inputs["Value"])
+    m1 = g.n("ShaderNodeMath", operation="MULTIPLY", use_clamp=True)
+    g.link(sock(shape, "Result", True), m1.inputs[0])
+    g.link(sock(edge, "Result", True), m1.inputs[1])
+    m2 = g.n("ShaderNodeMath", operation="MULTIPLY")
+    g.link(m1.outputs["Value"], m2.inputs[0])
+    g.link(fade.outputs["Fac"], m2.inputs[1])
+    dens = g.n("ShaderNodeMath", operation="MULTIPLY")
+    dens.inputs[1].default_value = density
+    g.link(m2.outputs["Value"], dens.inputs[0])
+    vol = g.n("ShaderNodeVolumePrincipled")
+    vol.inputs["Color"].default_value = hex_rgb(color)
+    vol.inputs["Emission Color"].default_value = hex_rgb(glow)
+    g.link(dens.outputs["Value"], vol.inputs["Density"])
+    em = g.n("ShaderNodeMath", operation="MULTIPLY")
+    em.inputs[1].default_value = glow_strength
+    g.link(m2.outputs["Value"], em.inputs[0])
+    g.link(em.outputs["Value"], vol.inputs["Emission Strength"])
+    out = g.n("ShaderNodeOutputMaterial")
+    g.link(vol.outputs["Volume"], out.inputs["Volume"])
     return mat

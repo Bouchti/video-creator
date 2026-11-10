@@ -1,0 +1,445 @@
+{
+ "id": "DoubleSpeed",
+ "slug": "double-speed",
+ "topic": "What if you could move at double speed?",
+ "title": [
+  "WHAT IF YOU COULD",
+  "MOVE AT DOUBLE SPEED?"
+ ],
+ "accent": "DOUBLE",
+ "power": {
+  "word": "Double.",
+  "rule": "you switch to twice your speed for as long as you like; the world stays at normal speed",
+  "look": "a 2x chip, the picture cools and sharpens, speed streaks trail the hero; everyone else looks slowed"
+ },
+ "script": [
+  {
+   "beat": "1 cold open, demo 1 (small and selfish; tool-reel 'so' clause: a negative outcome removed)",
+   "text": "Your mug slips. Double. Caught, so it never hits the floor."
+  },
+  {
+   "beat": "1 cold open, demo 2 (useful)",
+   "text": "Mo races you upstairs. Double. You're already waiting at the top."
+  },
+  {
+   "beat": "1 cold open, demo 3 (a little uncanny)",
+   "text": "Double again. The whole class freezes mid-blink."
+  },
+  {
+   "beat": "2 the premise (title card)",
+   "text": "What if you could move at double speed?"
+  },
+  {
+   "beat": "4 the turn: the cost, one real fact",
+   "text": "One catch: air pushes back with the square of your speed. Twice as fast, four times the push. That's real."
+  },
+  {
+   "beat": "5-7 folded into a question (tool-reel: a closing line that pulls comments)",
+   "text": "So what happens when you trip?"
+  }
+ ],
+ "science": [
+  {
+   "claim": "Air pushes back with the square of your speed: twice as fast, four times the push.",
+   "working": "The drag equation: F = 1/2 x rho x v^2 x Cd x A. Air density rho, the drag coefficient Cd and the frontal area A stay the same when only the speed changes, so F scales with v^2. Doubling v: (2v)^2 = 4 v^2, four times the drag force. (At running speeds air drag on a person is turbulent, quadratic drag, which is the regime this law describes.)",
+   "source": "The drag equation (NASA Glenn Research Center, 'The Drag Equation'); standard fluid dynamics"
+  }
+ ],
+ "cast": [
+  "pipHood",
+  "mo"
+ ],
+ "shots": [
+  {
+   "id": "S1",
+   "size": "medium",
+   "set": "kitchen",
+   "key": 14,
+   "note": "Pip at the island; his elbow knocks the mug off the edge, it tips into the air"
+  },
+  {
+   "id": "S2",
+   "size": "macro insert, low angle",
+   "set": "kitchen (island edge)",
+   "key": 18,
+   "note": "the mug mid-fall; Pip's mitten blurs in on a speed streak and catches it, coffee sloshing up"
+  },
+  {
+   "id": "S3",
+   "size": "medium",
+   "set": "kitchen",
+   "key": 20,
+   "note": "Pip holds the caught mug up, smug, steam rising; the clock on the wall reads normal"
+  },
+  {
+   "id": "S4",
+   "size": "wide",
+   "set": "stairwell (bottom)",
+   "key": 14,
+   "note": "Mo at the bottom step points up: race you; Mo launches up the stairs"
+  },
+  {
+   "id": "S5",
+   "size": "wide",
+   "set": "stairwell",
+   "key": 6,
+   "note": "Pip is a blur of speed streaks shooting past Mo up the steps"
+  },
+  {
+   "id": "S6",
+   "size": "medium",
+   "set": "stairwell (upper landing)",
+   "key": 30,
+   "note": "Pip leans on the banister at the top, arms crossed; Mo arrives panting"
+  },
+  {
+   "id": "S7",
+   "size": "wide",
+   "set": "classroom",
+   "key": 20,
+   "note": "the whole class frozen in place; Pip alone moves between the desks, streaks behind him"
+  },
+  {
+   "id": "S8",
+   "size": "close-up",
+   "set": "classroom",
+   "key": 14,
+   "note": "a kid frozen mid-blink, eyes half shut; a pencil hangs in the air beside her"
+  },
+  {
+   "id": "S9",
+   "size": "title, wide",
+   "set": "rooftop",
+   "key": 40,
+   "note": "the premise over the city at dusk; Pip on the roof"
+  },
+  {
+   "id": "S10",
+   "size": "medium, low angle",
+   "set": "rooftop",
+   "key": 16,
+   "note": "Pip drops into a sprinter's crouch on the roof"
+  },
+  {
+   "id": "S11",
+   "size": "schematic",
+   "set": "schematic",
+   "key": 40,
+   "note": "a runner at speed x1 with one air-push arrow; speed doubles to x2"
+  },
+  {
+   "id": "S12",
+   "size": "schematic",
+   "set": "schematic",
+   "key": 40,
+   "note": "x2 speed -> four push arrows, push x4 counting up; v squared"
+  },
+  {
+   "id": "S13",
+   "size": "close-up",
+   "set": "rooftop",
+   "key": 14,
+   "note": "Pip, worried, the light turning red"
+  },
+  {
+   "id": "S14",
+   "size": "wide, low angle",
+   "set": "rooftop",
+   "key": 30,
+   "note": "Pip at full speed trips on the roof edge, tumbling; the sky goes red"
+  }
+ ],
+ "edit": [
+  {
+   "shot": "S1",
+   "at": "Your"
+  },
+  {
+   "shot": "S2",
+   "at": "Double",
+   "look": "double"
+  },
+  {
+   "shot": "S3",
+   "at": "never"
+  },
+  {
+   "shot": "S4",
+   "at": "Mo"
+  },
+  {
+   "shot": "S5",
+   "at": "Double",
+   "look": "double"
+  },
+  {
+   "shot": "S6",
+   "at": "waiting"
+  },
+  {
+   "shot": "S7",
+   "at": "Double",
+   "look": "double"
+  },
+  {
+   "shot": "S8",
+   "at": "freezes"
+  },
+  {
+   "shot": "S9",
+   "at": "What"
+  },
+  {
+   "shot": "S10",
+   "at": "One"
+  },
+  {
+   "shot": "S11",
+   "at": "air"
+  },
+  {
+   "shot": "S12",
+   "at": "Twice"
+  },
+  {
+   "shot": "S13",
+   "at": "That's"
+  },
+  {
+   "shot": "S14",
+   "at": "So"
+  }
+ ],
+ "tail": 1.7,
+ "fx": [
+  {
+   "at": "S2+11",
+   "kind": "flash",
+   "color": "#DDF2FF",
+   "o": 0.4
+  },
+  {
+   "at": "S5+2",
+   "kind": "flash",
+   "color": "#DDF2FF",
+   "o": 0.4
+  },
+  {
+   "at": "S7+2",
+   "kind": "flash",
+   "color": "#DDF2FF",
+   "o": 0.4
+  },
+  {
+   "at": "S9",
+   "kind": "flash",
+   "color": "#FFF3DC"
+  },
+  {
+   "at": "S14+46",
+   "kind": "flash",
+   "color": "#FF3344"
+  },
+  {
+   "at": "S14+46",
+   "kind": "shake",
+   "len": 10,
+   "amp": 10
+  }
+ ],
+ "sound": {
+  "clips": {
+   "clink": [
+    "a ceramic coffee mug knocked by a hand on a wooden desk, short clink and scrape",
+    0.7
+   ],
+   "fall_whoosh": [
+    "a small object falling fast through the air, short soft whoosh",
+    0.6
+   ],
+   "catch": [
+    "a hand catching a ceramic mug mid-air, soft slap and thud",
+    0.5
+   ],
+   "sparkle": [
+    "a short bright magical sparkle twinkle, cartoon",
+    0.8
+   ],
+   "step": [
+    "a single sneaker footstep on a wooden stair, close",
+    0.5
+   ],
+   "tumble": [
+    "a cartoon character tumbling down wooden stairs, a quick series of bumps and thuds",
+    1.3
+   ],
+   "land": [
+    "a heavy body landing flat on a wooden floor, cartoon thud",
+    0.6
+   ],
+   "big_step": [
+    "a cartoon exaggerated careful tiptoe step, light airy whoosh",
+    0.7
+   ],
+   "pop": [
+    "a cartoon speech bubble pop, short and bright",
+    0.5
+   ],
+   "title_boom": [
+    "a cinematic whoosh rising into a deep boom impact",
+    1.6
+   ],
+   "drone_hit": [
+    "a dark ominous low drone hit, deep cinematic horror sting",
+    2.6
+   ],
+   "room_tone": [
+    "quiet indoor room tone in the evening, faint distant city hum, no voices",
+    12.5
+   ],
+   "roof_wind": [
+    "a gentle evening breeze on a city rooftop, distant traffic",
+    7.0
+   ],
+   "counter_tick": [
+    "a fast mechanical counter ticking up rapidly, digits rolling over, getting faster",
+    1.6
+   ],
+   "music": [
+    "playful quirky cartoon background music, pizzicato strings, glockenspiel and soft bass, light and curious, 110 bpm, no vocals",
+    17.0
+   ]
+  },
+  "events": [
+   [
+    "S1",
+    "room_tone",
+    0.12,
+    "onset",
+    "S9"
+   ],
+   [
+    "S1+8",
+    "clink",
+    0.15
+   ],
+   [
+    "S1+25",
+    "fall_whoosh",
+    0.25,
+    "onset"
+   ],
+   [
+    "S2",
+    "big_step",
+    0.3,
+    "onset"
+   ],
+   [
+    "S2+13",
+    "catch",
+    0.45
+   ],
+   [
+    "S2+15",
+    "sparkle",
+    0.12
+   ],
+   [
+    "S4+14",
+    "step",
+    0.18
+   ],
+   [
+    "S4+22",
+    "step",
+    0.18
+   ],
+   [
+    "S4+30",
+    "step",
+    0.18
+   ],
+   [
+    "S5+1",
+    "big_step",
+    0.35,
+    "onset"
+   ],
+   [
+    "S5+11",
+    "land",
+    0.22
+   ],
+   [
+    "S6+4",
+    "step",
+    0.18
+   ],
+   [
+    "S6+10",
+    "step",
+    0.18
+   ],
+   [
+    "S6+16",
+    "step",
+    0.18
+   ],
+   [
+    "S7+18",
+    "big_step",
+    0.3,
+    "onset"
+   ],
+   [
+    "S9",
+    "title_boom",
+    0.35,
+    "peak"
+   ],
+   [
+    "S9",
+    "roof_wind",
+    0.08,
+    "onset",
+    "S11"
+   ],
+   [
+    "S9+17",
+    "big_step",
+    0.12
+   ],
+   [
+    "S12+14",
+    "counter_tick",
+    0.06,
+    "onset",
+    "S13"
+   ],
+   [
+    "S14+46",
+    "land",
+    0.4
+   ],
+   [
+    "S14+47",
+    "drone_hit",
+    0.3
+   ],
+   [
+    "S14+49",
+    "tumble",
+    0.3
+   ]
+  ],
+  "music": {
+   "clip": "music",
+   "until": "S10"
+  },
+  "levels": {
+   "sfx_lu": -6,
+   "music_lu": -9.5
+  }
+ }
+}

@@ -1,0 +1,47 @@
+Four Minutes over Palm Beach — Learjet 60 N722BD, 1 November 2026
+Third-party material in the film, with source and licence.
+
+IMAGERY AND DATA (all public domain; burned-in credit on screen)
+- NASA Blue Marble: Next Generation, via NASA GIBS WMS (gibs.earthdata.nasa.gov). Public domain (NASA).
+- USGS Landsat 8/9 Collection 2 Level-2 surface reflectance, via Microsoft Planetary Computer:
+  LC08_L2SP_015041_20260103_02_T1, LC08_L2SP_015042_20260103_02_T1 (main, 3 Jan 2026),
+  LC09_L2SP_016041_20251115_02_T1, LC09_L2SP_016042_20251115_02_T1 (west fill, 15 Nov 2025). Public domain (USGS).
+- USDA NAIP 2023 aerial imagery (0.3 m), Palm Beach County, via Microsoft Planetary Computer
+  (items fl_m_26080xx_*_17_030_20230213_20230511). Public domain (USDA FSA). Imagery predates the crash; labelled on screen.
+- NOAA NEXRAD base reflectivity composite (n0q), 2026-11-01 17:25-17:55 UTC, via Iowa Environmental Mesonet
+  (mesonet.agron.iastate.edu). NOAA data, public domain.
+- Every download URL is logged in assets/raw/manifest.jsonl. No national borders are drawn.
+
+FONTS (SIL Open Font License 1.1, from github.com/google/fonts; licences in fonts/)
+- Barlow Condensed (Jeremy Tribby), IBM Plex Mono, IBM Plex Sans, IBM Plex Serif (IBM).
+
+VOICE
+- Kokoro-82M TTS (hexgrad), voice af_heart, run offline with kokoro-onnx. Model: Apache 2.0; kokoro-onnx: MIT.
+- Speech check: faster-whisper (MIT) with OpenAI Whisper small.en weights (MIT).
+
+MUSIC AND SOUND
+- Original score synthesized in code (mix.py).
+- Field recordings: BigSoundBank (Joseph Sardin), CC0 1.0, files in assets/sfx/ (manifest.jsonl):
+  - airplane-pass-4-s3007  (https://bigsoundbank.com/airplane-pass-4-s3007.html)
+  - airplane-pass-5-s3008  (https://bigsoundbank.com/airplane-pass-5-s3008.html)
+  - countryside-s0097  (https://bigsoundbank.com/countryside-s0097.html)
+  - crackling-radio-1-s0312  (https://bigsoundbank.com/crackling-radio-1-s0312.html)
+  - crackling-radio-2-s0313  (https://bigsoundbank.com/crackling-radio-2-s0313.html)
+  - explosion-far-away-2-s1806  (https://bigsoundbank.com/explosion-far-away-2-s1806.html)
+  - explosion-far-away-s1023  (https://bigsoundbank.com/explosion-far-away-s1023.html)
+  - storm-and-rain-3-s2717  (https://bigsoundbank.com/storm-and-rain-3-s2717.html)
+  - strong-wind-1-s0146  (https://bigsoundbank.com/strong-wind-1-s0146.html)
+  - thunder-3-s3114  (https://bigsoundbank.com/thunder-3-s3114.html)
+  - thunder-8-s3181  (https://bigsoundbank.com/thunder-8-s3181.html)
+  - thunder-s2718  (https://bigsoundbank.com/thunder-s2718.html)
+  - two-helicopters-flying-s0861  (https://bigsoundbank.com/two-helicopters-flying-s0861.html)
+  - whistling-of-the-wind-1-s0147  (https://bigsoundbank.com/whistling-of-the-wind-1-s0147.html)
+  - wind-from-inside-1-s1714  (https://bigsoundbank.com/wind-from-inside-1-s1714.html)
+- Samples (CC0): VS Chamber Orchestra: Community Edition (Versilian Studios), Versilian Community Sample Library
+  (Versilian Studios) — timpani, bass drum, tam-tam, tuba, trombone, horn, bowed vibraphone.
+
+TOOLS
+- contourpy (BSD-3-Clause) for the radar outlines; numpy, SciPy, Pillow, soundfile, soxr; ffmpeg; Playwright/Chromium.
+
+FACTS
+- Every spoken or written claim and its source: FACTS.md. No victims are named; no cause is suggested.
