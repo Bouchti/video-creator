@@ -27,6 +27,8 @@ T = lambda x, y, z: Vector((x, -z, y))  # three -> blender
 
 # ---------------------------------------------------------------- scene
 bpy.ops.wm.read_factory_settings(use_empty=True)
+try: bpy.context.preferences.system.anisotropic_filter = "FILTER_16"   # v2: grazing floors (tiles, grass) shimmered
+except Exception as e: print("anisotropic:", e)
 sc = bpy.context.scene
 bpy.context.preferences.edit.keyframe_new_interpolation_type = "LINEAR"  # per-frame keys; booleans step anyway
 sc.render.fps = data["fps"]
@@ -42,9 +44,13 @@ for k, v in [("use_raytracing", True), ("use_shadows", True), ("shadow_ray_count
         except Exception: pass
 sc.render.use_motion_blur = True
 if hasattr(sc.render, "motion_blur_shutter"): sc.render.motion_blur_shutter = 0.5
-sc.view_settings.view_transform = "AgX"
-sc.view_settings.exposure = 0.35
-try: sc.view_settings.look = "AgX - Punchy"
+# GRADE (owner, 11 Nov: the Blender films looked faded and dark next to the earlier shorts: saturation 0.2 vs 0.5):
+# "vivid" (default, tuned 11 Nov on Hoover stills: luma 0.35-0.60, saturation 0.36-0.74, 0 % clipped) = AgX Punchy at
+# exposure 1.25, the HDRI sky saturated x1.8, haze 0.05, compositor saturation x1.25 + contrast 6; "agx" = the old look.
+GRADE = opt.get("grade", "vivid")
+sc.view_settings.view_transform = opt.get("view", "AgX")
+sc.view_settings.exposure = float(opt.get("exposure", "1.25" if GRADE == "vivid" else "0.35"))
+try: sc.view_settings.look = "AgX - Punchy" if sc.view_settings.view_transform == "AgX" else "None"
 except Exception: pass
 sc.render.film_transparent = False
 
@@ -112,9 +118,18 @@ def plane(name, x0, x1, y0, y1, z, mat):
 world = bpy.data.worlds.new("w"); sc.world = world; world.use_nodes = True
 wn, wl = world.node_tree.nodes, world.node_tree.links
 bg = wn["Background"]; env = wn.new("ShaderNodeTexEnvironment")
-hd = [f for f in os.listdir(os.path.join(HDRI, os.listdir(HDRI)[0])) if f.endswith((".hdr", ".exr"))] if os.path.isdir(os.path.join(HDRI, os.listdir(HDRI)[0])) else []
-hpath = os.path.join(HDRI, os.listdir(HDRI)[0], hd[0]) if hd else os.path.join(HDRI, os.listdir(HDRI)[0])
-env.image = bpy.data.images.load(hpath); wl.new(env.outputs["Color"], bg.inputs["Color"]); bg.inputs["Strength"].default_value = 0.85
+def hdri_path(folder):
+    d = os.path.join(HDRI, folder)
+    if not os.path.isdir(d): return d
+    return os.path.join(d, [f for f in sorted(os.listdir(d)) if f.endswith((".hdr", ".exr"))][0])
+# the default sky is pinned (Nov 12: new HDRIs sort before it and silently changed older films)
+hpath = hdri_path(opt.get("hdri", "kloofendal_48d_partly_cloudy_puresky") if os.path.isdir(os.path.join(HDRI, opt.get("hdri", "kloofendal_48d_partly_cloudy_puresky"))) else sorted(os.listdir(HDRI))[0])
+env.image = bpy.data.images.load(hpath); bg.inputs["Strength"].default_value = 0.85
+if GRADE == "vivid":   # a cartoon-blue sky: saturate the HDRI and pull its blue deeper, clouds stay white
+    hs = wn.new("ShaderNodeHueSaturation"); hs.inputs["Saturation"].default_value = float(opt.get("skysat", "1.8")); hs.inputs["Value"].default_value = 1.0
+    wl.new(env.outputs["Color"], hs.inputs["Color"]); wl.new(hs.outputs["Color"], bg.inputs["Color"])
+else:
+    wl.new(env.outputs["Color"], bg.inputs["Color"])
 vol = wn.new("ShaderNodeVolumePrincipled"); vol.inputs["Density"].default_value = 0.0009; vol.inputs["Color"].default_value = (*hexc("#e9dcc4"), 1)
 if opt.get("haze", "0") == "1": wl.new(vol.outputs["Volume"], wn["World Output"].inputs["Volume"])  # world volume blacked out Eevee: off by default
 
@@ -182,7 +197,42 @@ def make_car(name, body_hex):
         bpy.ops.mesh.primitive_cylinder_add(vertices=16, radius=0.08, depth=0.14, location=(0, 0, 0), rotation=(0, math.pi / 2, 0)); c = bpy.context.object; c.parent = w; c.data.materials.append(brass)
         wheels.append(w)
     return root, wheels
-CARS = {"lorz": make_car("carLorz", "#b3181c"), "off": make_car("carOff", "#2f6a43")}
+# ---------------------------------------------------------------- several skies (Gimli, 12 Nov): a set file may list SKIES (HDRI folders);
+# each MOOD entry then carries a 6th value, the sky index, and the world switches sky per shot (mix factors keyed per frame)
+SKY_MIX = []
+if "SKIES" in globals() and SKIES:
+    prev = None
+    def grad_sky(spec):
+        """'grad:#horizon:#glow:#mid:#zenith:az=262:el=9' -> a stylised gradient sky with a warm halo round the sun"""
+        parts = spec.split(":")[1:]; cols = [p for p in parts if p.startswith("#")]; kv = dict(p.split("=") for p in parts if "=" in p)
+        tc = wn.new("ShaderNodeTexCoord"); sep = wn.new("ShaderNodeSeparateXYZ"); wl.new(tc.outputs["Generated"], sep.inputs[0])
+        ramp = wn.new("ShaderNodeValToRGB"); cr = ramp.color_ramp
+        stops = [(0.0, cols[0]), (0.07, cols[1]), (0.32, cols[2]), (1.0, cols[3])]
+        cr.elements[0].position, cr.elements[0].color = stops[0][0], (*hexc(stops[0][1]), 1); cr.elements[1].position, cr.elements[1].color = stops[-1][0], (*hexc(stops[-1][1]), 1)
+        for pos, c in stops[1:-1]: e_ = cr.elements.new(pos); e_.color = (*hexc(c), 1)
+        mr = wn.new("ShaderNodeMapRange"); mr.inputs[1].default_value = -0.04; mr.inputs[2].default_value = 1.0; wl.new(sep.outputs["Z"], mr.inputs[0]); wl.new(mr.outputs[0], ramp.inputs[0])
+        az, el = math.radians(float(kv.get("az", 0))), math.radians(float(kv.get("el", 10)))
+        sd = wn.new("ShaderNodeCombineXYZ"); sd.inputs[0].default_value = math.cos(el) * math.sin(az); sd.inputs[1].default_value = math.cos(el) * math.cos(az); sd.inputs[2].default_value = math.sin(el)
+        nrm = wn.new("ShaderNodeVectorMath"); nrm.operation = "NORMALIZE"; wl.new(tc.outputs["Generated"], nrm.inputs[0])
+        dot = wn.new("ShaderNodeVectorMath"); dot.operation = "DOT_PRODUCT"; wl.new(nrm.outputs[0], dot.inputs[0]); wl.new(sd.outputs[0], dot.inputs[1])
+        glow = wn.new("ShaderNodeMapRange"); glow.inputs[1].default_value = 0.82; glow.inputs[2].default_value = 1.0; wl.new(dot.outputs["Value"], glow.inputs[0])
+        pw = wn.new("ShaderNodeMath"); pw.operation = "POWER"; pw.inputs[1].default_value = 3.0; wl.new(glow.outputs[0], pw.inputs[0])
+        gm = wn.new("ShaderNodeMath"); gm.operation = "MULTIPLY"; gm.inputs[1].default_value = float(kv.get("halo", 2.5)); wl.new(pw.outputs[0], gm.inputs[0])
+        add = wn.new("ShaderNodeMix"); add.data_type = "RGBA"; add.blend_type = "ADD"; wl.new(gm.outputs[0], add.inputs[0])
+        wl.new(ramp.outputs["Color"], add.inputs[6]); add.inputs[7].default_value = (*hexc(kv.get("sun", "#fff0c8").replace("_", "#") if kv.get("sun") else "#fff0c8"), 1)
+        return add.outputs[2]
+    for i, folder in enumerate(SKIES):
+        if folder.startswith("grad:"):
+            out_c = grad_sky(folder)
+        else:
+            e = wn.new("ShaderNodeTexEnvironment"); e.image = bpy.data.images.load(hdri_path(folder), check_existing=True)
+            hs_ = wn.new("ShaderNodeHueSaturation"); hs_.inputs["Saturation"].default_value = float(opt.get("skysat", "1.35")); wl.new(e.outputs["Color"], hs_.inputs["Color"]); out_c = hs_.outputs["Color"]
+        if prev is None: prev = out_c; continue
+        mx = wn.new("ShaderNodeMix"); mx.data_type = "RGBA"; mx.inputs[0].default_value = 0.0
+        wl.new(prev, mx.inputs[6]); wl.new(out_c, mx.inputs[7]); prev = mx.outputs[2]; SKY_MIX.append(mx)
+    wl.new(prev, bg.inputs["Color"])
+    print("SKIES:", SKIES)
+CARS = VEHICLES if "VEHICLES" in globals() else {"lorz": make_car("carLorz", "#b3181c"), "off": make_car("carOff", "#2f6a43")}
 
 # ---------------------------------------------------------------- cards: one object per slot, an image sequence per slot
 SU = 0.00216
@@ -245,6 +295,8 @@ def card_material(name, first_file, soft=False, lit=True):
     l.new(tr.outputs[0], mix.inputs[1]); l.new(add.outputs[0] if lit else em.outputs[0], mix.inputs[2]); l.new(mix.outputs[0], out.inputs["Surface"])
     if hasattr(m, "surface_render_method"): m.surface_render_method = "BLENDED" if soft else "DITHERED"
     else: m.blend_method = "BLEND" if soft else "HASHED"
+    # characters cast their real silhouette shadow on the set (reference look), not a card-shaped one
+    if hasattr(m, "use_transparent_shadow"): m.use_transparent_shadow = True
     return m
 
 cam_d = bpy.data.cameras.new("cam"); cam_d.sensor_fit = "VERTICAL"; cam_d.sensor_height = 24.0; cam_d.sensor_width = 13.5
@@ -287,7 +339,10 @@ for (kind, o, n), per in slots.items():
 
 # ---------------------------------------------------------------- camera, cars, depth of field per frame
 def mood_key(f, sid):
-    el, az, col, en, sky = MOOD[mood_of(sid)]
+    mv = MOOD[mood_of(sid)]; el, az, col, en, sky = mv[:5]
+    if SKY_MIX and len(mv) > 5:
+        for i, mx in enumerate(SKY_MIX):
+            mx.inputs[0].default_value = 1.0 if i + 1 == mv[5] else 0.0; mx.inputs[0].keyframe_insert("default_value", frame=f)
     d = Vector((math.cos(math.radians(el)) * math.sin(math.radians(az)), math.cos(math.radians(el)) * math.cos(math.radians(az)), math.sin(math.radians(el))))
     so.rotation_euler = (-d).to_track_quat("-Z", "Y").to_euler(); so.keyframe_insert("rotation_euler", frame=f)
     sun.color = hexc(col); sun.keyframe_insert("color", frame=f); sun.energy = en; sun.keyframe_insert("energy", frame=f)
@@ -309,11 +364,30 @@ for f in range(F0, F1):
         cam_d.dof.aperture_fstop = 64
     cam_d.dof.keyframe_insert("aperture_fstop", frame=f)
     for k, (root, wheels) in CARS.items():
-        c = fr["cars"][k]
+        c = fr["cars"].get(k)
         if c is None: key_obj(root, f, hide=True); [key_obj(ch, f, hide=True) for ch in root.children_recursive]; continue
-        key_obj(root, f, loc=T(c["x"], 0, c["z"]), rot=Euler((0, 0, math.pi + c["yaw"]), "XYZ"), hide=False)
+        key_obj(root, f, loc=T(c["x"], c.get("y", 0), c["z"]), rot=Euler((c.get("pitch", 0), c.get("roll", 0), math.pi + c["yaw"]), "XYZ"), hide=False)
         for ch in root.children_recursive: key_obj(ch, f, hide=False)
         for w in wheels: key_obj(w, f, rot=Euler((c["d"] / 0.45, 0, 0), "XYZ"))
+
+# ---------------------------------------------------------------- 3D props (set files that define PROPS): one collection
+# instance per (kind, n-th of that kind in the frame), keyed per frame (Hoover film v2, 11 Nov)
+PR = globals().get("PROPS")
+if PR:
+    pslots = {}
+    for f in range(F0, F1):
+        seen = {}
+        for p in FR[f].get("props", []):
+            n = seen.get(p["k"], 0); seen[p["k"]] = n + 1
+            pslots.setdefault((p["k"], n), {})[f] = p
+    for (k, n), per in pslots.items():
+        if k not in PR: print("MISSING PROP", k); continue
+        e = bpy.data.objects.new(f"prop_{k}_{n}", None); e.instance_type = "COLLECTION"; e.instance_collection = PR[k]; bpy.context.collection.objects.link(e)
+        for f in range(F0, F1):
+            p = per.get(f)
+            if p is None: key_obj(e, f, hide=True); continue
+            key_obj(e, f, loc=T(p["x"], p["y"], p["z"]), rot=Euler((p["pitch"], p["roll"], p["yaw"]), "XYZ"), scl=(p["s"], p["s"], p["s"]), hide=False)
+    print("PROP SLOTS", len(pslots))
 
 # ---------------------------------------------------------------- compositor: a little glare for the lamps and highlights
 bpy.context.view_layer.use_pass_mist = True
@@ -338,9 +412,27 @@ def build_comp():
         mul = nodes.new("ShaderNodeMath")
     except Exception:
         mul = nodes.new("CompositorNodeMath")
-    mul.operation = "MULTIPLY"; mul.inputs[1].default_value = 0.18
+    mul.operation = "MULTIPLY"; mul.inputs[1].default_value = 0.18 if GRADE != "vivid" else 0.05
     links.new(rl.outputs["Mist"], mul.inputs[0]); links.new(mul.outputs[0], fac); links.new(rl.outputs["Image"], a)
-    links.new(res, out_in)  # (glare dropped: the Blender 5 glare node API changed and an unlinked output renders black)
+    if GRADE == "vivid":
+        hs = None
+        for kind in ("CompositorNodeHueSat", "ShaderNodeHueSaturation"):
+            try: hs = nodes.new(kind); break
+            except Exception: pass
+        cs = None
+        for kind in ("CompositorNodeBrightContrast",):
+            try: cs = nodes.new(kind); break
+            except Exception: pass
+        cur = res
+        if hs is not None:
+            sat_in = hs.inputs.get("Saturation"); img_in = hs.inputs.get("Image") or hs.inputs.get("Color")
+            sat_in.default_value = float(opt.get("sat", "1.25")); links.new(cur, img_in); cur = hs.outputs[0]; print("GRADE: saturation", sat_in.default_value)
+        if cs is not None:
+            cs.inputs["Contrast"].default_value = float(opt.get("contrast", "6")); cs.inputs["Bright"].default_value = float(opt.get("bright", "0"))
+            links.new(cur, cs.inputs["Image"]); cur = cs.outputs[0]; print("GRADE: contrast")
+        links.new(cur, out_in)
+    else:
+        links.new(res, out_in)  # (glare dropped: the Blender 5 glare node API changed and an unlinked output renders black)
 try:
     build_comp(); print("COMPOSITOR OK")
 except Exception as e:

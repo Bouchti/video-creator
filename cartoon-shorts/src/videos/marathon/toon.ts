@@ -323,7 +323,7 @@ const DEF_LIGHT = rad(-120);
 
 // ---------------- faces ----------------
 export type Expr = "neutral" | "stern" | "grin" | "laugh" | "whistle" | "nervous" | "shock" | "relief" | "relief_open" | "dazed"
-  | "pained" | "smile" | "smile_closed" | "lick" | "smug";
+  | "pained" | "smile" | "smile_closed" | "lick" | "smug" | "smug_talk";
 type EyeK = "dot" | "small" | "lid" | "slit" | "happy" | "dash" | "squeeze" | "shock" | "shockHalf" | "spiral";
 type MouthK = "dash" | "frown" | "smirk" | "smile" | "smileWide" | "grin" | "laugh" | "o" | "O" | "wave" | "teeth" | "lick";
 /** eyes [back, front], brows [inner, outer] offsets in u (+ = down), mouth kind */
@@ -342,6 +342,7 @@ const FACE: Record<Expr, { eye: [EyeK, EyeK]; brow: [number, number]; mouth: Mou
   smile: { eye: ["dot", "dot"], brow: [0, -1], mouth: "smirk" },
   smile_closed: { eye: ["happy", "happy"], brow: [0, -1], mouth: "smile" },
   smug: { eye: ["lid", "lid"], brow: [-1, -4], mouth: "smirk" },
+  smug_talk: { eye: ["lid", "lid"], brow: [-1, -4], mouth: "o" }, // Hoover repairman talking: same eyes as smug, only the mouth moves
   lick: { eye: ["dot", "dot"], brow: [0, -1], mouth: "lick" },
 };
 const halfLid = (k: EyeK): EyeK => (k === "dot" || k === "small" ? "lid" : k === "lid" ? "slit" : k === "shock" ? "shockHalf" : k);

@@ -1,0 +1,975 @@
+{
+ "duration": 66.174896,
+ "words": [
+  {
+   "word": "This",
+   "start": 0.0,
+   "end": 0.12
+  },
+  {
+   "word": "man",
+   "start": 0.12,
+   "end": 0.32
+  },
+  {
+   "word": "took",
+   "start": 0.32,
+   "end": 0.52
+  },
+  {
+   "word": "a",
+   "start": 0.52,
+   "end": 0.7
+  },
+  {
+   "word": "Hoover",
+   "start": 0.7,
+   "end": 0.92
+  },
+  {
+   "word": "van",
+   "start": 0.92,
+   "end": 1.18
+  },
+  {
+   "word": "hostage.",
+   "start": 1.18,
+   "end": 1.6
+  },
+  {
+   "word": "For",
+   "start": 2.102,
+   "end": 2.222
+  },
+  {
+   "word": "thirteen",
+   "start": 2.222,
+   "end": 2.602
+  },
+  {
+   "word": "days.",
+   "start": 2.602,
+   "end": 2.922
+  },
+  {
+   "word": "He",
+   "start": 3.45,
+   "end": 3.51
+  },
+  {
+   "word": "blocked",
+   "start": 3.51,
+   "end": 3.75
+  },
+  {
+   "word": "it",
+   "start": 3.75,
+   "end": 3.97
+  },
+  {
+   "word": "in",
+   "start": 3.97,
+   "end": 4.09
+  },
+  {
+   "word": "his",
+   "start": 4.09,
+   "end": 4.21
+  },
+  {
+   "word": "driveway...",
+   "start": 4.21,
+   "end": 4.61
+  },
+  {
+   "word": "with",
+   "start": 5.05,
+   "end": 5.19
+  },
+  {
+   "word": "his",
+   "start": 5.19,
+   "end": 5.37
+  },
+  {
+   "word": "horse",
+   "start": 5.37,
+   "end": 5.55
+  },
+  {
+   "word": "truck.",
+   "start": 5.55,
+   "end": 5.77
+  },
+  {
+   "word": "Why?",
+   "start": 6.177,
+   "end": 6.437
+  },
+  {
+   "word": "It",
+   "start": 6.437,
+   "end": 6.977
+  },
+  {
+   "word": "started",
+   "start": 6.977,
+   "end": 7.317
+  },
+  {
+   "word": "with",
+   "start": 7.317,
+   "end": 7.537
+  },
+  {
+   "word": "a",
+   "start": 7.537,
+   "end": 7.617
+  },
+  {
+   "word": "free",
+   "start": 7.617,
+   "end": 7.797
+  },
+  {
+   "word": "flight.",
+   "start": 7.797,
+   "end": 8.117
+  },
+  {
+   "word": "Britain,",
+   "start": 8.515,
+   "end": 8.755
+  },
+  {
+   "word": "nineteen",
+   "start": 8.755,
+   "end": 9.605
+  },
+  {
+   "word": "ninety-two.",
+   "start": 9.605,
+   "end": 10.455
+  },
+  {
+   "word": "Hoover's",
+   "start": 10.455,
+   "end": 10.855
+  },
+  {
+   "word": "deal:",
+   "start": 10.855,
+   "end": 11.055
+  },
+  {
+   "word": "spend",
+   "start": 11.455,
+   "end": 11.555
+  },
+  {
+   "word": "a",
+   "start": 11.555,
+   "end": 11.685
+  },
+  {
+   "word": "hundred",
+   "start": 11.685,
+   "end": 11.815
+  },
+  {
+   "word": "pounds,",
+   "start": 11.815,
+   "end": 12.215
+  },
+  {
+   "word": "get",
+   "start": 12.455,
+   "end": 12.555
+  },
+  {
+   "word": "two",
+   "start": 12.555,
+   "end": 12.795
+  },
+  {
+   "word": "free",
+   "start": 12.795,
+   "end": 12.995
+  },
+  {
+   "word": "flights.",
+   "start": 12.995,
+   "end": 13.435
+  },
+  {
+   "word": "To",
+   "start": 13.435,
+   "end": 14.255
+  },
+  {
+   "word": "America.",
+   "start": 14.255,
+   "end": 14.755
+  },
+  {
+   "word": "The",
+   "start": 15.303,
+   "end": 15.383
+  },
+  {
+   "word": "cheapest",
+   "start": 15.383,
+   "end": 15.623
+  },
+  {
+   "word": "vacuum",
+   "start": 15.623,
+   "end": 15.983
+  },
+  {
+   "word": "cost",
+   "start": 15.983,
+   "end": 16.403
+  },
+  {
+   "word": "a",
+   "start": 16.403,
+   "end": 16.578
+  },
+  {
+   "word": "hundred",
+   "start": 16.578,
+   "end": 16.753
+  },
+  {
+   "word": "and",
+   "start": 16.753,
+   "end": 16.928
+  },
+  {
+   "word": "nineteen",
+   "start": 16.928,
+   "end": 17.103
+  },
+  {
+   "word": "pounds.",
+   "start": 17.103,
+   "end": 17.463
+  },
+  {
+   "word": "The",
+   "start": 18.043,
+   "end": 18.303
+  },
+  {
+   "word": "flights",
+   "start": 18.303,
+   "end": 18.523
+  },
+  {
+   "word": "were",
+   "start": 18.523,
+   "end": 18.703
+  },
+  {
+   "word": "worth",
+   "start": 18.703,
+   "end": 18.943
+  },
+  {
+   "word": "six",
+   "start": 18.943,
+   "end": 19.264
+  },
+  {
+   "word": "hundred.",
+   "start": 19.264,
+   "end": 19.585
+  },
+  {
+   "word": "Hoover",
+   "start": 19.865,
+   "end": 20.045
+  },
+  {
+   "word": "expected",
+   "start": 20.045,
+   "end": 20.465
+  },
+  {
+   "word": "fifty",
+   "start": 20.465,
+   "end": 20.945
+  },
+  {
+   "word": "thousand",
+   "start": 20.945,
+   "end": 21.425
+  },
+  {
+   "word": "people.",
+   "start": 21.425,
+   "end": 21.765
+  },
+  {
+   "word": "It",
+   "start": 22.325,
+   "end": 22.545
+  },
+  {
+   "word": "got",
+   "start": 22.545,
+   "end": 22.665
+  },
+  {
+   "word": "three",
+   "start": 22.665,
+   "end": 22.973
+  },
+  {
+   "word": "hundred",
+   "start": 22.973,
+   "end": 23.28
+  },
+  {
+   "word": "thousand.",
+   "start": 23.28,
+   "end": 23.588
+  },
+  {
+   "word": "People",
+   "start": 23.868,
+   "end": 24.048
+  },
+  {
+   "word": "bought",
+   "start": 24.048,
+   "end": 24.328
+  },
+  {
+   "word": "vacuums",
+   "start": 24.328,
+   "end": 24.928
+  },
+  {
+   "word": "they",
+   "start": 24.928,
+   "end": 25.068
+  },
+  {
+   "word": "didn't",
+   "start": 25.068,
+   "end": 25.268
+  },
+  {
+   "word": "even",
+   "start": 25.268,
+   "end": 25.468
+  },
+  {
+   "word": "need.",
+   "start": 25.468,
+   "end": 25.848
+  },
+  {
+   "word": "The",
+   "start": 26.268,
+   "end": 26.468
+  },
+  {
+   "word": "small",
+   "start": 26.468,
+   "end": 26.748
+  },
+  {
+   "word": "ads",
+   "start": 26.748,
+   "end": 27.088
+  },
+  {
+   "word": "filled",
+   "start": 27.088,
+   "end": 27.328
+  },
+  {
+   "word": "up",
+   "start": 27.328,
+   "end": 27.508
+  },
+  {
+   "word": "with",
+   "start": 27.508,
+   "end": 27.668
+  },
+  {
+   "word": "Hoovers...",
+   "start": 27.668,
+   "end": 28.008
+  },
+  {
+   "word": "still",
+   "start": 28.548,
+   "end": 29.008
+  },
+  {
+   "word": "in",
+   "start": 29.008,
+   "end": 29.468
+  },
+  {
+   "word": "the",
+   "start": 29.468,
+   "end": 29.568
+  },
+  {
+   "word": "box.",
+   "start": 29.568,
+   "end": 29.788
+  },
+  {
+   "word": "The",
+   "start": 30.324,
+   "end": 30.404
+  },
+  {
+   "word": "factory",
+   "start": 30.404,
+   "end": 30.704
+  },
+  {
+   "word": "went",
+   "start": 30.704,
+   "end": 30.904
+  },
+  {
+   "word": "to",
+   "start": 30.904,
+   "end": 31.064
+  },
+  {
+   "word": "seven-day",
+   "start": 31.064,
+   "end": 31.484
+  },
+  {
+   "word": "shifts.",
+   "start": 31.484,
+   "end": 31.784
+  },
+  {
+   "word": "So",
+   "start": 32.264,
+   "end": 32.384
+  },
+  {
+   "word": "Hoover",
+   "start": 32.384,
+   "end": 32.604
+  },
+  {
+   "word": "made",
+   "start": 32.604,
+   "end": 32.784
+  },
+  {
+   "word": "claiming",
+   "start": 32.784,
+   "end": 33.124
+  },
+  {
+   "word": "hard.",
+   "start": 33.124,
+   "end": 33.464
+  },
+  {
+   "word": "Fourteen-day",
+   "start": 33.464,
+   "end": 34.564
+  },
+  {
+   "word": "deadlines.",
+   "start": 34.564,
+   "end": 34.964
+  },
+  {
+   "word": "Flights",
+   "start": 35.704,
+   "end": 35.904
+  },
+  {
+   "word": "nobody",
+   "start": 35.904,
+   "end": 36.344
+  },
+  {
+   "word": "wanted.",
+   "start": 36.344,
+   "end": 36.704
+  },
+  {
+   "word": "In",
+   "start": 37.109,
+   "end": 37.189
+  },
+  {
+   "word": "Workington,",
+   "start": 37.189,
+   "end": 38.149
+  },
+  {
+   "word": "Dave",
+   "start": 38.149,
+   "end": 38.329
+  },
+  {
+   "word": "Dixon",
+   "start": 38.329,
+   "end": 38.729
+  },
+  {
+   "word": "bought",
+   "start": 38.729,
+   "end": 38.989
+  },
+  {
+   "word": "a",
+   "start": 38.989,
+   "end": 39.129
+  },
+  {
+   "word": "Hoover",
+   "start": 39.129,
+   "end": 39.309
+  },
+  {
+   "word": "washing",
+   "start": 39.309,
+   "end": 39.669
+  },
+  {
+   "word": "machine.",
+   "start": 39.669,
+   "end": 40.089
+  },
+  {
+   "word": "His",
+   "start": 40.489,
+   "end": 40.829
+  },
+  {
+   "word": "tickets",
+   "start": 40.829,
+   "end": 41.189
+  },
+  {
+   "word": "never",
+   "start": 41.189,
+   "end": 41.669
+  },
+  {
+   "word": "came.",
+   "start": 41.669,
+   "end": 41.929
+  },
+  {
+   "word": "Then",
+   "start": 42.361,
+   "end": 42.541
+  },
+  {
+   "word": "the",
+   "start": 42.541,
+   "end": 42.801
+  },
+  {
+   "word": "washing",
+   "start": 42.801,
+   "end": 43.081
+  },
+  {
+   "word": "machine",
+   "start": 43.081,
+   "end": 43.441
+  },
+  {
+   "word": "broke.",
+   "start": 43.441,
+   "end": 43.741
+  },
+  {
+   "word": "The",
+   "start": 44.168,
+   "end": 44.228
+  },
+  {
+   "word": "repairman",
+   "start": 44.228,
+   "end": 44.648
+  },
+  {
+   "word": "told",
+   "start": 44.648,
+   "end": 44.868
+  },
+  {
+   "word": "him:",
+   "start": 44.868,
+   "end": 45.028
+  },
+  {
+   "word": "If",
+   "start": 45.341,
+   "end": 45.461
+  },
+  {
+   "word": "you",
+   "start": 45.461,
+   "end": 45.641
+  },
+  {
+   "word": "think",
+   "start": 45.641,
+   "end": 46.061
+  },
+  {
+   "word": "buying",
+   "start": 46.061,
+   "end": 46.421
+  },
+  {
+   "word": "a",
+   "start": 46.421,
+   "end": 46.581
+  },
+  {
+   "word": "washing",
+   "start": 46.581,
+   "end": 46.781
+  },
+  {
+   "word": "machine's",
+   "start": 46.781,
+   "end": 47.341
+  },
+  {
+   "word": "going",
+   "start": 47.341,
+   "end": 47.401
+  },
+  {
+   "word": "to",
+   "start": 47.401,
+   "end": 47.521
+  },
+  {
+   "word": "get",
+   "start": 47.521,
+   "end": 47.621
+  },
+  {
+   "word": "you",
+   "start": 47.621,
+   "end": 47.881
+  },
+  {
+   "word": "two",
+   "start": 47.881,
+   "end": 48.241
+  },
+  {
+   "word": "tickets",
+   "start": 48.241,
+   "end": 48.521
+  },
+  {
+   "word": "to",
+   "start": 48.521,
+   "end": 48.801
+  },
+  {
+   "word": "America...",
+   "start": 48.801,
+   "end": 49.101
+  },
+  {
+   "word": "you",
+   "start": 49.521,
+   "end": 49.961
+  },
+  {
+   "word": "must",
+   "start": 49.961,
+   "end": 50.121
+  },
+  {
+   "word": "be",
+   "start": 50.121,
+   "end": 50.301
+  },
+  {
+   "word": "an",
+   "start": 50.301,
+   "end": 50.421
+  },
+  {
+   "word": "idiot.",
+   "start": 50.421,
+   "end": 50.561
+  },
+  {
+   "word": "So",
+   "start": 50.955,
+   "end": 51.135
+  },
+  {
+   "word": "when",
+   "start": 51.355,
+   "end": 51.435
+  },
+  {
+   "word": "a",
+   "start": 51.435,
+   "end": 51.535
+  },
+  {
+   "word": "Hoover",
+   "start": 51.535,
+   "end": 51.735
+  },
+  {
+   "word": "van",
+   "start": 51.735,
+   "end": 52.015
+  },
+  {
+   "word": "parked",
+   "start": 52.015,
+   "end": 52.295
+  },
+  {
+   "word": "at",
+   "start": 52.295,
+   "end": 52.475
+  },
+  {
+   "word": "Dave's",
+   "start": 52.475,
+   "end": 52.795
+  },
+  {
+   "word": "house...",
+   "start": 52.795,
+   "end": 53.075
+  },
+  {
+   "word": "he",
+   "start": 53.535,
+   "end": 53.615
+  },
+  {
+   "word": "blocked",
+   "start": 53.615,
+   "end": 53.895
+  },
+  {
+   "word": "it",
+   "start": 53.895,
+   "end": 54.075
+  },
+  {
+   "word": "in.",
+   "start": 54.075,
+   "end": 54.315
+  },
+  {
+   "word": "With",
+   "start": 54.315,
+   "end": 54.855
+  },
+  {
+   "word": "the",
+   "start": 54.855,
+   "end": 55.015
+  },
+  {
+   "word": "horse",
+   "start": 55.015,
+   "end": 55.195
+  },
+  {
+   "word": "truck.",
+   "start": 55.195,
+   "end": 55.435
+  },
+  {
+   "word": "Thirteen",
+   "start": 55.828,
+   "end": 56.068
+  },
+  {
+   "word": "days",
+   "start": 56.068,
+   "end": 56.268
+  },
+  {
+   "word": "later,",
+   "start": 56.268,
+   "end": 56.588
+  },
+  {
+   "word": "the",
+   "start": 56.908,
+   "end": 56.968
+  },
+  {
+   "word": "High",
+   "start": 56.968,
+   "end": 57.128
+  },
+  {
+   "word": "Court",
+   "start": 57.128,
+   "end": 57.388
+  },
+  {
+   "word": "set",
+   "start": 57.388,
+   "end": 57.648
+  },
+  {
+   "word": "the",
+   "start": 57.648,
+   "end": 57.788
+  },
+  {
+   "word": "van",
+   "start": 57.788,
+   "end": 57.948
+  },
+  {
+   "word": "free.",
+   "start": 57.948,
+   "end": 58.228
+  },
+  {
+   "word": "And",
+   "start": 58.631,
+   "end": 58.751
+  },
+  {
+   "word": "Hoover?",
+   "start": 58.751,
+   "end": 59.011
+  },
+  {
+   "word": "It",
+   "start": 59.331,
+   "end": 59.591
+  },
+  {
+   "word": "fired",
+   "start": 59.591,
+   "end": 59.871
+  },
+  {
+   "word": "three",
+   "start": 59.871,
+   "end": 60.191
+  },
+  {
+   "word": "bosses,",
+   "start": 60.191,
+   "end": 60.531
+  },
+  {
+   "word": "flew",
+   "start": 60.95,
+   "end": 61.01
+  },
+  {
+   "word": "two",
+   "start": 61.01,
+   "end": 61.18
+  },
+  {
+   "word": "hundred",
+   "start": 61.18,
+   "end": 61.35
+  },
+  {
+   "word": "and",
+   "start": 61.35,
+   "end": 61.49
+  },
+  {
+   "word": "twenty",
+   "start": 61.49,
+   "end": 61.73
+  },
+  {
+   "word": "thousand",
+   "start": 61.73,
+   "end": 62.03
+  },
+  {
+   "word": "people,",
+   "start": 62.03,
+   "end": 62.31
+  },
+  {
+   "word": "and",
+   "start": 62.31,
+   "end": 62.77
+  },
+  {
+   "word": "sold",
+   "start": 62.77,
+   "end": 62.99
+  },
+  {
+   "word": "its",
+   "start": 62.99,
+   "end": 63.19
+  },
+  {
+   "word": "whole",
+   "start": 63.19,
+   "end": 63.37
+  },
+  {
+   "word": "European",
+   "start": 63.37,
+   "end": 63.69
+  },
+  {
+   "word": "business.",
+   "start": 63.69,
+   "end": 64.13
+  },
+  {
+   "word": "So...",
+   "start": 64.591,
+   "end": 64.811
+  },
+  {
+   "word": "who",
+   "start": 65.251,
+   "end": 65.491
+  },
+  {
+   "word": "was",
+   "start": 65.491,
+   "end": 65.731
+  },
+  {
+   "word": "the",
+   "start": 65.731,
+   "end": 65.891
+  },
+  {
+   "word": "idiot?",
+   "start": 65.891,
+   "end": 66.051
+  }
+ ]
+}

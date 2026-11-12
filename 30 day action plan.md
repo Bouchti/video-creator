@@ -2,12 +2,12 @@
 
 ## Progress
 
-- **Today:** Day 0 (Sat 7 Nov 2026). Day 1 starts tomorrow. Last update: 7 Nov 2026.
+- **Today:** Day 5 (Thu 12 Nov 2026). Last update: 12 Nov 2026.
 - **Starting point (7 Nov):** 777 subs, 22.3K views in the last 28 days, 15 Shorts on the channel.
 - **Totals in the plan so far:** 0 Shorts published since Day 1, 0 engaged views, 0 subs gained.
 - **Best Short so far:** none yet.
 - **Already published (never re-upload):** Pisa (3 Nov), Eiffel con (6 Nov), Emu War (7 Nov).
-- **Finished, not yet published:** Mike the Headless Chicken (Day 1), Great Molasses Flood (Day 2, made 7 Nov), 1904 Olympic marathon (Day 3, made 8 Nov), exploding whale (Day 5, 12 Nov), Broughton bridge (Day 11).
+- **Finished, not yet published (as far as the logs show):** Mike the Headless Chicken (Day 1), Great Molasses Flood (Day 2, made 7 Nov), 1904 Olympic marathon (Day 3, toon-card Blender version chosen 10 Nov), Hoover van hostage (Day 4, made 11 Nov), exploding whale (Day 5, 12 Nov), Gimli Glider (Day 6, made 12 Nov), Broughton bridge (Day 11).
 - **Decisions made:**
   - 7 Nov: **Channel identity = Option 1.** YouTube "How things work" is being renamed to **Cutaway Club**, the same name as the TikTok (@hackhadi). Untold Footnotes is a separate AI channel and not part of this plan.
   - 7 Nov: Eiffel con and Emu War are already out, so they were removed from Days 3-4 and the next topics were pulled forward (section 5).
@@ -15,7 +15,8 @@
 - **Notes on the gates** (no rule changed):
   - At 777 subs, the subscriber part of target B (500) is already met, and target A needs only 223 more subs. Views are the whole race: 3M for B, 10M for A, both counted in engaged Shorts views over 90 days.
   - The Day 21 gate's "≥500 subs" is already met. The views conditions decide it.
-- **Open questions for the user:** none.
+- **Open questions for the user:**
+  - Which of Mike, Molasses and the marathon are already live, and their 24 h / 48 h numbers (kpi-log has no published rows since Day 1).
 
 Day 1 = Sunday 8 Nov 2026. Day 30 = Monday 7 Dec. Application deadline = **15 Dec 2026**: YouTube's rules get harder on 1 Feb 2027 (confirmed: new applicants then need 20M Shorts views in 90 days or 8,000 long-form hours), and review takes about a month.
 
@@ -38,6 +39,7 @@ Day 1 = Sunday 8 Nov 2026. Day 30 = Monday 7 Dec. Application deadline = **15 De
 2. **Make and publish one Short** (60-70 s, story format, hook by 2.5 s, twist ending, question in the caption).
    - **Every story must be very funny and have a very strong hook** (owner's rule, 7 Nov).
    - **Hook:** the most absurd true fact of the story, shown mid-action on frame 0 with a sound hit, full claim spoken by 2.5 s.
+   - **No static opening (owner, 11 Nov):** the first second must move: a quick zoom-in, a pan or whip, or the hero animating. A character standing still beside the subject is not a hook.
    - **Funny:** at least 3 laugh beats built from real facts (an absurd detail, a deadpan line, a visual gag), plus a comic twist ending. Laugh at the absurdity, never at the victims.
    - **Gate before render:** the stills review scores the hook and the humour separately, and both must reach 8/10. If the facts can't carry the jokes, swap the topic.
 3. **Human pass (10 min).** The pipeline makes the video; you check it:
@@ -136,9 +138,9 @@ Every fact gets checked when the script is written, as usual. Every topic gets t
 | 1 | 8 Nov | Mike the Headless Chicken (done) | bizarre fate | Likely crowded |
 | 2 | 9 Nov | The Great Molasses Flood, Boston 1919 (done; cover-up angle: accountant in charge, tank painted brown to hide leaks, Prohibition ratified the next day) | absurd disaster | Likely crowded |
 | 3 | 10 Nov | The 1904 Olympic marathon: the "winner" rode in a car, the real winner ran on rat poison and brandy, and one runner napped after eating rotten apples and still came 4th (done; hook: Lorz waving from the car past coughing runners, "got there by car" by 2.5 s) | sports disaster | Check: long-form exists (Thoughty2, 1.5M); no animated Short found |
-| 4 | 11 Nov | Hoover's free flights promotion, 1992 | money blunder | Check |
+| 4 | 11 Nov | Hoover's free flights promotion, 1992 (done; crowded: ~12 Shorts tell it the usual way, 5 in the last 2 weeks. Owner chose the angle: Dave Dixon holds a Hoover van hostage with his horse truck for 13 days, Workington 1993; twist "who was the idiot?") | money blunder | Crowded; fresh angle used |
 | 5 | **12 Nov** | The exploding whale, Oregon 1970 (done, anniversary) | absurd disaster | Likely crowded; the anniversary helps |
-| 6 | 13 Nov | The Gimli Glider: a jet out of fuel because of pounds vs kilos, 1983 | absurd disaster | Likely crowded |
+| 6 | 13 Nov | The Gimli Glider: a jet out of fuel because of pounds vs kilos, 1983 (done 12 Nov; owner's angle: race day + van: the old base was a drag strip on Family Day, twist = the repair crew's van ran out of fuel) | absurd disaster | Checked 12 Nov: no animated Short found; long-form only (MentourPilot 27 min, podcasts) |
 | 7 | 14 Nov | Mars Climate Orbiter lost over a units mix-up, 1999 | money blunder | Likely crowded |
 | 8 | 15 Nov | The Dancing Plague of Strasbourg, 1518 | bizarre fate | Check |
 | 9 | 16 Nov | The Vasa: a warship that sank 1,300 m into its first voyage, 1628 | money blunder | Check |
@@ -209,3 +211,7 @@ These odds are an estimate from benchmark data, not a measurement. The full rese
 11. 2026-11-07 (owner asked for funnier, more impressive topics): Great Smog (5 Dec) and Halifax Explosion (6 Dec) replaced by Project Pigeon and the Pig War, and the London Beer Flood (Day 3, its funny part is probably a myth) replaced by the 1904 Olympic marathon. Bat bombs were considered and rejected because Zack D. Films already has a Short on them.
 12. 2026-11-08 (Claude): Day 3 (1904 Olympic marathon) finished and packaged in cartoon-shorts/shorts/marathon/package/ (71 s, gate hook 8/10, humour 8/10); waiting for the owner's human pass.
 13. 2026-11-09 (owner: first version "very poor"): Day 3 re-made to match the reference Shorts by the same top channel (close wide-angle framing, moving cameras, whip pans, dense textured sets, 1-2 word captions, whooshes). From Day 4: one hero + one mystery, a puzzling-action hook, the video ends on the payoff (it loops), "Why ...?" titles, ~3x more camera motion.
+14. 2026-11-11 (Claude): Day 4 (Hoover) made with the Blender toon engine on the owner's chosen angle (the van hostage), narrated with ElevenLabs Eleven v4 (George; the repairman's quote by Daniel) at the owner's request; packaged in cartoon-shorts/shorts/hoover/package/, waiting for the owner's human pass. Progress section brought up to Day 4.
+15. 2026-11-11 (owner): new hook rule for every next video: no static first second (quick zoom, pan, or character movement from frame 0).
+16. 2026-11-11 (owner: the last two videos looked faded and dark in the channel grid): the Blender renderer now uses a vivid grade by default (blue sky, saturation and brightness back to the level of the earlier shorts); every video's stills are checked for colour before the full render.
+17. 2026-11-12 (Claude): Day 6 (Gimli Glider) made on the owner's chosen angle (race day + van) with the upgraded engine: clean-toon v18 animated cast, golden-hour gradient skies, character cast shadows, handheld + punch-in cameras, and a measured layout gate before render; narrated with ElevenLabs eleven_v4 (George). Package in cartoon-shorts/shorts/gimli/package/, waiting for the owner's human pass.

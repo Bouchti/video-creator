@@ -1,0 +1,920 @@
+{
+ "duration": 69.649,
+ "words": [
+  {
+   "word": "No",
+   "start": 0.0,
+   "end": 0.16
+  },
+  {
+   "word": "fuel.",
+   "start": 0.16,
+   "end": 0.44
+  },
+  {
+   "word": "No",
+   "start": 0.74,
+   "end": 0.9
+  },
+  {
+   "word": "engines.",
+   "start": 0.9,
+   "end": 1.3
+  },
+  {
+   "word": "Landing",
+   "start": 1.64,
+   "end": 1.84
+  },
+  {
+   "word": "on",
+   "start": 1.84,
+   "end": 2.0
+  },
+  {
+   "word": "a",
+   "start": 2.0,
+   "end": 2.08
+  },
+  {
+   "word": "drag",
+   "start": 2.08,
+   "end": 2.3
+  },
+  {
+   "word": "race.",
+   "start": 2.3,
+   "end": 2.52
+  },
+  {
+   "word": "Canada,",
+   "start": 2.921,
+   "end": 3.241
+  },
+  {
+   "word": "nineteen",
+   "start": 3.241,
+   "end": 4.141
+  },
+  {
+   "word": "eighty-three.",
+   "start": 4.141,
+   "end": 5.041
+  },
+  {
+   "word": "A",
+   "start": 5.041,
+   "end": 5.121
+  },
+  {
+   "word": "brand-new",
+   "start": 5.121,
+   "end": 5.681
+  },
+  {
+   "word": "Air",
+   "start": 5.681,
+   "end": 6.001
+  },
+  {
+   "word": "Canada",
+   "start": 6.001,
+   "end": 6.381
+  },
+  {
+   "word": "jet...",
+   "start": 6.381,
+   "end": 6.761
+  },
+  {
+   "word": "with",
+   "start": 6.761,
+   "end": 7.301
+  },
+  {
+   "word": "a",
+   "start": 7.301,
+   "end": 7.421
+  },
+  {
+   "word": "broken",
+   "start": 7.421,
+   "end": 7.721
+  },
+  {
+   "word": "fuel",
+   "start": 7.721,
+   "end": 8.041
+  },
+  {
+   "word": "gauge.",
+   "start": 8.041,
+   "end": 8.441
+  },
+  {
+   "word": "So",
+   "start": 8.824,
+   "end": 8.984
+  },
+  {
+   "word": "the",
+   "start": 8.984,
+   "end": 9.144
+  },
+  {
+   "word": "ground",
+   "start": 9.144,
+   "end": 9.384
+  },
+  {
+   "word": "crew",
+   "start": 9.384,
+   "end": 9.704
+  },
+  {
+   "word": "measures",
+   "start": 9.704,
+   "end": 10.024
+  },
+  {
+   "word": "the",
+   "start": 10.024,
+   "end": 10.264
+  },
+  {
+   "word": "tanks",
+   "start": 10.264,
+   "end": 10.584
+  },
+  {
+   "word": "with",
+   "start": 10.584,
+   "end": 10.824
+  },
+  {
+   "word": "a",
+   "start": 10.824,
+   "end": 10.944
+  },
+  {
+   "word": "dipstick.",
+   "start": 10.944,
+   "end": 11.364
+  },
+  {
+   "word": "Canada",
+   "start": 11.822,
+   "end": 12.162
+  },
+  {
+   "word": "just",
+   "start": 12.162,
+   "end": 12.482
+  },
+  {
+   "word": "went",
+   "start": 12.482,
+   "end": 12.702
+  },
+  {
+   "word": "metric.",
+   "start": 12.702,
+   "end": 13.122
+  },
+  {
+   "word": "The",
+   "start": 13.582,
+   "end": 13.662
+  },
+  {
+   "word": "new",
+   "start": 13.662,
+   "end": 13.862
+  },
+  {
+   "word": "jet",
+   "start": 13.862,
+   "end": 14.162
+  },
+  {
+   "word": "counts",
+   "start": 14.162,
+   "end": 14.522
+  },
+  {
+   "word": "fuel",
+   "start": 14.522,
+   "end": 14.842
+  },
+  {
+   "word": "in",
+   "start": 14.842,
+   "end": 15.122
+  },
+  {
+   "word": "kilos.",
+   "start": 15.122,
+   "end": 15.482
+  },
+  {
+   "word": "The",
+   "start": 16.042,
+   "end": 16.142
+  },
+  {
+   "word": "crew's",
+   "start": 16.142,
+   "end": 16.382
+  },
+  {
+   "word": "math",
+   "start": 16.382,
+   "end": 16.722
+  },
+  {
+   "word": "used",
+   "start": 16.722,
+   "end": 17.142
+  },
+  {
+   "word": "pounds.",
+   "start": 17.142,
+   "end": 17.522
+  },
+  {
+   "word": "So",
+   "start": 18.081,
+   "end": 18.281
+  },
+  {
+   "word": "they",
+   "start": 18.281,
+   "end": 18.581
+  },
+  {
+   "word": "load",
+   "start": 18.581,
+   "end": 18.841
+  },
+  {
+   "word": "less",
+   "start": 18.841,
+   "end": 19.061
+  },
+  {
+   "word": "than",
+   "start": 19.061,
+   "end": 19.261
+  },
+  {
+   "word": "half",
+   "start": 19.261,
+   "end": 19.561
+  },
+  {
+   "word": "the",
+   "start": 19.561,
+   "end": 19.821
+  },
+  {
+   "word": "fuel",
+   "start": 19.821,
+   "end": 20.041
+  },
+  {
+   "word": "they",
+   "start": 20.041,
+   "end": 20.261
+  },
+  {
+   "word": "need.",
+   "start": 20.261,
+   "end": 20.481
+  },
+  {
+   "word": "In",
+   "start": 20.874,
+   "end": 20.994
+  },
+  {
+   "word": "Ottawa,",
+   "start": 20.994,
+   "end": 21.274
+  },
+  {
+   "word": "they",
+   "start": 21.754,
+   "end": 21.834
+  },
+  {
+   "word": "check",
+   "start": 21.834,
+   "end": 22.014
+  },
+  {
+   "word": "again.",
+   "start": 22.014,
+   "end": 22.334
+  },
+  {
+   "word": "Same",
+   "start": 22.814,
+   "end": 23.074
+  },
+  {
+   "word": "mistake.",
+   "start": 23.074,
+   "end": 23.394
+  },
+  {
+   "word": "Forty-one",
+   "start": 23.881,
+   "end": 24.491
+  },
+  {
+   "word": "thousand",
+   "start": 24.491,
+   "end": 25.101
+  },
+  {
+   "word": "feet.",
+   "start": 25.101,
+   "end": 25.421
+  },
+  {
+   "word": "Bong.",
+   "start": 25.421,
+   "end": 26.721
+  },
+  {
+   "word": "A",
+   "start": 26.721,
+   "end": 26.921
+  },
+  {
+   "word": "warning",
+   "start": 26.921,
+   "end": 27.261
+  },
+  {
+   "word": "nobody",
+   "start": 27.261,
+   "end": 27.761
+  },
+  {
+   "word": "has",
+   "start": 27.761,
+   "end": 28.041
+  },
+  {
+   "word": "ever",
+   "start": 28.041,
+   "end": 28.381
+  },
+  {
+   "word": "heard.",
+   "start": 28.381,
+   "end": 28.721
+  },
+  {
+   "word": "Left",
+   "start": 29.064,
+   "end": 29.264
+  },
+  {
+   "word": "engine:",
+   "start": 29.264,
+   "end": 29.564
+  },
+  {
+   "word": "dead.",
+   "start": 30.124,
+   "end": 30.304
+  },
+  {
+   "word": "Right",
+   "start": 30.844,
+   "end": 31.004
+  },
+  {
+   "word": "engine:",
+   "start": 31.004,
+   "end": 31.324
+  },
+  {
+   "word": "dead.",
+   "start": 31.804,
+   "end": 31.924
+  },
+  {
+   "word": "The",
+   "start": 32.424,
+   "end": 32.504
+  },
+  {
+   "word": "fancy",
+   "start": 32.504,
+   "end": 32.784
+  },
+  {
+   "word": "screens:",
+   "start": 32.784,
+   "end": 33.224
+  },
+  {
+   "word": "black.",
+   "start": 33.724,
+   "end": 33.884
+  },
+  {
+   "word": "Lucky",
+   "start": 34.402,
+   "end": 34.862
+  },
+  {
+   "word": "for",
+   "start": 34.862,
+   "end": 35.082
+  },
+  {
+   "word": "them,",
+   "start": 35.082,
+   "end": 35.322
+  },
+  {
+   "word": "Captain",
+   "start": 35.322,
+   "end": 36.062
+  },
+  {
+   "word": "Bob",
+   "start": 36.062,
+   "end": 36.322
+  },
+  {
+   "word": "Pearson",
+   "start": 36.322,
+   "end": 36.722
+  },
+  {
+   "word": "flies",
+   "start": 36.722,
+   "end": 37.082
+  },
+  {
+   "word": "gliders.",
+   "start": 37.082,
+   "end": 37.682
+  },
+  {
+   "word": "For",
+   "start": 37.682,
+   "end": 38.242
+  },
+  {
+   "word": "fun.",
+   "start": 38.242,
+   "end": 38.582
+  },
+  {
+   "word": "His",
+   "start": 39.006,
+   "end": 39.146
+  },
+  {
+   "word": "co-pilot",
+   "start": 39.146,
+   "end": 39.686
+  },
+  {
+   "word": "knows",
+   "start": 39.686,
+   "end": 39.946
+  },
+  {
+   "word": "an",
+   "start": 39.946,
+   "end": 40.126
+  },
+  {
+   "word": "old",
+   "start": 40.126,
+   "end": 40.386
+  },
+  {
+   "word": "air",
+   "start": 40.386,
+   "end": 40.646
+  },
+  {
+   "word": "force",
+   "start": 40.646,
+   "end": 40.886
+  },
+  {
+   "word": "base",
+   "start": 40.886,
+   "end": 41.166
+  },
+  {
+   "word": "nearby.",
+   "start": 41.166,
+   "end": 41.626
+  },
+  {
+   "word": "Gimli.",
+   "start": 42.146,
+   "end": 42.486
+  },
+  {
+   "word": "Nobody",
+   "start": 42.76,
+   "end": 43.08
+  },
+  {
+   "word": "told",
+   "start": 43.08,
+   "end": 43.44
+  },
+  {
+   "word": "them",
+   "start": 43.44,
+   "end": 43.66
+  },
+  {
+   "word": "it's",
+   "start": 43.66,
+   "end": 43.86
+  },
+  {
+   "word": "now",
+   "start": 43.86,
+   "end": 43.98
+  },
+  {
+   "word": "a",
+   "start": 43.98,
+   "end": 44.12
+  },
+  {
+   "word": "drag",
+   "start": 44.12,
+   "end": 44.36
+  },
+  {
+   "word": "strip.",
+   "start": 44.36,
+   "end": 44.76
+  },
+  {
+   "word": "And",
+   "start": 45.2,
+   "end": 45.56
+  },
+  {
+   "word": "today",
+   "start": 45.56,
+   "end": 45.9
+  },
+  {
+   "word": "is",
+   "start": 45.9,
+   "end": 46.26
+  },
+  {
+   "word": "Family",
+   "start": 46.26,
+   "end": 46.54
+  },
+  {
+   "word": "Day.",
+   "start": 46.54,
+   "end": 46.78
+  },
+  {
+   "word": "Race",
+   "start": 47.158,
+   "end": 47.378
+  },
+  {
+   "word": "cars.",
+   "start": 47.378,
+   "end": 47.758
+  },
+  {
+   "word": "Kids",
+   "start": 48.098,
+   "end": 48.378
+  },
+  {
+   "word": "on",
+   "start": 48.378,
+   "end": 48.558
+  },
+  {
+   "word": "bikes.",
+   "start": 48.558,
+   "end": 48.978
+  },
+  {
+   "word": "And",
+   "start": 49.198,
+   "end": 49.518
+  },
+  {
+   "word": "a",
+   "start": 49.518,
+   "end": 49.598
+  },
+  {
+   "word": "silent",
+   "start": 49.598,
+   "end": 49.978
+  },
+  {
+   "word": "jet,",
+   "start": 49.978,
+   "end": 50.358
+  },
+  {
+   "word": "coming",
+   "start": 50.358,
+   "end": 50.938
+  },
+  {
+   "word": "right",
+   "start": 50.938,
+   "end": 51.278
+  },
+  {
+   "word": "at",
+   "start": 51.278,
+   "end": 51.538
+  },
+  {
+   "word": "them.",
+   "start": 51.538,
+   "end": 51.718
+  },
+  {
+   "word": "Too",
+   "start": 52.009,
+   "end": 52.169
+  },
+  {
+   "word": "high,",
+   "start": 52.169,
+   "end": 52.509
+  },
+  {
+   "word": "so",
+   "start": 52.889,
+   "end": 53.109
+  },
+  {
+   "word": "Bob",
+   "start": 53.109,
+   "end": 53.389
+  },
+  {
+   "word": "uses",
+   "start": 53.389,
+   "end": 53.729
+  },
+  {
+   "word": "a",
+   "start": 53.729,
+   "end": 53.909
+  },
+  {
+   "word": "glider",
+   "start": 53.909,
+   "end": 54.269
+  },
+  {
+   "word": "trick.",
+   "start": 54.269,
+   "end": 54.589
+  },
+  {
+   "word": "He",
+   "start": 54.929,
+   "end": 55.049
+  },
+  {
+   "word": "flies",
+   "start": 55.049,
+   "end": 55.329
+  },
+  {
+   "word": "the",
+   "start": 55.329,
+   "end": 55.549
+  },
+  {
+   "word": "jet",
+   "start": 55.549,
+   "end": 55.749
+  },
+  {
+   "word": "sideways.",
+   "start": 55.749,
+   "end": 56.269
+  },
+  {
+   "word": "The",
+   "start": 56.785,
+   "end": 56.865
+  },
+  {
+   "word": "nose",
+   "start": 56.865,
+   "end": 57.105
+  },
+  {
+   "word": "wheel",
+   "start": 57.105,
+   "end": 57.345
+  },
+  {
+   "word": "collapses.",
+   "start": 57.345,
+   "end": 57.905
+  },
+  {
+   "word": "The",
+   "start": 58.405,
+   "end": 58.545
+  },
+  {
+   "word": "jet",
+   "start": 58.545,
+   "end": 58.785
+  },
+  {
+   "word": "scrapes",
+   "start": 58.785,
+   "end": 59.345
+  },
+  {
+   "word": "to",
+   "start": 59.345,
+   "end": 59.425
+  },
+  {
+   "word": "a",
+   "start": 59.425,
+   "end": 59.525
+  },
+  {
+   "word": "stop,",
+   "start": 59.525,
+   "end": 59.805
+  },
+  {
+   "word": "just",
+   "start": 60.085,
+   "end": 60.285
+  },
+  {
+   "word": "short",
+   "start": 60.285,
+   "end": 60.625
+  },
+  {
+   "word": "of",
+   "start": 60.625,
+   "end": 60.825
+  },
+  {
+   "word": "the",
+   "start": 60.825,
+   "end": 60.885
+  },
+  {
+   "word": "crowd.",
+   "start": 60.885,
+   "end": 61.145
+  },
+  {
+   "word": "Racers",
+   "start": 61.488,
+   "end": 61.948
+  },
+  {
+   "word": "put",
+   "start": 61.948,
+   "end": 62.108
+  },
+  {
+   "word": "out",
+   "start": 62.108,
+   "end": 62.328
+  },
+  {
+   "word": "the",
+   "start": 62.328,
+   "end": 62.468
+  },
+  {
+   "word": "fire.",
+   "start": 62.468,
+   "end": 62.808
+  },
+  {
+   "word": "Everyone",
+   "start": 63.208,
+   "end": 63.588
+  },
+  {
+   "word": "survives.",
+   "start": 63.588,
+   "end": 64.008
+  },
+  {
+   "word": "And",
+   "start": 64.646,
+   "end": 64.946
+  },
+  {
+   "word": "the",
+   "start": 64.946,
+   "end": 65.026
+  },
+  {
+   "word": "mechanics",
+   "start": 65.026,
+   "end": 65.466
+  },
+  {
+   "word": "sent",
+   "start": 65.466,
+   "end": 65.706
+  },
+  {
+   "word": "to",
+   "start": 65.706,
+   "end": 65.866
+  },
+  {
+   "word": "fix",
+   "start": 65.866,
+   "end": 66.046
+  },
+  {
+   "word": "the",
+   "start": 66.046,
+   "end": 66.266
+  },
+  {
+   "word": "jet?",
+   "start": 66.266,
+   "end": 66.526
+  },
+  {
+   "word": "Their",
+   "start": 67.006,
+   "end": 67.166
+  },
+  {
+   "word": "van",
+   "start": 67.166,
+   "end": 67.386
+  },
+  {
+   "word": "ran",
+   "start": 67.386,
+   "end": 67.566
+  },
+  {
+   "word": "out",
+   "start": 67.566,
+   "end": 67.746
+  },
+  {
+   "word": "of",
+   "start": 67.746,
+   "end": 67.866
+  },
+  {
+   "word": "fuel",
+   "start": 67.866,
+   "end": 68.186
+  },
+  {
+   "word": "on",
+   "start": 68.186,
+   "end": 68.346
+  },
+  {
+   "word": "the",
+   "start": 68.346,
+   "end": 68.466
+  },
+  {
+   "word": "way.",
+   "start": 68.466,
+   "end": 68.666
+  }
+ ]
+}

@@ -1,0 +1,70 @@
+DRAFT: rewrite the title and description in your own words before posting (human pass, plan section 6).
+
+============================== TITLE OPTIONS ==============================
+1. The Jet That Ran Out of Fuel at 41,000 Feet and Landed on a Drag Race
+2. Why a 767 Landed on a Drag Race With Zero Fuel (1983)
+3. The Pounds-vs-Kilos Mistake That Turned a 767 Into a Glider
+
+
+====================== YOUTUBE SHORTS ======================
+TITLE (max 100 chars):
+The Jet That Ran Out of Fuel at 41,000 Feet and Landed on a Drag Race
+
+DESCRIPTION:
+On 23 July 1983, Air Canada Flight 143, a brand-new Boeing 767 flying from Montreal to Edmonton via Ottawa with 61 passengers and 8 crew, ran out of fuel at 41,000 feet over Ontario.
+
+The jet's fuel gauges were broken, so the ground crew measured the tanks with drip sticks. Canada was switching to the metric system and the 767 was Air Canada's first aircraft measured in kilograms, but the conversion used 1.77 (pounds per litre) instead of 0.8 (kilograms per litre). The jet took off with less than half the fuel it needed. In Ottawa the tanks were checked again, with the same wrong number.
+
+Over Red Lake, Ontario, both engines stopped and most of the new electronic flight screens went dark. Captain Bob Pearson happened to be an experienced glider pilot. First Officer Maurice Quintal had served at the old RCAF base at Gimli, Manitoba, and steered them there. Nobody in the cockpit knew that one of its runways had become a drag strip, and that day was Family Day for the local sports car club, with race cars, families, campers and kids on bikes on the strip.
+
+Coming in too high, Pearson used a forward slip, a glider pilot's trick of flying the jet crossed-controls, almost sideways, to lose height fast. The nose gear hadn't locked and collapsed on touchdown; the jet scraped to a stop short of the crowd, racers put out a small fire in the nose with hand extinguishers, and nobody died (a few people were bruised on the steep rear slide). The mechanics driving out from Winnipeg to fix the jet reportedly ran out of fuel on the way.
+
+Would you have trusted the dipstick? 👇
+
+Sources:
+- Wikipedia, "Gimli Glider": https://en.wikipedia.org/wiki/Gimli_Glider
+- Aviation Safety Network, Boeing 767-233 C-GAUN, 23 July 1983: https://aviation-safety.net/asndb/327590
+- CBC Archives, "When a metric mix-up led to the 'Gimli Glider' emergency": https://www.cbc.ca/archives/when-a-metric-mix-up-led-to-the-gimli-glider-emergency-1.4754039
+- AOPA Pilot, "The Gimli Glider" (2000): https://www.aopa.org/news-and-media/all-news/2000/july/pilot/the-gimli-glider
+- Damn Interesting, "The Gimli Glider": https://www.damninteresting.com/the-gimli-glider/
+- Car Throttle, "That Time A Boeing 767 Crash Landed On A Race Track": https://www.carthrottle.com/post/that-time-a-boeing-767-crash-landed-on-a-race-track/
+- Legion Magazine, "The mathematical miracle of the Gimli Glider": https://legionmagazine.com/the-mathematical-miracle-of-the-gimli-glider
+
+Original animation, story, characters and music. Narration: ElevenLabs synthetic voice. Sound effects: BigSoundBank (CC0).
+
+#Shorts #History #GimliGlider
+
+TAGS (comma-separated, paste into YouTube Studio > Tags):
+gimli glider, air canada 143, air canada flight 143, boeing 767 out of fuel, pounds vs kilograms, metric mistake, 1983, plane landed on drag strip, glider landing, forward slip, aviation history, aviation fails, plane emergency landing, true story, funny history, history shorts, animated history, cartoon history, strange history, history facts, canada history, shorts
+
+PINNED COMMENT:
+The captain really was a glider pilot, and the racers really did put the fire out with their own extinguishers. Which part did you not believe? ✈️
+
+
+============================== TIKTOK ==============================
+CAPTION:
+1983: a brand-new jet ran out of fuel at 41,000 feet 😳 because someone used pounds instead of kilos... and it landed on a drag race full of families 🏁✈️
+Would you have trusted the dipstick? 👇
+
+#history #truestory #aviation #gimliglider #historyfacts #funnyhistory #planes #canada #1980s #learnontiktok #animation #fyp
+
+
+==================== INSTAGRAM REELS / FACEBOOK REELS ====================
+CAPTION:
+1983: Air Canada's brand-new 767 had a broken fuel gauge, so the crew measured the tanks with a dipstick... in pounds, not kilos. ⛽
+At 41,000 feet both engines stopped. ✈️
+
+The captain was a glider pilot. The only runway in reach had become a drag strip. On Family Day. 🏁
+
+Would you have trusted the dipstick? 👇
+
+#history #truestory #aviation #gimliglider #historyfacts #funnyhistory #planes #animation #reels
+
+ALT TEXT:
+A cartoon 3D animation of the 1983 Gimli Glider: at golden hour two kids on bikes pedal flat out down a drag strip while a dragster roars past and a huge silent Air Canada jet glides down behind them; at Montreal airport the camera flies along the shiny new jet; in the cockpit the captain taps a blank fuel gauge; under the wing a ground crewman pulls out a very long dipstick, writes "x 1.77" on his clipboard, and a "LESS THAN HALF" stamp lands as the fuel truck pumps; in Ottawa a second crewman checks again, "SAME MISTAKE"; above a sunset sea of clouds a red WARNING light flashes "BONG", both engines wind down with a puff of smoke, and the cockpit screens go black behind two deadpan pilots; a cutaway shows the captain laughing in a little glider doing a barrel roll; the co-pilot points to "GIMLI" on a chart; at the drag strip on Family Day families barbecue under a FAMILY DAY banner, dragsters do a burnout at the START gantry and a dad drops his spatula as the jet comes in; the jet slides in sideways, the nose wheel collapses with sparks and it scrapes to a stop just short of the crowd; racers blast it with fire extinguishers and the captain gives a thumbs-up; at dusk a maintenance van coughs to a stop on a country road and two mechanics stare at their empty jerrycan.
+
+
+====================== NOTES FOR THE OWNER ======================
+- Single-source / soft facts: the mechanics' van running out of fuel is widely repeated (Damn Interesting, Gimli Community Web, Wade Nelson, the 2006 Wikipedia article) but I found no 1983 news report; the number of boys on bikes varies (two or three; Pearson told CBC three).
+- "Just short of the crowd" follows Wikipedia and Legion Magazine (the jet stopped on the strip before the people at the end of it).
+- Post the same clean file everywhere (not a YouTube download): gimli_final_subtitled.mp4.
